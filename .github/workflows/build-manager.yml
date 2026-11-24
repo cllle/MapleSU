@@ -101,6 +101,12 @@ jobs:
           cargo +1.99.1-x86_64-pc-windows-gnu fetch --locked --manifest-path jailbreak-providers/ghostlock/extractor-native/Cargo.toml
           cargo +1.99.1-x86_64-pc-windows-gnu fetch --locked --target x86_64-pc-windows-gnu --manifest-path jailbreak-providers/ghostlock/extractor-native/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build shark plants
+        run: |
+          python jailbreak-providers/shark/build_plants.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python jailbreak-providers/shark/build_plants.py --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Prefetch specgen host dependencies
         run: |
           $root = Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1'
