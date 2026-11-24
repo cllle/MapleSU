@@ -101,6 +101,27 @@ jobs:
           cargo +1.99.1-x86_64-pc-windows-gnu fetch --locked --manifest-path jailbreak-providers/ghostlock/extractor-native/Cargo.toml
           cargo +1.99.1-x86_64-pc-windows-gnu fetch --locked --target x86_64-pc-windows-gnu --manifest-path jailbreak-providers/ghostlock/extractor-native/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prefetch specgen host dependencies
+        run: |
+          $root = Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1'
+          $jars = @(
+            @{ group = 'org.jetbrains.kotlin'; artifact = 'kotlin-stdlib'; version = '2.4.20' },
+            @{ group = 'org.jetbrains'; artifact = 'annotations'; version = '13.0' },
+            @{ group = 'org.jetbrains.kotlinx'; artifact = 'kotlinx-serialization-json-jvm'; version = '1.11.0' },
+            @{ group = 'org.jetbrains.kotlinx'; artifact = 'kotlinx-serialization-core-jvm'; version = '1.11.0' },
+            @{ group = 'org.jetbrains.kotlin'; artifact = 'kotlin-compiler-embeddable'; version = '2.4.20' },
+            @{ group = 'org.jetbrains.kotlinx'; artifact = 'kotlinx-coroutines-core-jvm'; version = '1.11.0' }
+          )
+          foreach ($j in $jars) {
+            $dir = Join-Path $root ($j.group + '/' + $j.artifact + '/' + $j.version + '/prefetch')
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            $path = $j.group.Replace('.', '/')
+            $file = $j.artifact + '-' + $j.version + '.jar'
+            $url = 'https://repo1.maven.org/maven2/' + $path + '/' + $j.artifact + '/' + $j.version + '/' + $file
+            Invoke-WebRequest -Uri $url -OutFile (Join-Path $dir $file)
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            Write-Host ('prefetched ' + $j.artifact)
+          }
       - name: Build SDK and consumer
         run: ./gradlew.bat :maplesu-client:assembleRelease :maplesu-consumer:assembleDebug --no-daemon --no-build-cache --no-configuration-cache --max-workers=2
       - name: Build debug Manager
