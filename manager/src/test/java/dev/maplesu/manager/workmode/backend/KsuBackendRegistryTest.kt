@@ -57,6 +57,13 @@ class KsuBackendRegistryTest {
         WorkModeSwitchSession.finish(SwitchOutcome.ImagesRequired(WorkMode.KSU, false))
     }
 
+    private fun installCommand(command: List<String>): List<String> {
+        assertEquals(6, command.size)
+        assertEquals("/system/bin/env", command[0])
+        assertTrue(command[1].matches(Regex("KSUD_MODULE_LIVE_EVENT=[0-9a-f]{32}")))
+        return command.drop(2)
+    }
+
     // ── fakes ───────────────────────────────────────────────────────────
 
     private class FakeRootExecutor(
@@ -277,7 +284,8 @@ class KsuBackendRegistryTest {
             val backend = KsuCommandBackend(
                 daemonPathProvider = { "/data/adb/ksud" },
                 runner = KsuShellRunner { command, _ ->
-                    when (command.drop(1).take(2)) {
+                    val argv = if (command.firstOrNull() == "/system/bin/env") installCommand(command) else command
+                    when (argv.drop(1).take(2)) {
                         listOf("module", "list") -> {
                             val observed = version.get()
                             if (reads.incrementAndGet() == 1) {
@@ -362,7 +370,7 @@ class KsuBackendRegistryTest {
             assertEquals(7, result!!.code)
             assertEquals(receipt.out, result.out)
             assertEquals(receipt.err, result.err)
-            assertEquals(listOf(listOf("/data/adb/ksud", "module", "install", zip.absolutePath)), argv)
+            assertEquals(listOf("/data/adb/ksud", "module", "install", zip.absolutePath), installCommand(argv.single()))
 
             argv.clear()
             assertEquals(false, KsuBackendRegistry.installModule(zip))

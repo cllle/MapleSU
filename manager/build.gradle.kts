@@ -652,6 +652,11 @@ val packagePolicyHooks = tasks.register<PackagePolicyHooks>("packagePolicyHooks"
 }
 // Select a fresh claim cohort without retaining duplicate static payload assets.
 abstract class PackageUltraManagerClaim : DefaultTask() {
+    @get:Input abstract val appVersion: Property<String>
+    @get:Input abstract val releaseVersionCode: Property<Int>
+    @get:InputFiles abstract val routeInputs: ConfigurableFileCollection
+    @get:Input abstract val pythonExecutable: Property<String>
+    @get:Inject abstract val execOperations: ExecOperations
     @get:InputDirectory abstract val claimDirectory: DirectoryProperty
     @get:InputDirectory abstract val mainAssetsDirectory: DirectoryProperty
     @get:OutputDirectory abstract val assetsDirectory: DirectoryProperty
@@ -685,11 +690,26 @@ abstract class PackageUltraManagerClaim : DefaultTask() {
         val claim = claimDirectory.get().asFile
         val manifest = readClaimJson(claim.resolve("manifest.json"))
             ?: error("ULTRA_CLAIM_MANIFEST_REQUIRED")
+        check(manifest["appVersion"] == appVersion.get() &&
+            (manifest["versionCode"] as? Int) == releaseVersionCode.get()) {
+            "ULTRA_CLAIM_RELEASE_VERSION_MISMATCH"
+        }
         val payloads = manifest.claimObject("payloads") ?: error("ULTRA_CLAIM_PAYLOADS_REQUIRED")
         val families = setOf("android12-5.10", "android13-5.15", "android14-6.1",
             "android15-6.6", "android16-6.12", "android17-6.18")
-        check(payloads.keys.containsAll(families) && payloads.keys.all { it.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+")) }) {
+        val moduleRoutes = manifest.claimObject("moduleRoutes")
+        val expectedRaw = if (moduleRoutes == null) families else families - setOf("android12-5.10", "android13-5.15")
+        check((if (moduleRoutes == null) payloads.keys.containsAll(expectedRaw) else payloads.keys == expectedRaw) &&
+            payloads.keys.all { it.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+")) }) {
             "ULTRA_CLAIM_FAMILY_CLOSURE"
+        }
+        if (moduleRoutes != null) {
+            val catalog = project.layout.buildDirectory.file("generated/ultraInitBridgeAssets/ultra-init-bridge/catalog.json").get().asFile
+            check(catalog.isFile) { "ULTRA_CLAIM_MODULE_CATALOG_REQUIRED" }
+            execOperations.exec {
+                commandLine(pythonExecutable.get(), project.rootProject.file("scripts/policy_claim_routes.py").absolutePath,
+                    "--claim-manifest", claim.resolve("manifest.json").absolutePath, "--catalog", catalog.absolutePath)
+            }.assertNormalExitValue()
         }
         val support = manifest.claimObject("support") ?: error("ULTRA_CLAIM_SUPPORT_REQUIRED")
         check(support.keys == setOf("bootstrap", "materializer", "permissions")) {
@@ -806,17 +826,29 @@ abstract class PackageUltraManagerClaim : DefaultTask() {
 }
 val ultraManagerClaimDirectory = providers.gradleProperty("maplesuUltraClaimDirectory").orNull
 val packageUltraManagerClaim = tasks.register<PackageUltraManagerClaim>("packageUltraManagerClaim") {
+    appVersion.set(android.defaultConfig.versionName!!)
+    releaseVersionCode.set(android.defaultConfig.versionCode!!)
     if (ultraManagerClaimDirectory != null) claimDirectory.set(rootProject.file(ultraManagerClaimDirectory))
+    pythonExecutable.set(providers.gradleProperty("maplesuPython")
+        .orElse(providers.environmentVariable("MAPLESU_PYTHON")).getOrElse("python"))
+    routeInputs.from(rootProject.file("scripts/policy_claim_routes.py"),
+        layout.buildDirectory.dir("generated/ultraInitBridgeAssets/ultra-init-bridge"),
+        rootProject.fileTree("runtime/ultra/boot/init-bridge") { include("*.py") })
     mainAssetsDirectory.set(layout.projectDirectory.dir("src/main/assets"))
     assetsDirectory.set(layout.buildDirectory.dir("generated/selectedMainAssets"))
 }
 if (ultraManagerClaimDirectory != null) {
     android.sourceSets["main"].assets.setSrcDirs(emptyList<String>())
 }
+// A formal Release must select a freshly built, version-checked claim cohort.
+tasks.matching { it.name == "mergeReleaseAssets" }.configureEach {
+    doFirst { check(ultraManagerClaimDirectory != null) { "ULTRA_CLAIM_FRESH_GENERATION_REQUIRED" } }
+}
 abstract class PackageUltraInitBridge : DefaultTask() {
     @get:InputDirectory abstract val sourceDirectory: DirectoryProperty
     @get:Input abstract val targetArguments: MapProperty<String, String>
     @get:Input abstract val catalogPlanPath: Property<String>
+    @get:Input abstract val componentCatalogPlanPath: Property<String>
     @get:InputFiles abstract val targetFiles: ConfigurableFileCollection
     @get:Input abstract val pythonExecutable: Property<String>
     @get:OutputDirectory abstract val assetsDirectory: DirectoryProperty
@@ -841,7 +873,11 @@ abstract class PackageUltraInitBridge : DefaultTask() {
         val required = listOf("target-boot", "kernel-image", "kernel-build", "target-config",
             "symvers", "bridge", "handoff", "handoff-verifier", "target-identity", "target-contract")
         val selected = targetArguments.get()
-        val missing = required.filter { selected[it].isNullOrBlank() }.toMutableList()
+        val exactBundle = selected.isNotEmpty()
+        val missing = (if (exactBundle) required.filter { selected[it].isNullOrBlank() } else emptyList()).toMutableList()
+        if (!exactBundle && (componentCatalogPlanPath.get().isEmpty() || catalogPlanPath.get().isNotEmpty())) {
+            missing += "component-catalog-plan or exact target inputs"
+        }
         selected.filterKeys { it != "credential-symbol" }.forEach { (name, path) ->
             val file = project.rootProject.file(path)
             if (if (name == "kernel-build") !file.isDirectory else !file.isFile) missing += "$name:$path"
@@ -864,21 +900,23 @@ abstract class PackageUltraInitBridge : DefaultTask() {
         // package.py publishes its manifest last and requires a fresh output directory.
         project.delete(bundle)
         assets.mkdirs()
+        if (!exactBundle) bundle.mkdirs()
         val arguments = mutableListOf(pythonExecutable.get(),
             sourceDirectory.get().file("package.py").asFile.absolutePath)
         selected.forEach { (name, value) -> arguments += listOf("--$name",
             if (name == "credential-symbol") value else project.rootProject.file(value).absolutePath) }
         arguments += listOf("--output", bundle.absolutePath)
-        result["command"] = arguments
+        if (exactBundle) result["command"] = arguments
+        else result["packageMode"] = "component-catalog-only"
         result["status"] = "RUNNING"
         saveReceipt()
-        val execution = execOperations.exec {
+        val exitCode = if (exactBundle) execOperations.exec {
             workingDir(project.rootProject.projectDir)
             commandLine(arguments)
             isIgnoreExitValue = true
-        }
-        result["exitCode"] = execution.exitValue
-        if (execution.exitValue == 0 && catalogPlanPath.get().isNotEmpty()) {
+        }.exitValue else 0
+        result["exitCode"] = exitCode
+        if (exitCode == 0 && catalogPlanPath.get().isNotEmpty()) {
             val catalogArguments = listOf(pythonExecutable.get(),
                 sourceDirectory.get().file("package_catalog.py").asFile.absolutePath,
                 "--plan", project.rootProject.file(catalogPlanPath.get()).absolutePath,
@@ -898,13 +936,35 @@ abstract class PackageUltraInitBridge : DefaultTask() {
                 error("Ultra init bridge catalog packaging failed; receipt=$receipt")
             }
         }
-        result["status"] = if (execution.exitValue == 0) "PACKAGED" else "PACKAGE_FAILED"
-        if (execution.exitValue == 0) {
-            check(bundle.resolve("manifest.json").isFile) { "ULTRA_BRIDGE_MANIFEST_MISSING" }
+        if (exitCode == 0 && componentCatalogPlanPath.get().isNotEmpty()) {
+            val componentArguments = listOf(pythonExecutable.get(),
+                sourceDirectory.get().file("package_catalog.py").asFile.absolutePath,
+                "--plan", project.rootProject.file(componentCatalogPlanPath.get()).absolutePath,
+                "--output", bundle.absolutePath, "--append-to-default")
+            result["componentCatalogCommand"] = componentArguments
+            result["status"] = "COMPONENT_CATALOG_RUNNING"
+            saveReceipt()
+            val componentExecution = execOperations.exec {
+                workingDir(project.rootProject.projectDir)
+                commandLine(componentArguments)
+                isIgnoreExitValue = true
+            }
+            result["componentCatalogExitCode"] = componentExecution.exitValue
+            if (componentExecution.exitValue != 0) {
+                result["status"] = "COMPONENT_CATALOG_FAILED"
+                saveReceipt()
+                error("Ultra KMI component catalog packaging failed; receipt=$receipt")
+            }
+        }
+        result["status"] = if (exitCode == 0) "PACKAGED" else "PACKAGE_FAILED"
+        if (exitCode == 0) {
+            check(bundle.resolve(if (exactBundle) "manifest.json" else "catalog-kmi.json").isFile) {
+                "ULTRA_BRIDGE_MANIFEST_MISSING"
+            }
             result["files"] = bundle.walkTopDown().filter { it.isFile }.sortedBy { it.path }.map(::identity).toList()
         }
         saveReceipt()
-        check(execution.exitValue == 0) { "Ultra init bridge packaging failed; receipt=$receipt" }
+        check(exitCode == 0) { "Ultra init bridge packaging failed; receipt=$receipt" }
     }
 }
 val ultraInitBridgeArguments = listOf("target-boot", "kernel-image", "kernel-build", "target-config", "symvers",
@@ -912,16 +972,19 @@ val ultraInitBridgeArguments = listOf("target-boot", "kernel-image", "kernel-bui
     "btf", "session-abi", "task-profile-abi", "credential-file", "credential-symbol").mapNotNull { name ->
     providers.gradleProperty("maplesuInitBridge." + name).orNull?.let { name to it }
 }.toMap()
+val ultraInitBridgeComponentPlan = providers.gradleProperty("maplesuInitBridge.component-catalog-plan").orElse("")
 val packageUltraInitBridge = tasks.register<PackageUltraInitBridge>("packageUltraInitBridge") {
     sourceDirectory.set(rootProject.layout.projectDirectory.dir("runtime/ultra/boot/init-bridge"))
     targetArguments.set(ultraInitBridgeArguments)
     catalogPlanPath.set(providers.gradleProperty("maplesuInitBridge.catalog-plan").orElse(""))
-    targetFiles.from(catalogPlanPath.map { value ->
+    componentCatalogPlanPath.set(ultraInitBridgeComponentPlan)
+    fun catalogInputs(value: String): List<File> =
         if (value.isEmpty()) emptyList<File>() else {
             val plan = rootProject.file(value)
             check(plan.isFile) { "ULTRA_CATALOG_PLAN_MISSING:$plan" }
             val declared = JsonSlurper().parse(plan) as? Map<*, *> ?: error("ULTRA_CATALOG_PLAN_SCHEMA")
-            val rows = declared["variants"] as? List<*> ?: error("ULTRA_CATALOG_PLAN_VARIANTS")
+            val rowsKey = if (declared["schema"] == "maplesu-init-bridge-catalog-plan/2") "components" else "variants"
+            val rows = declared[rowsKey] as? List<*> ?: error("ULTRA_CATALOG_PLAN_VARIANTS")
             val inputs = mutableListOf(plan)
             fun planFile(value: String): File = File(value).let { if (it.isAbsolute) it else File(plan.parentFile, value) }
             rows.forEach { value ->
@@ -943,10 +1006,16 @@ val packageUltraInitBridge = tasks.register<PackageUltraInitBridge>("packageUltr
                 val original = ((provenance["inputs"] as? Map<*, *>)?.get("bridge") as? Map<*, *>)?.get("path") as? String
                     ?: error("ULTRA_CATALOG_ORIGINAL_MODULE")
                 inputs += File(original)
+                if (rowsKey == "components") {
+                    (provenance["inputs"] as? Map<*, *> ?: error("ULTRA_CATALOG_COMPONENT_INPUTS")).values.forEach { item ->
+                        val path = (item as? Map<*, *>)?.get("path") as? String ?: error("ULTRA_CATALOG_COMPONENT_SOURCE")
+                        inputs += File(path)
+                    }
+                }
             }
             inputs.distinctBy { it.absolutePath }
         }
-    })
+    targetFiles.from(catalogPlanPath.map { catalogInputs(it) }, componentCatalogPlanPath.map { catalogInputs(it) })
     targetFiles.from(targetArguments.map { selected -> selected.filterKeys { it != "credential-symbol" }
         .flatMap { (name, path) ->
             val file = rootProject.file(path)
@@ -958,6 +1027,7 @@ val packageUltraInitBridge = tasks.register<PackageUltraInitBridge>("packageUltr
     assetsDirectory.set(layout.buildDirectory.dir("generated/ultraInitBridgeAssets"))
     receiptFile.set(layout.buildDirectory.file("reports/ultraInitBridge/package-receipt.json"))
 }
+packageUltraManagerClaim.configure { dependsOn(packageUltraInitBridge) }
 androidComponents.onVariants { variant ->
     if (ultraManagerClaimDirectory != null) {
         variant.sources.assets?.addGeneratedSourceDirectory(packageUltraManagerClaim,
@@ -966,7 +1036,7 @@ androidComponents.onVariants { variant ->
     // Normal uses its embedded KMI modules; Ultra boot uses the image patcher.
     // Only the separate Ultra init_boot carrier consumes this target-specific bundle.
     // Any supplied bridge input still selects the complete, strict packaging task.
-    if (ultraInitBridgeArguments.isNotEmpty()) {
+    if (ultraInitBridgeArguments.isNotEmpty() || ultraInitBridgeComponentPlan.get().isNotEmpty()) {
         variant.sources.assets?.addGeneratedSourceDirectory(packageUltraInitBridge, PackageUltraInitBridge::assetsDirectory)
     }
     variant.sources.assets?.addGeneratedSourceDirectory(packagePolicyHooks, PackagePolicyHooks::assetsDirectory)

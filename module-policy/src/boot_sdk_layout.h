@@ -15,7 +15,7 @@ struct BootSdkLayoutFacts {
     std::vector<std::pair<std::string, std::string>> function_errors;
 };
 BootSdkLayoutFacts describe_boot_sdk_layout(const std::vector<uint8_t>& btf,
-    bool allow_inner_allocator = false, bool allow_user_sampler = false, bool allow_segmented_allocator = false);
+    bool allow_inner_allocator = false, bool allow_user_sampler = false, unsigned segmented_capabilities = 0);
 msu_boot_sdk_layout consume_boot_sdk_layout(const BootSdkLayoutFacts& facts, uint32_t page_bytes,
-    bool allow_inner_allocator = false, bool allow_user_sampler = false, bool allow_segmented_allocator = false);
-msu_boot_sdk_layout resolve_boot_sdk_layout(const std::vector<uint8_t>& btf, uint32_t page_bytes, bool allow_inner_allocator = false, bool allow_user_sampler = false, bool allow_segmented_allocator = false);
+    bool allow_inner_allocator = false, bool allow_user_sampler = false, unsigned segmented_capabilities = 0);
+msu_boot_sdk_layout resolve_boot_sdk_layout(const std::vector<uint8_t>& btf, uint32_t page_bytes, bool allow_inner_allocator = false, bool allow_user_sampler = false, unsigned segmented_capabilities = 0);

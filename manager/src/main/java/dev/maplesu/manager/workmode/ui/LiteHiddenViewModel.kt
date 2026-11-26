@@ -4,6 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import dev.maplesu.manager.liteweb.LiteWebAdminController
 import dev.maplesu.manager.liteweb.RecoveryWebUiControl
 import dev.maplesu.manager.liteweb.RecoveryWebUiState
@@ -19,6 +20,7 @@ import androidx.lifecycle.viewModelScope
 import com.maplesu.core.R
 import com.maplesu.core.ksuApp
 import com.maplesu.core.ui.screen.host.HostPickerPolicy
+import com.maplesu.core.ui.screen.host.HiddenOperationProgress
 import dev.maplesu.manager.litehidden.HiddenCardPhase
 import dev.maplesu.manager.litehidden.HiddenFailure
 import dev.maplesu.manager.litehidden.HiddenModePolicy
@@ -55,12 +57,23 @@ class LiteHiddenViewModel : ViewModel() {
     private var refreshJob: Job? = null
     private var webUiStatusJob: Job? = null
     private var webUiStatusRevision = 0L
+    private val completedOperationDurations = mutableMapOf<String, Long>()
     private val webUiControl = RecoveryWebUiControl {
         dev.maplesu.manager.runtime.RootExec.execute(ksuApp, it)
     }
 
     init {
         refresh()
+    }
+
+    private fun beginOperation(key: String, stageRes: Int) = HiddenOperationProgress(
+        SystemClock.elapsedRealtime(), stageRes, completedOperationDurations[key],
+    )
+
+    private fun rememberCompletedOperation(key: String, progress: HiddenOperationProgress?) {
+        if (progress == null) return
+        val elapsed = SystemClock.elapsedRealtime() - progress.startedAtElapsedMs
+        if (elapsed > 0L) completedOperationDurations[key] = elapsed
     }
 
     fun refresh() {
@@ -182,18 +195,20 @@ class LiteHiddenViewModel : ViewModel() {
             ui.hostPicker.isRunning || ui.deactivate.running) return
         invalidateWebUiStatusRead()
         _uiState.update { it.copy(stoppingWebUi = true, checkingWebUi = false, webUiStopFailed = false,
+            webUiStopProgress = beginOperation("stop-webui", R.string.webui_control_stopping),
             webUiState = RecoveryWebUiState.UNKNOWN,
             webUiLinkAvailable = false, recoveryLinkSaved = false) }
         viewModelScope.launch {
             try {
                 val status = withContext(Dispatchers.IO) { webUiControl.stop() }
                 val stopped = status.state == RecoveryWebUiState.STOPPED
+                if (stopped) rememberCompletedOperation("stop-webui", _uiState.value.webUiStopProgress)
                 _uiState.update {
                     it.copy(stoppingWebUi = false, confirmStopWebUi = false, webUiState = status.state,
                         webUiStopFailed = !stopped, webUiLinkAvailable = false, recoveryLinkSaved = false)
                 }
             } finally {
-                _uiState.update { it.copy(stoppingWebUi = false, confirmStopWebUi = false) }
+                _uiState.update { it.copy(stoppingWebUi = false, confirmStopWebUi = false, webUiStopProgress = null) }
             }
         }
     }
@@ -216,13 +231,18 @@ class LiteHiddenViewModel : ViewModel() {
             card.confirmStopWebUi || card.deactivate.visible || !input.valid || card.hostPicker.visible) return
         _uiState.update {
             it.copy(phase = HiddenCardPhase.UNHIDDEN, failureRes = null,
-                hostPicker = HostPickerPolicy.open(it.hostPicker, card.portText, input.valid))
+                hostPicker = HostPickerPolicy.open(it.hostPicker, card.portText, input.valid)
+                    .copy(progress = beginOperation("load-hosts", R.string.host_picker_loading)))
         }
         loadHosts()
     }
 
     fun onSelectHost(packageName: String) {
         _uiState.update { it.copy(hostPicker = HostPickerPolicy.select(it.hostPicker, packageName)) }
+    }
+
+    fun onHostSearchQueryChange(query: String) {
+        _uiState.update { it.copy(hostPicker = HostPickerPolicy.search(it.hostPicker, query)) }
     }
 
     /** 「下一步」：未选宿主时无效果（按钮本身也禁用）。 */
@@ -247,7 +267,8 @@ class LiteHiddenViewModel : ViewModel() {
     fun onRetryHostLoad() {
         if (!_uiState.value.hostPicker.visible) return
         _uiState.update {
-            it.copy(hostPicker = HostPickerPolicy.open(it.hostPicker, it.portText, it.portValid))
+            it.copy(hostPicker = HostPickerPolicy.open(it.hostPicker, it.portText, it.portValid)
+                .copy(progress = beginOperation("load-hosts", R.string.host_picker_loading)))
         }
         loadHosts()
     }
@@ -275,6 +296,7 @@ class LiteHiddenViewModel : ViewModel() {
             }
             hostIcons.clear()
             hostIcons.putAll(result.icons)
+            rememberCompletedOperation("load-hosts", _uiState.value.hostPicker.progress)
             _uiState.update { it.copy(hostPicker = HostPickerPolicy.loaded(it.hostPicker, result.candidates)) }
         }
     }
@@ -306,16 +328,26 @@ class LiteHiddenViewModel : ViewModel() {
                 phase = HiddenCardPhase.ENABLING,
                 failureRes = null,
                 checkingWebUi = false,
-                hostPicker = HostPickerPolicy.startRunning(it.hostPicker),
+                hostPicker = HostPickerPolicy.startRunning(it.hostPicker,
+                    beginOperation("activate:$host", R.string.lite_hidden_step_webui_ping)),
             )
         }
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
+            val ready = withContext(Dispatchers.IO) {
                 val token = tokenOf(card.webUiLink)
-                if (token == null || !HttpHiddenDaemonProbe().ping(port, token)) null
-                else runCatching { LiteHiddenRuntimeProxy.activate(host, port) }.getOrNull()
+                runCatching { token != null && HttpHiddenDaemonProbe().ping(port, token) }
+                    .onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
             }
+            val result = if (ready) {
+                _uiState.update { it.copy(hostPicker = it.hostPicker.copy(
+                    progress = it.hostPicker.progress?.copy(stageRes = R.string.host_picker_running))) }
+                withContext(Dispatchers.IO) {
+                    runCatching { LiteHiddenRuntimeProxy.activate(host, port) }
+                        .onFailure { if (it is CancellationException) throw it }.getOrNull()
+                }
+            } else null
             if (result != null && result.success) {
+                rememberCompletedOperation("activate:$host", _uiState.value.hostPicker.progress)
                 tokenOf(result.recoveryUrl)?.let { webUiToken = it }
                 Toast.makeText(ksuApp, R.string.lite_hidden_enabled, Toast.LENGTH_LONG).show()
                 _uiState.update {
@@ -384,18 +416,21 @@ class LiteHiddenViewModel : ViewModel() {
         if (host.isBlank()) return
         invalidateWebUiStatusRead()
         _uiState.update {
-            it.copy(deactivate = HostPickerPolicy.deactivateRunning(it.deactivate),
+            it.copy(deactivate = HostPickerPolicy.deactivateRunning(it.deactivate,
+                beginOperation("deactivate:$host", R.string.lite_hidden_deactivate_running)),
                 checkingWebUi = false, confirmStopWebUi = false,
                 webUiState = RecoveryWebUiState.UNKNOWN,
                 webUiLinkAvailable = false, recoveryLinkSaved = false)
         }
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { LiteHiddenRuntimeProxy.deactivate(host) }.getOrNull()
+                runCatching { LiteHiddenRuntimeProxy.deactivate(host) }
+                    .onFailure { if (it is CancellationException) throw it }.getOrNull()
             }
             val ok = result?.success == true
             val failure = result?.failure ?: HiddenFailure.DEACTIVATE_FAILED
             if (ok) {
+                rememberCompletedOperation("deactivate:$host", _uiState.value.deactivate.progress)
                 Toast.makeText(ksuApp, R.string.lite_hidden_deactivate_ok, Toast.LENGTH_LONG).show()
                 _uiState.update {
                     it.copy(
@@ -459,11 +494,13 @@ class LiteHiddenViewModel : ViewModel() {
     /** Preparing a recovery entry starts the existing daemon, never the hidden transaction. */
     fun prepareRecoveryLink() {
         val card = _uiState.value
+        val requestedPort = HiddenModePolicy.validatePort(card.portText).value ?: return
         if (card.checkingState || card.preparingLink || card.stoppingWebUi || !card.portValid || card.hostPicker.isRunning ||
             card.deactivate.visible || card.confirmStopWebUi ||
             dev.maplesu.manager.workmode.ModeRuntime.active != dev.maplesu.manager.workmode.WorkMode.LITE) return
         invalidateWebUiStatusRead()
         _uiState.update { it.copy(preparingLink = true, webUiLinkAvailable = false,
+            recoveryProgress = beginOperation("prepare-link", R.string.ui_polish_link_preparing),
             recoveryLinkSaved = false, linkFailure = false, checkingWebUi = false,
             webUiState = RecoveryWebUiState.UNKNOWN) }
         viewModelScope.launch {
@@ -473,20 +510,23 @@ class LiteHiddenViewModel : ViewModel() {
                 val prepared = withContext(Dispatchers.IO) {
                     runCatching {
                         val controller = LiteWebAdminController(ksuApp)
-                        val info = controller.preparePreviewUrl() ?: run {
+                        val info = controller.preparePreviewUrl(requestedPort) ?: run {
                             failure = controller.previewError().ifEmpty { "LITEWEB_CONFIG_UNAVAILABLE" }
                             return@runCatching null
                         }
                         stage = "existing_probe"
+                        _uiState.update { it.copy(recoveryProgress = it.recoveryProgress?.copy(stageRes = R.string.lite_hidden_step_webui_ping)) }
                         val existing = controller.url().orEmpty()
                         val existingToken = tokenOf(existing)
                         val existingPort = runCatching { Uri.parse(existing).port }.getOrDefault(-1)
-                        if (existingToken != null && HttpHiddenDaemonProbe().ping(existingPort, existingToken)) {
+                        if (existingPort == requestedPort && existingToken != null &&
+                            HttpHiddenDaemonProbe().ping(existingPort, existingToken)) {
                             return@runCatching existing to existingPort
                         }
                         // The hidden transaction reuses only the recovery daemon. Kernel RootService
                         // serves a different endpoint, so use the existing daemon API for that branch.
                         stage = "daemon_start"
+                        _uiState.update { it.copy(recoveryProgress = it.recoveryProgress?.copy(stageRes = R.string.lite_hidden_step_webui_start)) }
                         val listener = if (LiteHiddenRecoveryLinkPolicy.usesDirectDaemon(controller.rootBackend() == RootBackend.LITE_KERNEL)) {
                             UltraEnvLiteWebDaemon.default().start(ksuApp).let {
                                 failure = it.code.ifEmpty { "LITEWEB_DAEMON_START_FAILED" }
@@ -500,13 +540,18 @@ class LiteHiddenViewModel : ViewModel() {
                         }
                         val (started, actualPort) = listener
                         if (!started || actualPort == null) return@runCatching null
+                        if (actualPort != requestedPort) {
+                            failure = "LITEWEB_PORT_READBACK_MISMATCH"
+                            return@runCatching null
+                        }
                         stage = "authenticated_probe"
+                        _uiState.update { it.copy(recoveryProgress = it.recoveryProgress?.copy(stageRes = R.string.lite_hidden_step_webui_ping)) }
                         failure = "LITEWEB_DAEMON_PING_FAILED"
                         repeat(6) {
                             val link = controller.url().orEmpty()
                             val token = tokenOf(link)
                             val port = runCatching { Uri.parse(link).port }.getOrDefault(info.port)
-                            if (token != null && LiteHiddenRecoveryLinkPolicy.isReady(started, actualPort, port,
+                            if (port == requestedPort && token != null && LiteHiddenRecoveryLinkPolicy.isReady(started, actualPort, port,
                                     HttpHiddenDaemonProbe().ping(port, token))) return@runCatching link to port
                             delay(150)
                         }
@@ -528,6 +573,7 @@ class LiteHiddenViewModel : ViewModel() {
                 val (link, port) = prepared
                 webUiToken = tokenOf(link)
                 withContext(Dispatchers.IO) { LiteHiddenRuntimeProxy.setPreferredPort(port) }
+                rememberCompletedOperation("prepare-link", _uiState.value.recoveryProgress)
                 _uiState.update {
                     it.copy(preparingLink = false, webUiLink = link, webUiLinkAvailable = true,
                         webUiState = RecoveryWebUiState.RUNNING, checkingWebUi = false, webUiStopFailed = false,
@@ -535,7 +581,7 @@ class LiteHiddenViewModel : ViewModel() {
                         hostPicker = it.hostPicker.copy(portText = port.toString(), portValid = true))
                 }
             } finally {
-                _uiState.update { it.copy(preparingLink = false) }
+                _uiState.update { it.copy(preparingLink = false, recoveryProgress = null) }
             }
         }
     }

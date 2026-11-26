@@ -27,6 +27,20 @@ internal fun verifyOwnedRestoreImage(partition: String, image: File, vbmeta: Fil
     }
 }
 
+/** Ordinary automatic carrier migration follows the unsigned installation contract. */
+internal fun requiresSignedOwnedCarrierRestore(record: JSONObject, partition: String): Boolean {
+    val ordinaryMigration = record.optString("operation", "INSTALL") == "INSTALL" &&
+        record.optString("targetMode") in setOf("LITE", "KSU") && record.optString("signingMode").isEmpty() &&
+        record.optString("restorationKind") == "OWNED_WRITES_REMOVED" &&
+        record.optString("carrierRestoration") == partition && record.optString("partition") != partition
+    return !ordinaryMigration || record.optBoolean("requireSignedOwnedRestore", true)
+}
+
+internal fun verifyOwnedCarrierRestoreImage(record: JSONObject, partition: String, image: File, vbmeta: File) {
+    if (requiresSignedOwnedCarrierRestore(record, partition))
+        verifyOwnedRestoreImage(partition, image, vbmeta)
+}
+
 /** Root-owned first-install/reinstall tasks. Stock originals and full PRE remain separate. */
 internal object NativeInstallTransaction {
     private val root = InstallerDeviceLock.defaultRoot
@@ -88,7 +102,7 @@ internal object NativeInstallTransaction {
         if (existing.exists()) {
             val old = read(existing)
             check(old.optString("targetMode") == targetMode && old.optString("partition") == partition &&
-                old.optBoolean("restoreOriginal") == restoreOriginal && old.optString("selectedManager") == selectedManager &&
+                old.optBoolean("requestedRestoreOriginal", old.optBoolean("restoreOriginal")) == restoreOriginal && old.optString("selectedManager") == selectedManager &&
                 old.optBoolean("conflictAccepted") == conflictAccepted && old.optInt("userId") == userId &&
                 old.optString("operation", "INSTALL") == operation && old.optString("signingMode") == signingMode) { "INSTALLER_TASK_CONFLICT" }
             if (operation == "RESTORE_STOCK") stockRestoreTargets(old)
@@ -122,7 +136,8 @@ internal object NativeInstallTransaction {
             put("operation", operation)
             put("vivoCompatibility", operation == "INSTALL" && VivoCompatibility.deviceSupported())
             put("signingMode", signingMode)
-            put("partition", partition); put("restoreOriginal", restoreOriginal); put("selectedManager", selectedManager)
+            put("partition", partition); put("requestedRestoreOriginal", restoreOriginal)
+            put("restoreOriginal", restoreOriginal); put("selectedManager", selectedManager)
             put("userId", userId)
             put("conflictAccepted", conflictAccepted); put("state", "PREPARING"); put("error", "")
             put("bootId", bootId()); put("snapshot", encode(observed)); put("attempted", JSONArray())
@@ -135,25 +150,50 @@ internal object NativeInstallTransaction {
         }
         save(directory, record)
         try {
-            val captured = capture(if (operation == "RESTORE_STOCK")
-                withSigning(observed, observed.signingPartitions + listOf("vbmeta").filter { it in observed.partitions })
-                else observed, File(directory, "pre"))
+            val captured = capture(withSigning(observed,
+                observed.signingPartitions + listOf("vbmeta").filter { it in observed.partitions }), File(directory, "pre"))
             val pre = captured.filterKeys { it in names }
-            if (restoreOriginal) {
+            // Resolve a carrier change once, from the immutable PRE of this installation.
+            // Unknown or modified recovery bytes retain their original failure semantics.
+            if (operation == "INSTALL" && !restoreOriginal) {
+                val other = if (partition == "boot") "init_boot" else "boot"
+                val image = pre[other]
+                val ownsOther = image != null && (dev.maplesu.image.UltraInitBootProducer.recognizes(image) ||
+                    dev.maplesu.image.RamdiskInspector.inspect(image).let { ramdisk ->
+                        ramdisk.hasKernelsuKo || ramdisk.hasKsuConfig || ramdisk.hasKsud || ramdisk.hasSevenkKo ||
+                            ramdisk.entries.any { it.path.removePrefix("./") == "stock_image.sha1" }
+                    } ||
+                    other == "boot" && assets != null &&
+                    dev.maplesu.manager.ultrakernel.UltraKernelOriginalRecovery(assets).let { recovery ->
+                        val lineage = receipts ?: File(directory, "no-receipts")
+                        recovery.generatedKernelWithDeployment(image, lineage) != null ||
+                            recovery.installedSpec(image, lineage) != null
+                    })
+                if (ownsOther) record.put("restoreOriginal", true).put("carrierRestoration", other)
+            }
+            if (record.getBoolean("restoreOriginal")) {
                 val destination = File(directory, "original")
-                val restoreTargets = stockSelection?.takeIf { it.sourceProofs.isNotEmpty() }?.targets
-                val sources = if (operation == "RESTORE_STOCK") pre + captured.filterKeys { it == "vbmeta" } else pre
+                val carrierRestore = record.optString("carrierRestoration").takeIf(String::isNotBlank)
+                val requireSignedOwnedRestore = carrierRestore == null || signingMode.isNotEmpty()
+                record.put("requireSignedOwnedRestore", requireSignedOwnedRestore)
+                val restoreTargets = carrierRestore?.let(::setOf)
+                    ?: stockSelection?.takeIf { it.sourceProofs.isNotEmpty() }?.targets
+                val sources = if (operation == "RESTORE_STOCK" || carrierRestore != null)
+                    pre + captured.filterKeys { it == "vbmeta" } else pre
                 val resolution = resolveOriginals(observed, sources, destination, selectedManager, userId,
-                    assets, receipts, retainedOriginals, restoreTargets, forRemoval = operation == "RESTORE_STOCK")
+                    assets, receipts, retainedOriginals, restoreTargets,
+                    forRemoval = operation == "RESTORE_STOCK" || carrierRestore != null,
+                    requireSignedOwnedRestore = requireSignedOwnedRestore)
                 val originals = resolution.originals
                 record.put("originalSource", resolution.family).put("sourceSlot", resolution.sourceSlot)
                 record.put("restorationKind", resolution.kind.name)
                 if (resolution.kind == ImageRestorationKind.OWNED_WRITES_REMOVED) {
                     val owned = originals.keys.singleOrNull()
-                    check(operation == "RESTORE_STOCK" && owned in names) { "INSTALLER_STOCK_TARGETS_INVALID" }
-                    record.put("stockRestoreTargets", JSONArray(listOf(owned)))
+                    check(owned in names && (operation == "RESTORE_STOCK" || operation == "INSTALL" &&
+                        owned == carrierRestore && owned != partition)) { "INSTALLER_STOCK_TARGETS_INVALID" }
+                    if (operation == "RESTORE_STOCK") record.put("stockRestoreTargets", JSONArray(listOf(owned)))
                         .put("stockRestoreSources", JSONObject()).put("stockRestoreCoverage", "IMAGE_OWNED_RECORD")
-                        .put("ownedRemovalSource", resolution.ownershipSource)
+                    record.put("ownedRemovalSource", resolution.ownershipSource)
                         .put("ownedRemovalProof", JSONObject().put(owned, observed.partitions.getValue(requireNotNull(owned)).sha256))
                 } else check(originals.keys == (restoreTargets ?: pre.keys)) { "INSTALLER_STOCK_BACKUP_UNAVAILABLE" }
                 record.put("originals", JSONObject().apply {
@@ -194,7 +234,9 @@ internal object NativeInstallTransaction {
         val record = read(directory)
         check(record.optString("operation", "INSTALL") == "INSTALL") { "INSTALLER_TASK_CONFLICT" }
         check(record.getString("state") == "PREPARED" &&
-            (partition == record.getString("partition") || partition == "vendor_boot" && partition in decode(record).partitions || partition in signingNames(record.optString("signingMode")) ||
+            (partition == record.getString("partition") ||
+                partition == "boot" && record.getString("targetMode") == "LITE" && record.getString("partition") == "init_boot" ||
+                partition == "vendor_boot" && partition in decode(record).partitions || partition in signingNames(record.optString("signingMode")) ||
                 partition == "init_boot" && partition in decode(record).partitions && record.optBoolean("vivoCompatibility") &&
                 record.getString("targetMode") == "LITE" && record.getString("partition") == "boot" ||
                 record.getBoolean("restoreOriginal") &&
@@ -203,7 +245,7 @@ internal object NativeInstallTransaction {
         }
         val companion = partition !in names
         val source = if (companion) File(directory, "pre/$partition.img") else image(directory, record, partition)
-        val sha = if (!companion && record.getBoolean("restoreOriginal")) record.getJSONObject("originals").getString(partition)
+        val sha = if (!companion && record.optJSONObject("originals")?.has(partition) == true) record.getJSONObject("originals").getString(partition)
             else decode(record).partitions.getValue(partition).sha256
         check(source.length() == decode(record).partitions.getValue(partition).size && digest(source) == sha) {
             "INSTALLER_IMAGE_CHANGED"
@@ -359,10 +401,30 @@ internal object NativeInstallTransaction {
                 NativeInstallSequence.Image(name, companion, expected)
             }
             record.put("compatibilityPartitions", JSONArray(compatibility.map { it.partition }))
-            val writes = (names.filter { it in snapshot.partitions && it != target && it !in compatibilityNames && record.getBoolean("restoreOriginal") }
+            val writes = (names.filter { it in snapshot.partitions && it != target && it !in compatibilityNames &&
+                record.optJSONObject("originals")?.has(it) == true }
                 .map { name -> NativeInstallSequence.Image(name, image(directory, record, name), record.getJSONObject("originals").getString(name)) } +
                 NativeInstallSequence.Image(target, file, candidateSha256))
-                 .let { it + compatibility }.sortedBy { when (it.partition) { "vendor_boot" -> 0; "init_boot" -> 1; else -> 2 } } + signed
+                 .let { it + compatibility }.sortedBy { when {
+                     it.partition == "vendor_boot" -> 0
+                     it.partition == target -> 3
+                     it.partition == "init_boot" -> 1
+                     else -> 2
+                 } } + signed
+            if (record.optString("restorationKind") == "OWNED_WRITES_REMOVED" &&
+                record.optString("carrierRestoration").isNotBlank()) {
+                val restored = writes.single { it.partition == record.getString("carrierRestoration") }
+                if (dev.maplesu.image.AvbFooter.parse(restored.file).present) {
+                    val main = File(directory, "pre/vbmeta.img")
+                    val expectedMain = snapshot.partitions["vbmeta"]
+                    check(expectedMain != null || !requiresSignedOwnedCarrierRestore(record, restored.partition)) {
+                        "INSTALLER_IMAGE_CHANGED"
+                    }
+                    if (expectedMain != null)
+                        check(digest(main) == expectedMain.sha256) { "INSTALLER_IMAGE_CHANGED" }
+                    verifyOwnedCarrierRestoreImage(record, restored.partition, restored.file, main)
+                }
+            }
             if (record.optString("signingMode").isNotEmpty()) {
                 // Verify the complete final write set, including any restored init_boot hash.
                 dev.maplesu.image.LenovoAvbSigner.verifySigned(
@@ -559,7 +621,8 @@ internal object NativeInstallTransaction {
             fields.forEach { if (source.has(it)) output.put(it, source.opt(it)) }
         }
         val log = select(record, "kind", "operation", "taskId", "state", "error", "errorDetail",
-            "targetMode", "partition", "candidateSha256", "signingMode", "restorationKind")
+            "targetMode", "partition", "candidateSha256", "signingMode", "restorationKind",
+            "carrierRestoration", "requireSignedOwnedRestore")
         record.optJSONObject("normalUserlandFailure")?.let {
             log.put("normalUserlandFailure", select(it, "code", "detail", "detailTruncated"))
         }
@@ -626,7 +689,7 @@ internal object NativeInstallTransaction {
     private fun resolveOriginals(snapshot: InstallerSnapshot, live: Map<String, File>, output: File,
         selectedManager: String, userId: Int, assets: dev.maplesu.manager.ultrakernel.UltraKernelAssetSource?,
         receipts: File?, retainedOriginals: List<File>, restoreTargets: Set<String>? = null,
-        forRemoval: Boolean = false): StockOriginalResolver.Resolution {
+        forRemoval: Boolean = false, requireSignedOwnedRestore: Boolean = true): StockOriginalResolver.Resolution {
         val baseline = if (restoreTargets == null) NativeStockBaseline.originals(snapshot, output, assets, receipts, retainedOriginals)
             else NativeStockBaseline.originalsForRestore(snapshot, output, restoreTargets,
                 assets = assets, receipts = receipts, retainedOriginals = retainedOriginals)
@@ -635,9 +698,11 @@ internal object NativeInstallTransaction {
         }
         val resolver = StockOriginalResolver(assets, receipts, retainedOriginals,
             alternate = { InstallerPartitionReader.captureAlternate(snapshot, it) })
-        return if (forRemoval) resolver.resolveForRestore(snapshot, live, output, restoreTargets, selectedManager, userId)
+        return if (forRemoval) resolver.resolveForRestore(snapshot, live, output, restoreTargets, selectedManager, userId,
+                requireSignedOwnedRestore = requireSignedOwnedRestore)
             else if (restoreTargets == null) resolver.resolve(snapshot, live, output, selectedManager, userId)
-            else resolver.resolveForRestore(snapshot, live, output, restoreTargets, selectedManager, userId)
+            else resolver.resolveForRestore(snapshot, live, output, restoreTargets, selectedManager, userId,
+                requireSignedOwnedRestore = requireSignedOwnedRestore)
     }
 
     /** Recompute from the saved PRE, so retries after a stock write validate the same source proof. */
@@ -682,7 +747,7 @@ internal object NativeInstallTransaction {
             it.matches(Regex("(?:INSTALLER|LENOVO_AVB|ULTRA_KERNEL|ULTRA_INIT)_[A-Z0-9_]+")) }
         ?: "INSTALLER_OPERATION_FAILED"
     private fun image(directory: File, record: JSONObject, name: String) = File(directory,
-        (if (record.getBoolean("restoreOriginal")) "original" else "pre") + "/$name.img")
+        (if (record.optJSONObject("originals")?.has(name) == true) "original" else "pre") + "/$name.img")
     private fun pre(directory: File, snapshot: InstallerSnapshot) = snapshot.partitions.filterKeys { it in tracked(snapshot) }.mapValues { (name, row) ->
         NativeInstallSequence.Image(name, File(directory, "pre/$name.img"), row.sha256)
     }
@@ -881,16 +946,23 @@ internal object NativeInstallTransaction {
         putString("rebootSourceState", sourceState)
         putString("currentBootId", currentBoot)
         putString("slotSuffix", decode(record).slotSuffix)
+        putString("kernelRelease", decode(record).kernelRelease)
         putString("partitionSha256", record.optJSONObject("expected")?.optString(record.getString("partition")).orEmpty())
         putString("signingMode", record.optString("signingMode"))
         putString("originalSource", record.optString("originalSource"))
         putString("sourceSlot", record.optString("sourceSlot"))
+        putBoolean("restoreOriginal", record.optBoolean("restoreOriginal"))
+        putBoolean("requestedRestoreOriginal", record.optBoolean("requestedRestoreOriginal", record.optBoolean("restoreOriginal")))
+        putString("carrierRestoration", record.optString("carrierRestoration"))
         putStringArrayList("restorePartitions", ArrayList(if (record.optBoolean("restoreOriginal"))
-            names.filter { it != record.getString("partition") && it in decode(record).partitions } else emptyList()))
+            names.filter { it != record.getString("partition") && record.optJSONObject("originals")?.has(it) == true }
+            else emptyList()))
         putParcelableArrayList("partitionRows", ArrayList(decode(record).partitions.filterKeys {
             it in tracked(decode(record))
         }.map { (name, row) -> Bundle().apply {
             putString("name", name); putLong("size", row.size); putString("preSha256", row.sha256)
+            putString("sourceSha256", if (record.optJSONObject("originals")?.has(name) == true)
+                record.optJSONObject("originals")?.optString(name).orEmpty() else row.sha256)
             putString("targetSha256", record.optJSONObject("expected")?.optString(name).orEmpty().ifBlank { row.sha256 })
         } }))
         putInt("attemptedPartitionCount", record.optJSONArray("attempted")?.length() ?: 0)

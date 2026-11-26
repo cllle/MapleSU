@@ -29,7 +29,13 @@ internal class UltraKernelFlow internal constructor(
             it.equals("vivo", true) || it.equals("iqoo", true)
         },
         UltraKernelContextAssets(context),
-        { pairedBoot -> initBootArtifact(context, pairedBoot) },
+        { source ->
+            if (BootImageInspector.inspect(source).kernelSize == 0L) initBootArtifact(context)
+            else {
+                val kmi = dev.maplesu.image.KernelIdentity.kmiOf(UltraKernelPlan.readKernel(source))
+                if (kmi.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+"))) initBootArtifact(context, kmi) else null
+            }
+        },
     )
 
     private val builder get() = UltraKernelBuilder(workspace)
@@ -62,12 +68,22 @@ internal class UltraKernelFlow internal constructor(
     }
 
     companion object {
-        fun initBootArtifact(context: Context): UltraInitBootProducer.Artifact? =
-            UltraInitBootAssets.load(context.filesDir, { path -> context.assets.open(path) })
+        /** Current-device default; an offline image for another device supplies its selected KMI. */
+        fun initBootArtifact(context: Context): UltraInitBootProducer.Artifact? {
+            val kmi = dev.maplesu.image.KernelIdentity.kmiOfRelease(android.system.Os.uname().release)
+            if (!kmi.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+"))) return null
+            return initBootArtifact(context, kmi)
+        }
 
         fun initBootArtifact(context: Context, pairedBoot: File): UltraInitBootProducer.Artifact? =
             UltraInitBootCatalog.resolve(context.filesDir, { path -> context.assets.open(path) }, pairedBoot,
                 UltraKernelContextAssets(context))
+
+        fun availableInitBootKmis(context: Context): List<String> =
+            UltraInitBootCatalog.availableKmis(context.filesDir) { path -> context.assets.open(path) }
+
+        fun initBootArtifact(context: Context, kmi: String): UltraInitBootProducer.Artifact? =
+            UltraInitBootCatalog.resolveKmi(context.filesDir, { path -> context.assets.open(path) }, kmi)
 
         /** Compare installed payload and parameter bytes, never the generic bundle's absent key hash. */
         fun initBootUpdateRequired(image: File, artifact: UltraInitBootProducer.Artifact,
@@ -127,27 +143,48 @@ internal class UltraKernelFlow internal constructor(
     ): Preparation {
         requireBase(base)
         val carrier = BootImageInspector.inspect(base)
-        val legacyModule = carrier.kernelSize > 0L && UltraKernelLegacyModuleRoute.required(UltraKernelPlan.readKernel(base))
-        if (carrier.kernelSize == 0L || legacyModule) {
-            check(variantId == null || variantId == "generated" || legacyModule && variantId == freshSpecGenerator.recipeId) {
+        val legacyModule = initBootArtifact?.isKmiComponent != true && carrier.kernelSize > 0L &&
+            UltraKernelLegacyModuleRoute.required(UltraKernelPlan.readKernel(base))
+        if (carrier.kernelSize == 0L || legacyModule || initBootArtifact?.isKmiComponent == true) {
+            check(variantId == null || variantId == "generated" || carrier.kernelSize > 0L && variantId == freshSpecGenerator.recipeId) {
                 "ULTRA_KERNEL_INIT_BOOT_VARIANT_UNSUPPORTED"
             }
-            val selectedArtifact = requireNotNull(initBootArtifact ?: if (legacyModule) moduleArtifact(base) else null) {
-                "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED:bridge.ko,handoff,target-kernel/config/ABI/CFI;BTF-or-accessor;Module.symvers-if-modversions"
+            val artifactSource = requireNotNull(initBootArtifact ?: moduleArtifact(base)) {
+                "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED:select-KMI-and-packaged-component"
             }
-            val artifact = UltraInitBootTargetResolver.resolve(selectedArtifact,
-                if (legacyModule) base else selectedArtifact.targetBoot,
-                managerClaimAssets ?: assets)
-            val deploymentArtifact = withInitBootDeployment(base, artifact, recoveredDeployment)
-            val parameter = deploymentArtifact.credentialMode == "module-parameter"
-            val bound = if (parameter) credential.withMetadataDisplacement(deploymentArtifact.metadataDisplacement) else credential
-            val boundArtifact = if (parameter) {
-                val secret = bound.copySecret()
-                try { deploymentArtifact.withCredential(secret) } finally { secret.fill(0) }
-            } else deploymentArtifact
-            val candidate = builder.generateInitBoot(base, boundArtifact, bound)
-            return Preparation(null, candidate, candidate.bootSha256 == candidate.baseBootSha256,
-                verification = "experimental", experimental = true, planOrigin = if (legacyModule) "LEGACY_CFI_MODULE" else "INIT_BOOT_BRIDGE", credential = bound)
+            val recoveryWork = if (artifactSource.isKmiComponent && carrier.kernelSize > 0L)
+                File(workspace, "component-recovery-${java.util.UUID.randomUUID()}") else null
+            try {
+                val recovered = recoveryWork?.let { recoverModuleBase(base, it) }
+                val moduleBase = recovered?.image ?: base
+                val retainedDeployment = recovered?.deploymentNamespace
+                check(retainedDeployment == null || recoveredDeployment == null ||
+                    retainedDeployment.record().contentEquals(recoveredDeployment.record())) {
+                    "ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_CONFLICT"
+                }
+                if (recovered != null) onNotice("已恢复当前 Ultra 镜像，正在准备模块桥接")
+                val artifact = if (artifactSource.isKmiComponent && carrier.kernelSize == 0L) artifactSource
+                else UltraInitBootTargetResolver.resolve(artifactSource,
+                    if (carrier.kernelSize > 0L) moduleBase else artifactSource.targetBoot,
+                    managerClaimAssets ?: assets)
+                val deploymentArtifact = withInitBootDeployment(base, artifact, retainedDeployment ?: recoveredDeployment)
+                val parameter = deploymentArtifact.credentialMode == "module-parameter"
+                val bound = if (parameter) credential.withMetadataDisplacement(deploymentArtifact.metadataDisplacement) else credential
+                val boundArtifact = if (parameter) {
+                    val secret = bound.copySecret()
+                    try { deploymentArtifact.withCredential(secret) } finally { secret.fill(0) }
+                } else deploymentArtifact
+                val candidate = builder.generateInitBoot(moduleBase, boundArtifact, bound,
+                    installationInput = base, installationInputSha256 = carrier.sha256,
+                    normalizationSource = recovered?.source)
+                return Preparation(null, candidate, candidate.bootSha256 == candidate.baseBootSha256,
+                    verification = "experimental", experimental = true, planOrigin = when {
+                        artifactSource.isKmiComponent && carrier.kernelSize > 0L -> "KMI_BOOT_MODULE"
+                        artifactSource.isKmiComponent -> "INIT_BOOT_KMI_COMPONENT"
+                        legacyModule -> "LEGACY_CFI_MODULE"
+                        else -> "INIT_BOOT_BRIDGE"
+                    }, credential = bound)
+            } finally { recoveryWork?.deleteRecursively() }
         }
         if (recoveredDeployment != null) synchronized(this) { selectedDeploymentNamespace = recoveredDeployment }
         if (variantId == null || variantId == "generated" || variantId == UltraKernelSpecGenerator().recipeId) {
@@ -174,6 +211,8 @@ internal class UltraKernelFlow internal constructor(
         onNotice: (String) -> Unit = {},
     ): Preparation {
         requireBase(base)
+        if (credential != null && BootImageInspector.inspect(base).kernelSize == 0L)
+            return prepareTarget(base, credential, "generated", null, onNotice)
         val release = releaseOf(base)
         check(release.isNotEmpty()) { "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE" }
         if (credential != null) {
@@ -225,6 +264,26 @@ internal class UltraKernelFlow internal constructor(
         onNotice("已识别当前 Ultra 镜像，正在准备更新")
         return prepareGenerated(recovered.image, recovered.kernelRelease, credentials(),
             onNotice, installed = base, deploymentNamespace = recovered.deploymentNamespace)
+    }
+
+    private fun recoverModuleBase(base: File, output: File): UltraKernelOriginalRecovery.Recovered? {
+        val recovery = UltraKernelOriginalRecovery(assets)
+        fun restore(input: File, directory: File): UltraKernelOriginalRecovery.Recovered? {
+            if (!UltraInitBootProducer.recognizes(input))
+                recovery.recoverImageBoundExactInput(input, directory)?.let { return it }
+            return recovery.recover(input, workspace, emptyList(), directory)
+                ?: recovery.recover(input, workspace, emptyList(), directory, generatedOnly = true)
+        }
+        val restored = restore(base, File(output, "carrier")) ?: return null
+        if (!UltraInitBootProducer.recognizes(base)) return restored
+        // A module's first recorded input can itself be an older raw patch.
+        val raw = restore(restored.image, File(output, "raw")) ?: return restored
+        check(restored.deploymentNamespace == null || raw.deploymentNamespace == null ||
+            restored.deploymentNamespace.record().contentEquals(raw.deploymentNamespace.record())) {
+            "ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_CONFLICT"
+        }
+        return UltraKernelOriginalRecovery.Recovered(raw.image, raw.source, raw.kernelRelease,
+            raw.deploymentNamespace ?: restored.deploymentNamespace)
     }
 
     /**

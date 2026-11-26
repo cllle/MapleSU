@@ -27,6 +27,9 @@
 #include "manager_task_state.h"
 #include "request_protocol.h"
 #include "manager_dynamic_layout.h"
+#if defined(MSU_INIT_BRIDGE_HOST_IMPORTS) && defined(MSU_INIT_BRIDGE_RUNTIME_FACTS)
+#include "manager_task_profile_runtime.h"
+#endif
 
 #ifdef CONFIG_SECCOMP_FILTER
 /* The native public API consumes a private carrier for the detached tree.
@@ -331,21 +334,31 @@ static bool msu_task_profile_target_ready(void)
 {
     const struct msu_task_profile_target_binding *binding = &msu_task_profile_target;
     const struct msu_runtime_layout_field *field, *root;
+    u32 source = smp_load_acquire(&binding->bound);
     root = &msu_runtime_layout.values[MSU_DYN_thread_info_flags];
     if (!MSU_TASK_PROFILE_NATIVE || !msu_runtime_layout_ready() ||
-        smp_load_acquire(&binding->bound) != 1 ||
+        (source != MSU_TASK_PROFILE_TARGET_IMAGE && source != MSU_TASK_PROFILE_TARGET_RUNTIME) ||
         binding->magic != MSU_TASK_PROFILE_TARGET_MAGIC ||
         binding->schema != MSU_TASK_PROFILE_TARGET_SCHEMA ||
         binding->bytes != sizeof(*binding) || binding->reserved ||
-        binding->proof_mask != MSU_TASK_PROFILE_TARGET_PROOFS ||
         binding->root_bit != MSU_TASK_PROFILE_DISABLE_ROOT_BIT ||
         binding->work_member > 1 || binding->work_bit >= 63 || binding->compat ||
-        !msu_task_profile_hash_present(binding->target_sha256) ||
-        !msu_task_profile_hash_present(binding->config_sha256) ||
-        !msu_task_profile_hash_present(binding->proof_sha256) ||
         root->bytes != sizeof(unsigned long) ||
         (root->offset & (__alignof__(unsigned long) - 1)) ||
         root->offset > root->owner_bytes || root->bytes > root->owner_bytes - root->offset) return false;
+    if (source == MSU_TASK_PROFILE_TARGET_IMAGE) {
+        if (binding->proof_mask != MSU_TASK_PROFILE_TARGET_PROOFS ||
+            !msu_task_profile_hash_present(binding->target_sha256) ||
+            !msu_task_profile_hash_present(binding->config_sha256) ||
+            !msu_task_profile_hash_present(binding->proof_sha256)) return false;
+    } else {
+#if defined(MSU_INIT_BRIDGE_HOST_IMPORTS) && defined(MSU_INIT_BRIDGE_RUNTIME_FACTS)
+        if (binding->proof_mask != MSU_TASK_PROFILE_RUNTIME_PROOFS ||
+            !msu_task_profile_runtime_ready()) return false;
+#else
+        return false;
+#endif
+    }
     field = &msu_runtime_layout.values[binding->work_member ?
         MSU_DYN_thread_info_syscall_work : MSU_DYN_thread_info_flags];
     return field->bytes == sizeof(unsigned long) &&
@@ -371,7 +384,6 @@ _Static_assert(sizeof(struct msu_task_profile_marker_binding) == 112,
 static struct {
     struct tracepoint *exit_tracepoint;
     struct task_struct *init_task;
-    rwlock_t *tasklist_lock;
     unsigned long addresses[4];
     struct kretprobe *probes[4];
     bool opened;
@@ -399,8 +411,7 @@ static bool msu_task_profile_marker_ready(void)
         msu_task_profile_marker_field(m->kretprobe_bytes, m->entry_handler_offset, m->entry_handler_bytes, sizeof(void *)) &&
         msu_task_profile_marker_field(m->kretprobe_bytes, m->kp_addr_offset, m->kp_addr_bytes, sizeof(void *)) &&
         msu_task_profile_marker_field(m->kretprobe_bytes, m->maxactive_offset, m->maxactive_bytes, sizeof(int)) &&
-        msu_task_profile_marker_field(m->kretprobe_bytes, m->nmissed_offset, m->nmissed_bytes, sizeof(int)) &&
-        m->rwlock_bytes == sizeof(rwlock_t) && m->rwlock_align == __alignof__(rwlock_t);
+        msu_task_profile_marker_field(m->kretprobe_bytes, m->nmissed_offset, m->nmissed_bytes, sizeof(int));
 }
 
 /* Count the actual current callback arrays, not a guessed registration count.
@@ -444,7 +455,10 @@ static void msu_task_profile_marker_update(void)
     if (!READ_ONCE(msu_task_profile_marker.opened)) return;
     raw_spin_lock_irqsave(&msu_task_profile_marker_lock, irq);
     if (!msu_task_profile_marker.opened) goto out;
-    read_lock(msu_task_profile_marker.tasklist_lock);
+    /* Match the native for_each_process_thread RCU lists, using the stable
+     * signal thread-head sentinel rather than a possibly exiting leader.
+     * Tasks (and their signal references) survive until after the RCU grace
+     * period. No sleepable tasklist rwlock is acquired by this return probe. */
     rcu_read_lock();
     before = msu_task_profile_marker_mode();
     /* regfunc returns before a first callback array is published. With no
@@ -452,12 +466,12 @@ static void msu_task_profile_marker_update(void)
      * public registration return will observe the completed array. */
     if (!before) goto unlock_native;
     process_head = (void *)((unsigned char *)msu_task_profile_marker.init_task + m->tasks_offset);
-    for (process = READ_ONCE(process_head->next); process != process_head;
-            process = READ_ONCE(process->next)) {
+    for (process = rcu_dereference_raw(process_head->next); process != process_head;
+            process = rcu_dereference_raw(process->next)) {
         leader = (void *)((unsigned char *)process - m->tasks_offset);
-        thread_head = &MSU_DYN_FIELD(MSU_DYN_FIELD(leader, task_struct, signal), signal_struct, thread_head);
-        for (thread_node = READ_ONCE(thread_head->next); thread_node != thread_head;
-                thread_node = READ_ONCE(thread_node->next)) {
+        thread_head = &MSU_DYN_FIELD(READ_ONCE(MSU_DYN_FIELD(leader, task_struct, signal)), signal_struct, thread_head);
+        for (thread_node = rcu_dereference_raw(thread_head->next); thread_node != thread_head;
+                thread_node = rcu_dereference_raw(thread_node->next)) {
             thread = MSU_DYN_CONTAINER(thread_node, task_struct, thread_node);
             if (before == 2 || (before == 1 && msu_su_runtime_trace_mark_task(thread)))
                 set_bit(msu_task_profile_target.work_bit, msu_task_profile_work(thread));
@@ -471,12 +485,12 @@ static void msu_task_profile_marker_update(void)
          * return probe also restores all tasks; preserve it in this pass too.
          * This is the fixed baseline's completed-event contract, not a claim
          * of a global zero-window snapshot during clone/registration. */
-        for (process = READ_ONCE(process_head->next); process != process_head;
-                process = READ_ONCE(process->next)) {
+        for (process = rcu_dereference_raw(process_head->next); process != process_head;
+                process = rcu_dereference_raw(process->next)) {
             leader = (void *)((unsigned char *)process - m->tasks_offset);
-            thread_head = &MSU_DYN_FIELD(MSU_DYN_FIELD(leader, task_struct, signal), signal_struct, thread_head);
-            for (thread_node = READ_ONCE(thread_head->next); thread_node != thread_head;
-                    thread_node = READ_ONCE(thread_node->next)) {
+            thread_head = &MSU_DYN_FIELD(READ_ONCE(MSU_DYN_FIELD(leader, task_struct, signal)), signal_struct, thread_head);
+            for (thread_node = rcu_dereference_raw(thread_head->next); thread_node != thread_head;
+                    thread_node = rcu_dereference_raw(thread_node->next)) {
                 thread = MSU_DYN_CONTAINER(thread_node, task_struct, thread_node);
                 set_bit(msu_task_profile_target.work_bit, msu_task_profile_work(thread));
             }
@@ -484,7 +498,6 @@ static void msu_task_profile_marker_update(void)
     }
 unlock_native:
     rcu_read_unlock();
-    read_unlock(msu_task_profile_marker.tasklist_lock);
 out:
     raw_spin_unlock_irqrestore(&msu_task_profile_marker_lock, irq);
 }
@@ -558,10 +571,7 @@ static int msu_task_profile_marker_open(void)
     unsigned long irq;
     unsigned int i;
     int error;
-    /* Native tasklist rwlock semantics are required inside a return probe.
-     * PREEMPT_RT uses a sleepable rwlock and needs a separately verified path. */
-    if (!IS_ENABLED(CONFIG_KRETPROBES) || IS_ENABLED(CONFIG_PREEMPT_RT) ||
-        !msu_task_profile_marker_ready()) return -EOPNOTSUPP;
+    if (!IS_ENABLED(CONFIG_KRETPROBES) || !msu_task_profile_marker_ready()) return -EOPNOTSUPP;
     for (i = 0; i < ARRAY_SIZE(msu_task_profile_marker.probes); ++i) {
         struct kretprobe *probe = kzalloc(m->kretprobe_bytes, GFP_KERNEL);
         if (!probe) { error = -ENOMEM; goto fail; }
@@ -593,18 +603,23 @@ int msu_task_profile_trace_bind(unsigned long (*lookup)(const char *))
     if (!in_task() || in_atomic() || irqs_disabled()) return -EWOULDBLOCK;
     mutex_lock(&msu_task_profile_trace_lock);
     if (msu_task_profile_trace_registered) { error = -EBUSY; goto out; }
+#if defined(MSU_INIT_BRIDGE_HOST_IMPORTS) && defined(MSU_INIT_BRIDGE_RUNTIME_FACTS)
+    error = msu_task_profile_runtime_produce(lookup);
+    if (error) {
+        msu_task_profile_trace_bind_error = error;
+        msu_task_profile_tracepoint = NULL;
+        goto out;
+    }
+#endif
     address = lookup("__tracepoint_sys_enter");
     if (!address) error = -ENOENT;
     else if (address % __alignof__(struct tracepoint)) error = -EINVAL;
     if (!error) {
         msu_task_profile_marker.exit_tracepoint = (void *)lookup("__tracepoint_sys_exit");
         msu_task_profile_marker.init_task = (void *)lookup("init_task");
-        msu_task_profile_marker.tasklist_lock = (void *)lookup("tasklist_lock");
-        if (!msu_task_profile_marker.exit_tracepoint || !msu_task_profile_marker.init_task ||
-            !msu_task_profile_marker.tasklist_lock) error = -ENOENT;
+        if (!msu_task_profile_marker.exit_tracepoint || !msu_task_profile_marker.init_task) error = -ENOENT;
         else if ((unsigned long)msu_task_profile_marker.exit_tracepoint % __alignof__(struct tracepoint) ||
-            (unsigned long)msu_task_profile_marker.init_task % __alignof__(struct task_struct) ||
-            (unsigned long)msu_task_profile_marker.tasklist_lock % __alignof__(rwlock_t)) error = -EINVAL;
+            (unsigned long)msu_task_profile_marker.init_task % __alignof__(struct task_struct)) error = -EINVAL;
         for (i = 0; !error && i < ARRAY_SIZE(names); ++i) {
             msu_task_profile_marker.addresses[i] = lookup(names[i]);
             if (!msu_task_profile_marker.addresses[i]) error = -ENOENT;
@@ -643,8 +658,8 @@ void msu_task_profile_sys_enter(void *data, struct pt_regs *regs, long id)
     else return;
     if (copy_from_user_nofault(path, filename, sizeof(path)) ||
         memcmp(path, su_path, sizeof(path))) return;
-    /* Target qualification also proves its entry path reloads syscallno after
-     * native sys_enter, as the fixed KernelSU dispatcher requires. */
+    /* Consume the native ARM64 sys_enter contract used by fixed KernelSU:
+     * the dispatcher reloads syscallno after invoking the tracepoint. */
     WRITE_ONCE(regs->regs[0], (unsigned long)-EPERM);
     WRITE_ONCE(regs->syscallno, -1);
 #else

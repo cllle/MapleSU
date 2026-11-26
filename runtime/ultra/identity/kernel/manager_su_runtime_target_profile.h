@@ -17,8 +17,9 @@ typedef int (*msu_su_exec_source_fn)(int, struct filename *, struct user_arg_ptr
 _Static_assert(sizeof(((struct filename *)0)->name) == sizeof(void *), "native filename pointer");
 _Static_assert(sizeof(((struct pt_regs *)0)->regs[0]) == sizeof(unsigned long), "native register word");
 
-/* Input-image facts, bound by the carrier before boot. Kernel identity is not
- * a shipping profile: every selected Image supplies its own entry/KCFI bytes. */
+/* Exact input-image facts or facts produced from this boot's live kernel.
+ * Kernel identity is not a shipping profile: selected entries always supply
+ * their own instruction/KCFI bytes before ready is release-published. */
 #define MSU_SU_TARGET_PROFILE_MAGIC 0x4d535550U
 #define MSU_SU_TARGET_PROFILE_SCHEMA 1U
 #define MSU_SU_TARGET_PROFILE_COUNT 5U

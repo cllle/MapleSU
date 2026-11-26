@@ -90,6 +90,18 @@ class DaemonLiteWebBackend(
 ) : LiteWebBackend, AutoCloseable {
 
     private val startedAtNanos = System.nanoTime()
+    private val moduleFiles = dev.maplesu.manager.liteweb.LiteWebModuleFiles(File(modulesRoot))
+    @Volatile private var browserBridge: dev.maplesu.manager.liteweb.LiteWebModuleBridgePort =
+        dev.maplesu.manager.liteweb.UnavailableModuleBridgePort
+
+    internal fun attachModuleBridge(bridge: dev.maplesu.manager.liteweb.LiteWebModuleBridgePort) {
+        browserBridge.close()
+        browserBridge = bridge
+    }
+
+    override fun moduleBridgePort() = browserBridge
+    override fun moduleWebFile(moduleId: String, relativePath: String) = moduleFiles.read(moduleId, relativePath)
+
 
     /** 隐藏态读不到为 null；模块数来自当前模式的真实后端，失败单独标记。 */
     override fun status(): LiteWebStatusView {
@@ -213,6 +225,7 @@ class DaemonLiteWebBackend(
     )
 
     override fun close() {
+        browserBridge.close()
         assetsReader.close()
     }
 

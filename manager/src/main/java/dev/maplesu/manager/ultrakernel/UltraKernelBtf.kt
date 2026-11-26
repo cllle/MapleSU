@@ -44,6 +44,11 @@ internal object UltraKernelBtf {
         names.sorted().associateWith { variableSignature(it) ?: throw Invalid("VARIABLE_MISSING:$it") }
     }
 
+    fun dataObjectSizes(kernel: ByteArray, symbols: UltraKernelSymbols,
+                        signatures: Map<String, String>): Map<String, Long>? = readAbi(kernel, symbols) {
+        signatures.toSortedMap().mapValues { (name, expected) -> dataObjectSize(name, expected) }
+    }
+
     fun enumValue(kernel: ByteArray, symbols: UltraKernelSymbols, name: String): Long? =
         readAbi(kernel, symbols) { enumValue(name) }
 
@@ -252,8 +257,11 @@ internal object UltraKernelBtf {
             return when (t.kind) {
                 2 -> 8L
                 1, 4, 5, 6, 16, 19 -> t.value.toLong().also { requireBtf(it >= 0, "TYPE_SIZE") }
-                3 -> size(u32(t.extra), depth + 1) * u32(t.extra + 8).toLong().also {
-                    requireBtf(it >= 0, "ARRAY_SIZE")
+                3 -> {
+                    val element = size(u32(t.extra), depth + 1)
+                    val count = u32(t.extra + 8).toLong()
+                    requireBtf(count >= 0 && (count == 0L || element <= Long.MAX_VALUE / count), "ARRAY_SIZE")
+                    element * count
                 }
                 else -> throw Invalid("FIELD_TYPE")
             }
@@ -464,6 +472,49 @@ internal object UltraKernelBtf {
                 .map { signature(it.value) }.distinct()
             requireBtf(values.size <= 1, "VARIABLE_AMBIGUOUS:$wanted")
             return values.singleOrNull()
+        }
+
+        fun dataObjectSize(wanted: String, expected: String): Long {
+            requireBtf(expected.isNotEmpty() && expected.length <= 65536, "VARIABLE_SIGNATURE:$wanted")
+            val variables = types.filter { it.kind == 14 && name(it.name) == wanted }
+            if (variables.isNotEmpty()) {
+                requireBtf(variables.map { signature(it.value) }.distinct() == listOf(expected),
+                    "VARIABLE_TYPE:$wanted")
+                val sizes = variables.map { size(it.value) }.distinct()
+                requireBtf(sizes.size == 1 && sizes.single() > 0, "VARIABLE_SIZE:$wanted")
+                return sizes.single()
+            }
+            // Vendor Images may omit VAR records while retaining the complete type
+            // graph. The bound reference declaration supplies symbol/type identity;
+            // compare its full canonical shape and derive size from actual target BTF.
+            val kinds = when (expected.first()) {
+                'i' -> setOf(1)
+                '*' -> setOf(2)
+                'a' -> setOf(3)
+                's' -> setOf(4)
+                'u' -> setOf(5)
+                'e' -> setOf(6, 19)
+                else -> throw Invalid("VARIABLE_OBJECT_TYPE:$wanted")
+            }
+            val label = if (expected.first() in "su") expected.indexOf(':').let { at ->
+                requireBtf(at > 0, "VARIABLE_OBJECT_TYPE:$wanted")
+                expected.substring(1, at)
+            } else null
+            val candidates = types.indices.filter { index ->
+                val record = types[index]
+                record.kind in kinds && (label == null || name(record.name) == label)
+            }
+            val shapes = candidates.mapNotNull { index ->
+                try { index to signature(index) } catch (error: Invalid) {
+                    if (label != null) throw error
+                    null // Unrelated anonymous graphs need not fit this object's signature budget.
+                }
+            }.toMap()
+            requireBtf(label == null || label.isEmpty() || shapes.values.distinct() == listOf(expected),
+                "VARIABLE_OBJECT_AMBIGUOUS:$wanted")
+            val sizes = shapes.filterValues { it == expected }.keys.map { size(it) }.distinct()
+            requireBtf(sizes.size == 1 && sizes.single() > 0, "VARIABLE_OBJECT_MISSING:$wanted")
+            return sizes.single()
         }
 
         fun enumValue(wanted: String): Long? {

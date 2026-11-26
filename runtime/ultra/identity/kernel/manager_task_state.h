@@ -59,7 +59,8 @@ extern const unsigned int msu_task_state_compiled_layout[MSU_TASK_STATE_LAYOUT_W
 
 /* Independent kernel-private Profile tail, not management wire or Linux nnp.
  * Enabling requires the actual target's fixed KSU bit63, embedded thread_info,
- * native atomic/RCU ABI and clone/exec/tracepoint semantics to be qualified. */
+ * native atomic/RCU and tracepoint ABI. The native KMI route retains KSU's
+ * clone/exec lifecycle; the exact Image route has its separate code proof. */
 #ifndef MSU_TASK_PROFILE_FLAGS_VERIFIED
 #define MSU_TASK_PROFILE_FLAGS_VERIFIED 0
 #endif
@@ -69,10 +70,15 @@ extern const unsigned int msu_task_state_compiled_layout[MSU_TASK_STATE_LAYOUT_W
 #define MSU_TASK_PROFILE_TARGET_MAGIC 0x4d535450U
 #define MSU_TASK_PROFILE_TARGET_SCHEMA 1U
 #define MSU_TASK_PROFILE_TARGET_PROOFS 0x3fU
-/* Patched only by the existing input Image/BTF materializer after all six
- * actual target proofs pass. No family reference contains a device identity.
- * Offsets remain in the shared BTF-bound dynamic table; work_bit comes from
- * the input kernel's real syscall-entry instructions/configuration. */
+#define MSU_TASK_PROFILE_TARGET_IMAGE 1U
+#define MSU_TASK_PROFILE_TARGET_RUNTIME 2U
+#define MSU_TASK_PROFILE_RUNTIME_PROOFS 0x1fU
+/* bound=1 is the existing Image/BTF materializer's six-proof receipt, including
+ * its Image/config/proof hashes. bound=2 identifies the live-kernel producer:
+ * five live/private plus native DDK API facts, KSU clone/exec lifecycle, and zero offline
+ * hashes. It is accepted only with the producer's private publication receipt.
+ * Offsets remain in the shared dynamic table; work_bit is decoded from the
+ * actual running kernel's syscall-entry instructions, never a family constant. */
 struct msu_task_profile_target_binding {
     u32 magic, schema, bytes, bound, proof_mask, reserved;
     u32 root_bit, work_member, work_bit, compat;
@@ -81,8 +87,10 @@ struct msu_task_profile_target_binding {
 extern struct msu_task_profile_target_binding msu_task_profile_target;
 
 #define MSU_TASK_PROFILE_MARKER_MAGIC 0x4d53544dU
-/* Independent target BTF facts for native registration bookkeeping. All
- * pointer/count fields are bounds checked before allocating native probes. */
+/* Target-private task/tracepoint facts plus the selected native DDK's probe
+ * API receipt. BTF qualifies private facts, not native API objects. Legacy
+ * rwlock descriptors remain schema-compatible but are not consumed by the
+ * synchronous RCU marker. All used pointer/count fields are bounds checked. */
 struct msu_task_profile_marker_binding {
     u32 magic, schema, bytes, bound;
     u32 task_bytes, tasks_offset, tasks_bytes;
@@ -111,7 +119,7 @@ struct msu_task_profile_receipt {
  * Unknown flags return EINVAL; even flags=0 requires the native marker stage. */
 int msu_task_profile_flags_supported(u64 flags);
 
-/* Bind the actual input Image's native sys_enter object. Binding is not
+/* Bind the actual running kernel's native sys_enter object. Binding is not
  * registration or qualification; the actual lookup error is retained by open.
  * Open is called only for the installed SU generation, outside atomic paths.
  * Close first blocks admission, unregisters this exact callback/data pair and

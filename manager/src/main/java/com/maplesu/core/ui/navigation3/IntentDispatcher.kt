@@ -18,6 +18,8 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.core.net.toUri
 import androidx.core.content.IntentCompat
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.maplesu.core.Natives
 import com.maplesu.core.R
 import com.maplesu.core.data.repository.SettingsRepositoryImpl
@@ -28,12 +30,16 @@ import com.maplesu.core.ui.util.DownloadService
 import com.maplesu.core.ui.util.getFileName
 import com.maplesu.core.ui.webui.WebUIActivity
 import dev.maplesu.manager.modules.ModuleEnvironmentWatch
+import dev.maplesu.manager.modules.ModuleWebUiLauncher
+import dev.maplesu.manager.liteweb.LiteWebProxyBase
+import dev.maplesu.manager.liteweb.LiteWebToken
 
 private const val SCHEME_KSU = "ksu"
 private const val HOST_ACTION = "action"
 private const val HOST_WEBUI = "webui"
 private const val PARAM_ID = "id"
 private const val PARAM_TOKEN = "token"
+private const val PARAM_WEB_TOKEN = "webToken"
 
 /**
  * Resolved intent action to execute after validation.
@@ -77,12 +83,12 @@ private sealed interface PendingAction {
     data class ExecuteAction(val moduleId: String) : PendingAction
 
     /** Open a module's WebUI — triggered by shortcut. */
-    data class OpenWebUI(val moduleId: String) : PendingAction
+    data class OpenWebUI(val moduleId: String, val webToken: String? = null) : PendingAction
 }
 
 private sealed interface KsuDeepLink {
     data class Action(val moduleId: String) : KsuDeepLink
-    data class WebUi(val moduleId: String) : KsuDeepLink
+    data class WebUi(val moduleId: String, val webToken: String? = null) : KsuDeepLink
 }
 
 private fun buildInternalWebUiUri(moduleId: String): Uri {
@@ -129,25 +135,29 @@ private fun resolveIntent(intent: Intent): PendingAction? {
     }
 
     // Check deep links
-    return when (val deepLink = parseValidatedDeepLink(intent.data)) {
+    return when (val deepLink = parseDeepLink(intent.data)) {
         is KsuDeepLink.Action -> PendingAction.ExecuteAction(deepLink.moduleId)
-        is KsuDeepLink.WebUi -> PendingAction.OpenWebUI(deepLink.moduleId)
+        is KsuDeepLink.WebUi -> PendingAction.OpenWebUI(deepLink.moduleId, deepLink.webToken)
         null -> null
     }
 }
 
-private fun parseValidatedDeepLink(uri: Uri?): KsuDeepLink? {
+private fun parseDeepLink(uri: Uri?): KsuDeepLink? {
     if (uri?.scheme != SCHEME_KSU) return null
 
     val moduleId = uri.getQueryParameter(PARAM_ID)?.takeIf { it.isNotBlank() } ?: return null
-    val token = uri.getQueryParameter(PARAM_TOKEN)?.takeIf { it.isNotBlank() } ?: return null
-    if (token != SettingsRepositoryImpl().intentToken) return null
-
-    return when (uri.host) {
-        HOST_ACTION -> KsuDeepLink.Action(moduleId)
-        HOST_WEBUI -> KsuDeepLink.WebUi(moduleId)
-        else -> null
+    val token = uri.getQueryParameter(PARAM_TOKEN)?.takeIf { it.isNotBlank() }
+    if (token != null && token == SettingsRepositoryImpl().intentToken) {
+        return when (uri.host) {
+            HOST_ACTION -> KsuDeepLink.Action(moduleId)
+            HOST_WEBUI -> KsuDeepLink.WebUi(moduleId)
+            else -> null
+        }
     }
+    // A browser knows the existing webadmin token, never the app-private shortcut token.
+    // Only WebUI can carry this proof; compare the protected current config after readiness.
+    val webToken = uri.getQueryParameter(PARAM_WEB_TOKEN)?.takeIf(LiteWebToken::isValid) ?: return null
+    return if (uri.host == HOST_WEBUI) KsuDeepLink.WebUi(moduleId, webToken) else null
 }
 
 @SuppressLint("StringFormatInvalid")
@@ -235,8 +245,14 @@ fun IntentDispatcher(intentChannel: ReceiveChannel<Intent>) {
             }
 
             is PendingAction.OpenWebUI -> {
-                // resolveIntent() only produces this after validating ksu:// + id + token,
-                // so the origin is an explicit deep link. The request is still offered to
+                if (action.webToken != null) {
+                    val currentToken = withContext(Dispatchers.IO) {
+                        LiteWebProxyBase.current(context)?.toUri()?.pathSegments?.getOrNull(1)
+                    }
+                    if (!LiteWebToken.matches(currentToken, action.webToken)) return@CollectIntentChannel
+                }
+                // Both deep-link credentials are validated before entering the one-shot gate.
+                // The origin is an explicit deep link. The request is still offered to
                 // the one-shot gate: unknown state never navigates and a consumed request
                 // cannot be replayed by a recomposition.
                 val request = WebUiOpenRequest(
@@ -247,9 +263,21 @@ fun IntentDispatcher(intentChannel: ReceiveChannel<Intent>) {
                 if (!pendingWebUiOpen.offer(request)) return@CollectIntentChannel
                 val approved = pendingWebUiOpen.consume() ?: return@CollectIntentChannel
                 if (!WebUiOpenPolicy.mayNavigate(approved)) return@CollectIntentChannel
-                val webIntent = Intent(context, WebUIActivity::class.java)
-                    .setData(buildInternalWebUiUri(approved.moduleId.orEmpty()))
-                context.startActivity(webIntent)
+                val moduleId = approved.moduleId.orEmpty()
+                if (ModuleWebUiLauncher.isUltraModuleId(moduleId)) {
+                    val failure = ModuleWebUiLauncher.openDetailed(context, moduleId, WebUiOpenOrigin.DEEP_LINK)
+                    if (failure != null) {
+                        Toast.makeText(
+                            context,
+                            resources.getString(R.string.module_webui_open_failed, failure.describe()),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                } else {
+                    val webIntent = Intent(context, WebUIActivity::class.java)
+                        .setData(buildInternalWebUiUri(moduleId))
+                    context.startActivity(webIntent)
+                }
             }
         }
     }

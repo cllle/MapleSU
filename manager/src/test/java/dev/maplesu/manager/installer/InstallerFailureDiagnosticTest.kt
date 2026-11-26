@@ -5,6 +5,12 @@ import org.junit.Test
 import java.io.IOException
 
 class InstallerFailureDiagnosticTest {
+    @Test fun serviceCauseIsNotHiddenByAGenericRootWrapper() {
+        assertEquals("INSTALLER_SERVICE_FRAMEWORK_UNAVAILABLE", installerFailureDiagnostic(
+            IllegalStateException("INSTALLER_ROOT_REQUIRED",
+                IllegalStateException("INSTALLER_SERVICE_FRAMEWORK_UNAVAILABLE"))))
+    }
+
     @Test fun sourceReadFailureSurvivesTheGenericFlashResult() {
         assertEquals("INSTALLER_SOURCE_READ_FAILED", installerFailureDiagnostic(
             IllegalStateException("INSTALLER_SOURCE_READ_FAILED", IOException("read failed: EACCES"))))

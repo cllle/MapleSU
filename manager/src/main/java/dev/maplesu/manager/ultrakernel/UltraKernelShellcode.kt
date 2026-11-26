@@ -3212,7 +3212,11 @@ internal object UltraKernelBodies {
         a.emit(UltraKernelA64.DSB_ISHST)
         a.cbz(13, "published")
         a.mark("publish_page")
-        a.emit(UltraKernelA64.tlbiVaae1is(12))
+        // A by-VA `tlbi vaae1is, x12` is not enough for a just-reprotected page on the 6.6.89
+        // target: the first fetch after BLR still resolved through the old non-executable
+        // translation (ESR 0x8600000f, PC at the payload page start, handler PTE executable).
+        // Publish with the full inner-shareable stage-1 invalidation instead.
+        a.emit(UltraKernelA64.tlbiVmalle1is())
         a.emit(UltraKernelA64.addImm(12, 12, 1 shl (f.pageShift - 12)))
         a.emit(UltraKernelA64.addImm(13, 13, 1, setFlags = true, sub = true))
         a.bCond(UltraKernelA64.NE, "publish_page")

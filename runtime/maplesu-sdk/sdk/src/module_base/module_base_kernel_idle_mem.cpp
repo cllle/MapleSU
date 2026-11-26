@@ -73,8 +73,6 @@ constexpr const char* kEinittextSymbol = "_einittext";
 constexpr uint64_t kCfiCheckStartSkip = 8192;
 constexpr uint64_t kCfiCheckEndSkip = 65536;
 
-constexpr uint64_t kIdleRegionSize = 65536;
-
 constexpr const char* kInitMmSymbol = "init_mm";
 constexpr const char* kPteFnAbiKernelVersion = "5.3.0";
 
@@ -94,7 +92,8 @@ constexpr const char* kApplyToPageRange2ErrFmt = "apply_to_page_range2 err:%ld\n
 //   失败行为：发射器报错时原样返回错误码，且不执行 shellcode。
 static KModErr get_kernel_shellcode_u64_result(
     std::function<KModErr(asmjit::a64::Assembler*, asmjit::a64::GpX&)> emit,
-    uint64_t& result) {
+    uint64_t& result, bool* execution_attempted = nullptr) {
+    if (execution_attempted) *execution_attempted = false;
     aarch64_asm_ctx asm_ctx = init_aarch64_asm();
     asmjit::a64::Assembler* a = asm_ctx.assembler();
     kernel_module::arm64_module_asm_func_start(a);
@@ -106,7 +105,9 @@ static KModErr get_kernel_shellcode_u64_result(
     }
 
     kernel_module::arm64_module_asm_func_end(a, return_reg);
-    return kernel_module::execute_kernel_asm_func(aarch64_asm_to_bytes(a), result);
+    const auto code = aarch64_asm_to_bytes(a);
+    if (execution_attempted) *execution_attempted = true;
+    return kernel_module::execute_kernel_asm_func(code, result);
 }
 
 // pte_fn_t 回调发射器（save / restore 两枚）。
@@ -238,7 +239,7 @@ static KModErr flush_all_tlb() {
 // remap_kernel_exec_range —— 把 idle 区 [kaddr, kaddr+size) 的页表重映射到新分配
 // 的 trampoline 可执行页上，并刷新 TLB。
 //
-//     pte_snapshot_bytes = map_size >> 9;   // == 页数 * 8，pte_t 快照数组字节数
+//     pte_snapshot_bytes = (map_size / page_size) * 8;
 //                         &游标); 失败 → printf(...1...) + ERR_MODULE_IDLE_MEM_REMAP
 //                         &游标); 失败 → printf(...2...) + ERR_MODULE_IDLE_MEM_REMAP
 //
@@ -247,6 +248,12 @@ static KModErr flush_all_tlb() {
 //   避免 idle 区页表指向已回收物理页。
 static KModErr remap_kernel_exec_range(uint64_t kaddr, uint64_t size,
                                        uint64_t& out_end_addr) {
+    const uint64_t page_size = kernel_module::get_page_size();
+    if (page_size < sizeof(uint64_t) || (page_size & (page_size - 1)) ||
+        !size || size > UINT64_MAX - kaddr ||
+        kaddr + size > UINT64_MAX - (page_size - 1)) {
+        return KModErr::ERR_MODULE_PARAM;
+    }
     out_end_addr = kaddr + size;
 
     uint64_t init_mm_kaddr = 0;
@@ -255,15 +262,17 @@ static KModErr remap_kernel_exec_range(uint64_t kaddr, uint64_t size,
         return err;
     }
 
-    const uint64_t page_start_addr = kaddr & ~static_cast<uint64_t>(0xFFF);
+    const uint64_t page_start_addr = kaddr & ~(page_size - 1);
     const uint64_t page_end_addr =
-        (kaddr + size + 0xFFF) & ~static_cast<uint64_t>(0xFFF);
+        (kaddr + size + page_size - 1) & ~(page_size - 1);
     const uint64_t map_size = page_end_addr - page_start_addr;
-    if (map_size == 0) {
+    const uint64_t page_count = map_size / page_size;
+    if (map_size == 0 || map_size > UINT32_MAX ||
+        page_count > UINT32_MAX / sizeof(uint64_t)) {
         return KModErr::ERR_MODULE_PARAM;
     }
-    // map_size / 4096 页 * 8 字节/pte = map_size >> 9
-    const uint32_t pte_snapshot_bytes = static_cast<uint32_t>(map_size >> 9);
+    const uint32_t pte_snapshot_bytes =
+        static_cast<uint32_t>(page_count * sizeof(uint64_t));
 
     uint64_t trampoline_kaddr = 0;
     uint64_t pte_snapshot_kaddr = 0;
@@ -479,6 +488,141 @@ static KModErr remap_kernel_exec_range(uint64_t kaddr, uint64_t size,
     return err;
 }
 
+// Static inittext is not a VM_ALLOC area accepted by set_memory_ro/x.
+// Change only leaf permission bits; retain the existing PFN and code bytes.
+static std::vector<uint8_t> make_pte_fn_idle_exec_shellcode(uint32_t kcfi_hash) {
+    constexpr uint64_t read_only = uint64_t{1} << 7;
+    constexpr uint64_t dbm = uint64_t{1} << 51;
+    constexpr uint64_t contiguous = uint64_t{1} << 52;
+    constexpr uint64_t pxn = uint64_t{1} << 53;
+    constexpr uint64_t uxn = uint64_t{1} << 54;
+    aarch64_asm_ctx context = init_aarch64_asm();
+    auto* a = context.assembler();
+    const Label accepted = a->newLabel(), failed = a->newLabel();
+    const GpX data = kernel_module::is_kernel_version_less(kPteFnAbiKernelVersion)
+        ? x3 : x2;
+    a->embed(&kcfi_hash, sizeof(kcfi_hash));
+    aarch64_asm_bit_jc(a);
+    a->ldr(x4, ptr(x0));
+    a->and_(x5, x4, Imm(3));
+    a->cmp(x5, Imm(3));
+    a->b(CondCode::kNE, failed);
+    a->and_(x5, x4, Imm(uint64_t{1} << 6));
+    a->cbnz(x5, failed);
+    aarch64_asm_mov_x(a, x6, dbm | pxn);
+    a->bic(x5, x4, x6);
+    aarch64_asm_mov_x(a, x6, read_only | uxn);
+    a->orr(x5, x5, x6);
+    a->cmp(x4, x5);
+    a->b(CondCode::kEQ, accepted);
+    // Check mode never repairs, and live contiguous groups are never split.
+    a->ldr(x6, ptr(data));
+    a->cbnz(x6, failed);
+    aarch64_asm_mov_x(a, x6, contiguous);
+    a->and_(x6, x4, x6);
+    a->cbnz(x6, failed);
+    a->str(x5, ptr(x0));
+    a->bind(accepted);
+    a->ldr(x4, ptr(data, 8));
+    a->add(x4, x4, Imm(1));
+    a->str(x4, ptr(data, 8));
+    a->mov(x0, xzr);
+    a->ret(x30);
+    a->bind(failed);
+    aarch64_asm_mov_x(a, x0, static_cast<uint64_t>(-22));
+    a->ret(x30);
+    return aarch64_asm_to_bytes(a);
+}
+
+static KModErr protect_kernel_idle_exec_range(uint64_t address, uint64_t size) {
+    const uint64_t page_size = kernel_module::get_page_size();
+    if ((page_size != 4096 && page_size != 16384 && page_size != 65536) ||
+        !size || ((address | size) & (page_size - 1)) || size > UINT64_MAX - address)
+        return KModErr::ERR_MODULE_PARAM;
+    uint64_t init_mm = 0;
+    KModErr error = kernel_module::kallsyms_lookup_name(kInitMmSymbol, init_mm);
+    if (error != KModErr::OK) return error;
+    uint32_t hash = 0;
+    error = kernel_module::get_pte_fn_t_kcfi_hash(hash);
+    if (error != KModErr::OK) return error;
+    const auto code = make_pte_fn_idle_exec_shellcode(hash);
+    uint64_t callback = 0, state = 0;
+    struct CallbackAllocations {
+        uint64_t& callback;
+        uint64_t& state;
+        uint64_t size;
+        bool protected_page = false;
+        bool callback_pending = false;
+        ~CallbackAllocations() {
+            // Unknown completion must keep everything the callback can access.
+            if (callback_pending) return;
+            kernel_module::CleanupReceiptScope preserve_failure;
+            try {
+                if (state) (void)kernel_module::free_kernel_mem(state);
+                if (callback && (!protected_page ||
+                    kernel_module::set_kernel_mem_protection(callback, size,
+                        kernel_module::KernMemProt::KMP_RW) == KModErr::OK))
+                    (void)kernel_module::free_kernel_mem(callback);
+            } catch (...) {
+                // Keep executable storage when its cleanup receipt is uncertain.
+            }
+        }
+    } allocations{callback, state, code.size()};
+    error = kernel_module::alloc_kernel_mem(static_cast<uint32_t>(code.size()), callback);
+    if (error != KModErr::OK) return error;
+    error = kernel_module::alloc_kernel_mem(16, state);
+    if (error != KModErr::OK) return error;
+    error = kernel_module::write_kernel_mem(callback, code.data(),
+        static_cast<uint32_t>(code.size()), kernel_module::KernMemProt::KMP_RW);
+    if (error != KModErr::OK) return error;
+    allocations.protected_page = true;
+    error = kernel_module::set_kernel_mem_protection(callback, code.size(),
+        kernel_module::KernMemProt::KMP_X);
+    if (error != KModErr::OK) return error;
+    for (uint64_t check = 0; check != 2; ++check) {
+        uint64_t receipt[2] = {check, 0};
+        error = kernel_module::write_kernel_mem(state, receipt, sizeof(receipt),
+            kernel_module::KernMemProt::KMP_RW);
+        if (error != KModErr::OK) return error;
+        uint64_t result = 0;
+        error = get_kernel_shellcode_u64_result(
+            [=](Assembler* a, GpX& out) -> KModErr {
+                KModErr call_error = KModErr::ERR_MODULE_PARAM;
+                aarch64_asm_mov_x(a, x10, init_mm);
+                aarch64_asm_mov_x(a, x11, address);
+                aarch64_asm_mov_x(a, x12, size);
+                aarch64_asm_mov_x(a, x13, callback + 4);
+                aarch64_asm_mov_x(a, x14, state);
+                kernel_module::export_symbol::apply_to_page_range(
+                    a, call_error, x10, x11, x12, x13, x14);
+                if (call_error == KModErr::OK) out = x0;
+                return call_error;
+            }, result, &allocations.callback_pending);
+        // A failed public EXEC has no per-call identity available here. An old
+        // completed diagnostic receipt is not proof that this callback stopped.
+        if (error == KModErr::OK) allocations.callback_pending = false;
+        if (allocations.callback_pending) return error;
+        // A completed failing apply can have changed a prefix. Keep its first
+        // error/receipt while flushing, and never replay the failed apply.
+        if (error != KModErr::OK || result) {
+            if (!check) {
+                kernel_module::CleanupReceiptScope preserve_failure;
+                (void)flush_all_tlb();
+            }
+            return error != KModErr::OK ? error : KModErr::ERR_MODULE_IDLE_MEM_REMAP;
+        }
+        if (!check) {
+            error = flush_all_tlb();
+            if (error != KModErr::OK) return error;
+        }
+        error = kernel_module::read_kernel_mem(state, receipt, sizeof(receipt));
+        if (error != KModErr::OK) return error;
+        if (receipt[0] != check || receipt[1] != size / page_size)
+            return KModErr::ERR_MODULE_IDLE_MEM_REMAP;
+    }
+    return KModErr::OK;
+}
+
 namespace kernel_module {
 
 //       get_idle_mem_base_dir() / path("idle_mem_*.…")
@@ -678,6 +822,7 @@ KModErr acquire_kernel_idle_region(uint64_t size, uint64_t& out_addr) {
     uint64_t start_addr = 0;  // %54
     uint64_t next_addr = 0;   // %55
     uint64_t end_addr = 0;    // %56
+    bool exec_range_established = false;
 
     if (getuid() != 0) {
         const KModErr root_err = default_modules::module_root::set_current_root(true);
@@ -725,17 +870,27 @@ KModErr acquire_kernel_idle_region(uint64_t size, uint64_t& out_addr) {
         if (!start_addr || start_addr >= end_addr) return KModErr::ERR_MODULE_IDLE_MEM_UNKNOW;
         if ((start_addr | end_addr) & 3u) return KModErr::ERR_MODULE_ADDR_NOT_ALGIN4;
 
+        const uint64_t page_size = get_page_size();
+        if ((page_size != 4096 && page_size != 16384 && page_size != 65536) ||
+            start_addr > UINT64_MAX - (page_size - 1))
+            return KModErr::ERR_MODULE_IDLE_MEM_UNKNOW;
+        // Permission changes and remaps must both stay inside the selected arena.
+        start_addr = (start_addr + page_size - 1) & ~(page_size - 1);
+        end_addr &= ~(page_size - 1);
+        if (start_addr >= end_addr || size > end_addr - start_addr)
+            return KModErr::ERR_MODULE_IDLE_MEM_NOT_ENOUGH;
+        next_addr = start_addr;
+
         bool can_read = false;
         const KModErr read_err = is_kaddr_can_read(start_addr, can_read);
         if (read_err != KModErr::OK) return read_err;
         if (!can_read) {
-            if (start_addr > UINT64_MAX - kIdleRegionSize - 0xfffu)
-                return KModErr::ERR_MODULE_IDLE_MEM_UNKNOW;
             // trampoline 可执行页；失败立即返回（不写历史）。
-            err = remap_kernel_exec_range(start_addr, kIdleRegionSize, end_addr);
+            err = remap_kernel_exec_range(start_addr, end_addr - start_addr, end_addr);
             if (err != KModErr::OK) {
                 return err;
             }
+            exec_range_established = true;
         }
     }
 
@@ -745,6 +900,19 @@ KModErr acquire_kernel_idle_region(uint64_t size, uint64_t& out_addr) {
     // [next, end) is half-open: an exact final reservation is valid.
     if (size > end_addr - next_addr) {
         return KModErr::ERR_MODULE_IDLE_MEM_NOT_ENOUGH;
+    }
+    if (!exec_range_established) {
+        const uint64_t page_size = get_page_size();
+        if ((page_size != 4096 && page_size != 16384 && page_size != 65536) ||
+            next_addr + size > UINT64_MAX - (page_size - 1))
+            return KModErr::ERR_MODULE_IDLE_MEM_UNKNOW;
+        const uint64_t page_start = next_addr & ~(page_size - 1);
+        const uint64_t page_end = (next_addr + size + page_size - 1) & ~(page_size - 1);
+        if (page_start < start_addr || page_end > end_addr)
+            return KModErr::ERR_MODULE_IDLE_MEM_NOT_ENOUGH;
+        const KModErr permission_error = protect_kernel_idle_exec_range(
+            page_start, page_end - page_start);
+        if (permission_error != KModErr::OK) return permission_error;
     }
     const uint64_t chosen_addr = start_addr;       // %621
     const uint64_t new_next_addr = next_addr + size;  // %622

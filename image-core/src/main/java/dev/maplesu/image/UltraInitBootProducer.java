@@ -27,7 +27,13 @@ public final class UltraInitBootProducer {
     }
 
     public static final class Artifact {
+        /** Build identity of a reusable component, never facts observed from a target kernel. */
+        public final KmiComponent component;
+        public final boolean isKmiComponent;
+        public final String componentKmi;
+        /** Present only for an exact-target artifact. Reusable components carry no target Image. */
         public final File targetBoot;
+        /** Schema1 target identity; schema2 kernelRelease is the component build release only. */
         public final String kernelRelease, kernelSha256, credentialSha256;
         public final String targetBootSha256, handoffSha256, bridgeSha256;
         public final String ksuInitSha256;
@@ -81,6 +87,19 @@ public final class UltraInitBootProducer {
                          java.util.Map<String, String> targetInputs, int configPageSize,
                          String credentialMode, int metadataDisplacement, boolean supportsDeploymentNamespace,
                          byte[] credential, byte[] deploymentNamespace, byte[] taskProfileMetadata) {
+            this(targetBoot, targetHash, release, kernelHash, credentialHash, handoff, bridge, ksuInitSha256,
+                    targetInputs, configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace,
+                    credential, deploymentNamespace, taskProfileMetadata, null);
+        }
+
+        private Artifact(File targetBoot, String targetHash, String release, String kernelHash,
+                         String credentialHash, byte[] handoff, byte[] bridge, String ksuInitSha256,
+                         java.util.Map<String, String> targetInputs, int configPageSize,
+                         String credentialMode, int metadataDisplacement, boolean supportsDeploymentNamespace,
+                         byte[] credential, byte[] deploymentNamespace, byte[] taskProfileMetadata,
+                         KmiComponent component) {
+            this.component = component; isKmiComponent = component != null;
+            componentKmi = component == null ? "" : component.kmi;
             this.targetBoot = targetBoot; targetBootSha256 = targetHash;
             kernelRelease = release; kernelSha256 = kernelHash;
             declaredCredentialSha256 = credentialHash;
@@ -96,6 +115,13 @@ public final class UltraInitBootProducer {
             targetInputSha256 = java.util.Map.copyOf(targetInputs); this.configPageSize = configPageSize;
         }
 
+        static Artifact component(KmiComponent component, String release, byte[] handoff, byte[] bridge,
+                                  String ksuInitSha256, int displacement) {
+            return new Artifact(null, "", release, "", null, handoff, bridge, ksuInitSha256,
+                    java.util.Map.of(), component.pageSize, "module-parameter", displacement, true,
+                    null, null, null, component);
+        }
+
         /** A copy of the source module; a target resolver never mutates the retained template. */
         public byte[] bridgeBytes() { return bridge.clone(); }
 
@@ -104,7 +130,7 @@ public final class UltraInitBootProducer {
                                   byte[] module, java.util.Map<String, String> inputs,
                                   int pageBytes, int displacement, String vermagic,
                                   boolean modversions) throws IOException {
-            if (!"module-parameter".equals(credentialMode) || boot == null || module == null ||
+            if (isKmiComponent || !"module-parameter".equals(credentialMode) || boot == null || module == null ||
                     inputs == null || !bootHash.matches("[0-9a-f]{64}") ||
                     !kernelHash.matches("[0-9a-f]{64}")) throw error("TARGET_BINDING");
             Artifact result = new Artifact(boot, bootHash, release, kernelHash,
@@ -121,6 +147,7 @@ public final class UltraInitBootProducer {
         }
 
         public Artifact withTaskProfileMetadata(byte[] metadata) throws IOException {
+            if (isKmiComponent) throw error("RUNTIME_TASK_PROFILE_REQUIRED");
             if (metadata == null || metadata.length == 0 || metadata.length > 1048576)
                 throw error("TASK_PROFILE_METADATA_SIZE");
             return new Artifact(targetBoot, targetBootSha256, kernelRelease, kernelSha256,
@@ -140,7 +167,7 @@ public final class UltraInitBootProducer {
                     throw error("CREDENTIAL_HASH");
                 return new Artifact(targetBoot, targetBootSha256, kernelRelease, kernelSha256,
                         declaredCredentialSha256, handoff, bridge, ksuInitSha256, targetInputSha256,
-                        configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, copy, deploymentNamespace, taskProfileMetadata);
+                        configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, copy, deploymentNamespace, taskProfileMetadata, component);
             } finally { Arrays.fill(copy, (byte) 0); }
         }
 
@@ -152,19 +179,35 @@ public final class UltraInitBootProducer {
             deploymentNamespaceShape(copy);
             return new Artifact(targetBoot, targetBootSha256, kernelRelease, kernelSha256,
                     declaredCredentialSha256, handoff, bridge, ksuInitSha256, targetInputSha256,
-                    configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, credential, copy, taskProfileMetadata);
+                    configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, credential, copy, taskProfileMetadata, component);
+        }
+    }
+
+    public static final class KmiComponent {
+        public final String kmi, architecture, cfiMode, runtimeFactsAbi, sourceGenerationSha256;
+        public final int pageSize;
+
+        KmiComponent(String kmi, String architecture, int pageSize, String cfiMode,
+                     String runtimeFactsAbi, String sourceGenerationSha256) {
+            this.kmi = kmi; this.architecture = architecture; this.pageSize = pageSize;
+            this.cfiMode = cfiMode; this.runtimeFactsAbi = runtimeFactsAbi;
+            this.sourceGenerationSha256 = sourceGenerationSha256;
         }
     }
 
     public static final class Report {
         public final String imageSha256, sourceSha256;
         public final int changedBytes;
+        public final long recoveryRecordBytes, originalRamdiskBytes, installedRamdiskBytes;
         public final BootImageRebuilder.Report container;
         public final boolean flashableCandidate = false, kernelServiceVerified = false, structuralOnly = true;
 
-        private Report(String sourceHash, BootImageRebuilder.Report container, int changedBytes) {
+        private Report(String sourceHash, BootImageRebuilder.Report container, int changedBytes,
+                       long recoveryRecordBytes, long originalRamdiskBytes, long installedRamdiskBytes) {
             sourceSha256 = sourceHash; imageSha256 = container.image.sha256;
             this.container = container; this.changedBytes = changedBytes;
+            this.recoveryRecordBytes = recoveryRecordBytes; this.originalRamdiskBytes = originalRamdiskBytes;
+            this.installedRamdiskBytes = installedRamdiskBytes;
         }
     }
 
@@ -172,7 +215,7 @@ public final class UltraInitBootProducer {
         return UltraInitBootArtifact.read(manifest);
     }
 
-    /** Uses the real paired boot only as a read-only kernel input, never as an output. */
+    /** KMI components have no target image; exact-target artifacts retain their read-only input. */
     public static Report produce(File source, File output, Artifact artifact) throws IOException {
         return produce(source, output, artifact, null);
     }
@@ -182,7 +225,7 @@ public final class UltraInitBootProducer {
         if ("module-parameter".equals(artifact.credentialMode) && artifact.credential == null) throw error("CREDENTIAL_REQUIRED");
         if (artifact.supportsDeploymentNamespace && artifact.deploymentNamespace == null) throw error("DEPLOYMENT_NAMESPACE_REQUIRED");
         BootImageInspector.Report before = requireInitBoot(source);
-        UltraInitBootArtifact.verifyTarget(artifact);
+        UltraInitBootArtifact.verifyArtifact(artifact);
         Path work = Files.createTempDirectory(output.toPath().toAbsolutePath().getParent(), ".maplesu-init-");
         Publication publication = new Publication(output, checkpoint);
         Throwable failure = null;
@@ -225,13 +268,13 @@ public final class UltraInitBootProducer {
             restoreOwned(candidate, recovered, check);
             if (!BootImageInspector.inspect(recovered).sha256.equals(layout.sha256)) throw error("RECOVERY_READBACK");
             unchanged(source, before.sha256);
-            UltraInitBootArtifact.verifyTarget(artifact);
+            UltraInitBootArtifact.verifyArtifact(artifact);
             long changed = BootImageEquivalence.diff(source, candidate).changedBytes;
             publication.publish(candidate, rebuilt.image.sha256);
             if (checkpoint != null) checkpoint.afterPublish(work);
             unchanged(source, before.sha256);
-            unchanged(artifact.targetBoot, artifact.targetBootSha256);
-            return new Report(before.sha256, rebuilt, Math.toIntExact(changed));
+            if (!artifact.isKmiComponent) unchanged(artifact.targetBoot, artifact.targetBootSha256);
+            return new Report(before.sha256, rebuilt, Math.toIntExact(changed), record.length(), original.length, encoded.length);
         } catch (IOException | RuntimeException | Error exception) {
             failure = exception; throw exception;
         } finally { finish(work, publication, failure); }

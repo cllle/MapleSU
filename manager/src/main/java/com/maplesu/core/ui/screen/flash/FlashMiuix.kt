@@ -191,6 +191,26 @@ private fun DirectInstallActions(
 private fun FlashResultActions(state: FlashUiState, actions: FlashScreenActions) {
     if (state.flashingStatus == FlashingStatus.FLASHING) return
     if (state.directInstall && state.flashingStatus == FlashingStatus.SUCCESS) return
+    state.recoveryMessage?.let {
+        Text(it, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+    }
+    if (state.canQuery) {
+        TextButton(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            text = stringResource(if (state.querying) R.string.installer_recovery_querying else R.string.installer_recovery_query),
+            enabled = !state.querying,
+            colors = ButtonDefaults.textButtonColors(),
+            onClick = actions.onQueryOriginalTask,
+        )
+    }
+    if (state.canReturnToPreparation && state.flashingStatus == FlashingStatus.FAILED) {
+        TextButton(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            text = stringResource(R.string.installer_recovery_return),
+            colors = ButtonDefaults.textButtonColors(),
+            onClick = actions.onReturnToPreparation,
+        )
+    }
     if (state.canRestore) {
         TextButton(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),

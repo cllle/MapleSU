@@ -235,13 +235,13 @@ def main():
                "runtime/ultra/bridge/manager_identity_claim.h",
                "runtime/tests/pro_manager_apk_identity_test.c",
                "runtime/tests/pro_manager_claim_client_test.cpp",
-               "scripts/test-ultra-manager-apk-identity.py"]
+               "scripts/tests/test-ultra-manager-apk-identity.py"]
     source_hashes = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sources}
     script = r'''set -eu
 C=/opt/ddk/clang/clang-r510928
 P=/repo/runtime/ultra/identity/kernel/manager_apk_identity.c
 $C/bin/clang -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared "$P" -o /case/parser.so
-python3 /repo/scripts/test-ultra-manager-apk-identity.py --inside --build /case
+python3 /repo/scripts/tests/test-ultra-manager-apk-identity.py --inside --build /case
 $C/bin/clang -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fsanitize=address,undefined "$P" /repo/runtime/tests/pro_manager_apk_identity_test.c -o /case/parser-sanitized.test
 /case/parser-sanitized.test /case/fixture.cert /case/manifest.txt /case/corpus
 $C/bin/clang++ -std=c++20 -O1 -g -stdlib=libc++ -Wall -Wextra -Werror -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize=vptr -Wl,-rpath,$C/lib/x86_64-unknown-linux-gnu /repo/runtime/tests/pro_manager_claim_client_test.cpp -o /case/claim-client.test

@@ -12,6 +12,9 @@ int msu_manager_resident_init(const struct msu_resident_config *config);
 int msu_manager_resident_discard(void);
 /* Kernel-only immutable path fact; no install/Ready authority or user transport. */
 int msu_manager_resident_deployment(struct msu_deployment_namespace_record *output);
+/* Root-only readback of actually signed current Manager bindings. A missing
+ * binding is the KSU invalid appId; it does not enroll or start the Manager. */
+int msu_manager_resident_ksu_appid(u32 *appid);
 /* Private helper-session metadata copy. Its epoch/principal come only from the
  * authenticated current task session, never a caller-supplied vendor snapshot. */
 int msu_manager_resident_helper_metadata(u32 principal_uid, u32 epoch,

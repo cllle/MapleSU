@@ -19,7 +19,7 @@ struct InstalledHelperReadbackResult {
     ManagerOwnerRootCommand deployment;
     bool namespace_requested = false, namespace_resolved = false;
     char helper_path[28]{};
-    bool root_committed = false, root_verified = false;
+    bool root_committed = false, root_verified = false, credentials_managed = false;
     uint32_t ruid = UINT32_MAX, euid = UINT32_MAX;
     bool uid_observed = false;
     int32_t uid_error = 0, root_system_error = 0;
@@ -45,7 +45,10 @@ struct InstalledHelperReadbackResult {
     bool child_status_valid = false;
     int32_t admission_error = 0, cleanup_error = 0;
     bool cleanup_pending = false, cleanup_scheduled = false;
+    uint64_t completion_us = 0;
     uint64_t elapsed_us = 0;
+    uint64_t admission_us = 0, fork_us = 0, authentication_us = 0;
+    uint64_t source_us = 0, receive_us = 0, wait_us = 0;
     bool complete = false;
 };
 
@@ -59,10 +62,13 @@ using InstalledHelperChunkConsumer = bool (*)(void*, const uint8_t*, size_t);
 // Only /data/[A-Za-z0-9]{16}/init is accepted. A null path is Owner-only
 // and resolves the retained image namespace in this worker's authenticated session.
 // offset <= 0 hashes unchanged bytes.
+// timeout_ms is the single worker/transport/wait deadline (1..5000, page default 300).
+// Existing SDK publication-lock admission can wait longer; an expired admission
+// is rejected before fork, and no stale worker is submitted.
 __attribute__((visibility("hidden")))
 InstalledHelperReadbackResult read_installed_helper(const char* root_key_or_null,
     const char* helper_path, int64_t slot_offset,
-    InstalledHelperChunkConsumer consume, void* context);
+    InstalledHelperChunkConsumer consume, void* context, uint32_t timeout_ms = 300);
 
 // Read-only classification of the existing completion facts. This never changes
 // the deadline, worker lifetime, failure errno or the authoritative complete bit.
@@ -73,9 +79,9 @@ __attribute__((visibility("hidden"))) inline const char* installed_helper_readba
     if (out.system_error && !out.child_pid) return "worker-setup";
     if (out.watchdog_error || (out.root_checkpoint_received && out.child_pid && !out.watchdog_armed)) return "watchdog";
     if (out.mode_error) return "auth-mode";
-    if (out.channel_error) return "owner-channel";
+    if (out.channel_error) return out.owner_mode ? "owner-channel" : "credential-channel";
     if (out.deployment.error || (out.namespace_requested && !out.namespace_resolved)) return "deployment-namespace";
-    if (out.sdk_error || out.root.error) return "root-transition";
+    if (out.root.error) return "root-transition";
     if (out.child_exception) return "child-exception";
     if (!out.root_checkpoint_received) return "root-checkpoint";
     if (!out.root_verified) return "root-proof";
@@ -86,7 +92,8 @@ __attribute__((visibility("hidden"))) inline const char* installed_helper_readba
         return out.metadata_stable ? "source-path-recheck" : "source-metadata-recheck";
     }
     if (out.transport_error || out.child_io_error) return "frame-transport";
-    if (out.owner_mode && (out.close.error || !out.close.completed || !out.close.reply_observed)) return "session-close";
+    if (out.credentials_managed && (out.close.error || !out.close.completed || !out.close.reply_observed)) return "session-close";
+    if (out.sdk_error) return "root-transition";
     if (out.wait_error || !out.child_status_valid) return "child-wait";
     if (out.timed_out) return "deadline";
     if (out.cleanup_pending || out.cleanup_scheduled || out.cleanup_error ||

@@ -20,6 +20,7 @@ object ParasitePaths {
     const val DATA_DIR = "/data/adb/maplesu"
     const val RECOVERY = "$DATA_DIR/recovery"
     const val HOST_BACKUP_ROOT = "$RECOVERY/host"
+    const val CLEANUP_CHECKPOINT = "$RECOVERY/parasite-cleanup"
     const val APK = "$RECOVERY/manager.apk"
     const val WEBUI_CONFIG = "$RECOVERY/webui.conf"
     const val START_SCRIPT = "$RECOVERY/parasite-start.sh"
@@ -76,6 +77,7 @@ object ParasitePaths {
 
 /** 后端结构化失败码（沿用既有 wire 语义；新增码只加在后面，不改旧码）。 */
 object ParasiteCodes {
+    const val BUSY = "PARASITE_BUSY"
     const val HOST_UNSUPPORTED = "HOST_UNSUPPORTED"
     const val HOST_SCAN_FAILED = "HOST_SCAN_FAILED"
     const val HOST_BACKUP_STALE = "HOST_BACKUP_STALE"
@@ -95,6 +97,9 @@ object ParasiteCodes {
     const val VERIFY_FAILED = "LITE_HIDDEN_VERIFY_FAILED"
     const val HOST_START_UNVERIFIED = "HOST_START_UNVERIFIED"
     const val ROLLBACK_INCOMPLETE = "ACTIVATION_ROLLBACK_INCOMPLETE"
+    const val HOST_BACKUP_CLEANUP_FAILED = "HOST_BACKUP_CLEANUP_FAILED"
+    const val IDENTITY_CLEANUP_FAILED = "RECOVERY_IDENTITY_CLEANUP_FAILED"
+    const val CLEANUP_CHECKPOINT_FAILED = "RECOVERY_CLEANUP_CHECKPOINT_FAILED"
 }
 
 /** 脚本输出标记（后端只认这些标记，不从人类文案里猜成功）。 */
@@ -110,6 +115,11 @@ object ParasiteMarkers {
     const val RESTORED = "PARASITE_RESTORED "
     const val RESTORE_SKIP = "PARASITE_RESTORE_SKIP "
     const val RESTORE_OK = "PARASITE_RESTORE_OK"
+    const val BACKUP_GONE = "PARASITE_BACKUP_GONE"
+    const val BACKUP_RETIRED = "PARASITE_BACKUP_RETIRED"
+    const val CLEANUP_NONE = "PARASITE_CLEANUP_NONE"
+    const val CLEANUP_READY = "PARASITE_CLEANUP_READY"
+    const val CLEANUP_GONE = "PARASITE_CLEANUP_GONE"
     const val VERIFY = "PARASITE_VERIFY "
     const val VERIFY_OK = "PARASITE_VERIFY_OK"
     const val HOST_STARTED = "PARASITE_HOST_STARTED"
@@ -389,6 +399,9 @@ object ParasiteScripts {
         return buildString {
             appendLine("set -u")
             appendLine("D=$dir")
+            // Identity is shared: no host may activate while a previous cleanup owns it.
+            val cleanup = quote(ParasitePaths.CLEANUP_CHECKPOINT)
+            appendLine("if [ -e $cleanup ] || [ -L $cleanup ]; then echo PARASITE_STALE_BACKUP; exit 0; fi")
             appendLine("if [ -f $manifest ] || [ -f $marker ]; then echo PARASITE_STALE_BACKUP; exit 0; fi")
             appendLine("rm -rf \"\$D\" 2>/dev/null")
             appendLine("echo PARASITE_CLEAN")
@@ -408,6 +421,11 @@ object ParasiteScripts {
             appendLine("set -u")
             appendLine("D=${quote(dir)}")
             appendLine("L=${quote(lib)}")
+            // The first KSU backup can precede recovery setup by staging/daemon startup.
+            appendLine("R=${quote(ParasitePaths.RECOVERY)}")
+            appendLine("if [ ! -e \"\$R\" ] && [ ! -L \"\$R\" ]; then mkdir -p \"\$R\" || { echo ${ParasiteMarkers.FAIL} code=BACKUP_RECOVERY_MKDIR; exit 20; }; fi")
+            appendLine("[ -d \"\$R\" ] && [ ! -L \"\$R\" ] && [ \"\$(stat -c '%u' \"\$R\" 2>/dev/null)\" = 0 ] || { echo ${ParasiteMarkers.FAIL} code=BACKUP_RECOVERY_UNTRUSTED; exit 20; }")
+            appendLine("chmod 700 \"\$R\" && [ ! -L \"\$R\" ] && [ \"\$(stat -c '%a %u' \"\$R\" 2>/dev/null)\" = '700 0' ] || { echo ${ParasiteMarkers.FAIL} code=BACKUP_RECOVERY_UNTRUSTED; exit 20; }")
             appendLine("mkdir -p \"\$D\" || { echo ${ParasiteMarkers.FAIL} code=BACKUP_MKDIR; exit 20; }")
             appendLine("chmod 700 \"\$D\" 2>/dev/null")
             appendLine("printf '%s' \"\$L\" > \"\$D/${ParasitePaths.LIBDIR_FILE}\" || { echo ${ParasiteMarkers.FAIL} code=BACKUP_LIBDIR; exit 21; }")
@@ -480,7 +498,10 @@ object ParasiteScripts {
      * 回滚/解除：按备份目录里的 `*.orig` 逐个复原（**不依赖清单**，清单缺失也能复原），
      * 每个文件恢复后立即 sha 复核；最后删掉 loader。
      */
-    fun restore(packageName: String, libraryDir: String, label: String): String {
+    fun restore(packageName: String, libraryDir: String, label: String): String =
+        restore(packageName, libraryDir, label, emptyMap())
+
+    fun restore(packageName: String, libraryDir: String, label: String, expectedOriginals: Map<String, String>): String {
         val dir = ParasitePaths.hostBackupDir(packageName)
         return buildString {
             appendLine("set -u")
@@ -490,6 +511,7 @@ object ParasiteScripts {
             appendLine("[ -d \"\$D\" ] || { echo ${ParasiteMarkers.FAIL} code=RESTORE_NO_BACKUP; exit 40; }")
             // 没有完成标记/清单 = 半截备份：绝不能拿它写回宿主（会把旧库塞进没改过的文件）。
             appendLine("[ -f \"\$D/${ParasitePaths.BACKUP_MARKER_NAME}\" ] || [ -f \"\$D/${ParasitePaths.MANIFEST_NAME}\" ] || { echo ${ParasiteMarkers.FAIL} code=RESTORE_INCOMPLETE_BACKUP; exit 47; }")
+            if (expectedOriginals.isNotEmpty()) append(expectedOriginalsCheck(expectedOriginals, "D"))
             appendLine("RESTORED=0")
             appendLine("for S in \"\$D\"/*.orig; do")
             appendLine("  [ -f \"\$S\" ] || continue")
@@ -510,9 +532,76 @@ object ParasiteScripts {
             appendLine("  echo \"${ParasiteMarkers.RESTORED}name=\$F sha=\$AFTER\"")
             appendLine("  RESTORED=\$((RESTORED+1))")
             appendLine("done")
-            appendLine("rm -f \"\$L/${ParasitePaths.LOADER_NAME}\" \"\$L\"/*.maplesu.new")
+            appendLine("rm -f \"\$L/${ParasitePaths.LOADER_NAME}\" \"\$L\"/*.maplesu.new || { echo ${ParasiteMarkers.FAIL} code=RESTORE_CLEANUP; exit 48; }")
+            appendLine("for T in \"\$L/${ParasitePaths.LOADER_NAME}\" \"\$L\"/*.maplesu.new; do")
+            appendLine("  [ ! -e \"\$T\" ] && [ ! -L \"\$T\" ] || { echo ${ParasiteMarkers.FAIL} code=RESTORE_CLEANUP; exit 48; }")
+            appendLine("done")
             appendLine("echo \"${ParasiteMarkers.RESTORE_OK} count=\$RESTORED\"")
         }
+    }
+
+    /** Bind rollback restoration/retirement to the complete pre-injection backup set. */
+    private fun expectedOriginalsCheck(expected: Map<String, String>, directoryVariable: String): String = buildString {
+        require(expected.isNotEmpty() && expected.all { (name, sha) ->
+            ParasitePolicy.isSafeLibName(name) && Regex("[0-9a-f]{64}").matches(sha)
+        })
+        expected.toSortedMap().forEach { (name, sha) ->
+            val file = "\"\$$directoryVariable/$name.orig\""
+            appendLine("[ -f $file ] && [ ! -L $file ] && [ \"\$(${hashLine(file)})\" = ${quote(sha)} ] || { echo ${ParasiteMarkers.FAIL} code=RESTORE_EXPECTED_SHA; exit 49; }")
+        }
+        appendLine("ORIG_COUNT=0")
+        appendLine("for S in \"\$$directoryVariable\"/*.orig; do [ ! -e \"\$S\" ] && [ ! -L \"\$S\" ] || ORIG_COUNT=\$((ORIG_COUNT+1)); done")
+        appendLine("[ \"\$ORIG_COUNT\" = '${expected.size}' ] || { echo ${ParasiteMarkers.FAIL} code=RESTORE_EXPECTED_COUNT; exit 49; }")
+    }
+
+    fun retireRestoredBackup(packageName: String, expected: Map<String, String>, nonce: String): String =
+        retiredBackupScript(packageName, expected, nonce, move = true)
+
+    /** A lost move acknowledgement is checked without issuing another mutation. */
+    fun verifyRetiredBackup(packageName: String, expected: Map<String, String>, nonce: String): String =
+        retiredBackupScript(packageName, expected, nonce, move = false)
+
+    private fun retiredBackupScript(packageName: String, expected: Map<String, String>, nonce: String, move: Boolean): String = buildString {
+        require(HiddenHostPolicy.isValidPackage(packageName) && Regex("[a-f0-9]{32}").matches(nonce))
+        val quarantine = ParasitePaths.quarantineDir("rollback-$nonce")
+        appendLine(if (move) "# PARASITE_BACKUP_RETIRE" else "# PARASITE_BACKUP_RETIRE_VERIFY")
+        appendLine("set -u; LC_ALL=C; export LC_ALL")
+        appendLine("D=${quote(ParasitePaths.hostBackupDir(packageName))}; Q=${quote(quarantine)}; T=\"\$Q/$packageName\"; I=\"\$Q/inventory\"")
+        appendLine(trustedCleanupDirectory())
+        // The backup is flat. Reject links, directories and ambiguous names instead of
+        // inventing a lossy manifest; every data/metadata file is hashed and counted.
+        appendLine("inventory() {")
+        appendLine("  B=\"\$1\"; COUNT=0")
+        appendLine("  [ -d \"\$B\" ] && [ ! -L \"\$B\" ] || return 1")
+        appendLine("  for F in \"\$B\"/* \"\$B\"/.[!.]* \"\$B\"/..?*; do")
+        appendLine("    [ -e \"\$F\" ] || [ -L \"\$F\" ] || continue")
+        appendLine("    N=\${F##*/}; case \"\$N\" in ''|*[!A-Za-z0-9._-]*) return 1;; esac")
+        appendLine("    [ -f \"\$F\" ] && [ ! -L \"\$F\" ] || return 1")
+        appendLine("    H=\$(${hashLine("\"\$F\"")}); [ \"\${#H}\" = 64 ] || return 1")
+        appendLine("    M=\$(stat -c '%s %a %u %g' \"\$F\") || return 1")
+        appendLine("    printf '%s|%s|%s\\n' \"\$N\" \"\$H\" \"\$M\"; COUNT=\$((COUNT+1))")
+        appendLine("  done")
+        appendLine("  [ \"\$COUNT\" -gt 0 ] || return 1")
+        appendLine("  echo \"count=\$COUNT\"")
+        appendLine("}")
+        if (move) {
+            appendLine("B=\"\$D\"")
+            append(expectedOriginalsCheck(expected, "B"))
+            appendLine("BEFORE=\$(inventory \"\$D\") || exit 71")
+            appendLine("mkdir \"\$Q\" && chmod 700 \"\$Q\" || exit 71")
+            appendLine("[ ! -L \"\$Q\" ] && [ \"\$(stat -c '%a %u' \"\$Q\")\" = '700 0' ] || exit 71")
+            appendLine("[ \"\$(stat -c '%d' \"\$D\")\" = \"\$(stat -c '%d' \"\$Q\")\" ] || exit 71")
+            appendLine("umask 077; printf '%s' \"\$BEFORE\" > \"\$I\" && chmod 600 \"\$I\" || exit 71")
+            appendLine("[ ! -e \"\$T\" ] && [ ! -L \"\$T\" ] || exit 71")
+            appendLine("mv \"\$D\" \"\$T\" || exit 71")
+        }
+        appendLine("[ -d \"\$Q\" ] && [ ! -L \"\$Q\" ] && [ \"\$(stat -c '%a %u' \"\$Q\")\" = '700 0' ] || exit 71")
+        appendLine("[ -f \"\$I\" ] && [ ! -L \"\$I\" ] && [ \"\$(stat -c '%a %u' \"\$I\")\" = '600 0' ] || exit 71")
+        appendLine("[ ! -e \"\$D\" ] && [ ! -L \"\$D\" ] || exit 71")
+        appendLine("B=\"\$T\"")
+        append(expectedOriginalsCheck(expected, "B"))
+        appendLine("SAVED=\$(cat \"\$I\") && AFTER=\$(inventory \"\$T\") && [ \"\$SAVED\" = \"\$AFTER\" ] || exit 71")
+        appendLine("echo ${ParasiteMarkers.BACKUP_RETIRED}")
     }
 
     /** 最终复核：宿主 lib 当前 sha 必须等于清单里的 patched sha，loader 必须在且 sha 匹配。 */
@@ -853,6 +942,72 @@ object ParasiteScripts {
         }
     }
 
-    fun removeBackup(packageName: String): String =
-        "rm -rf " + quote(ParasitePaths.hostBackupDir(packageName)) + " && echo LITE_OK"
+    fun removeBackup(packageName: String): String = buildString {
+        val dir = quote(ParasitePaths.hostBackupDir(packageName))
+        appendLine("rm -rf $dir 2>/dev/null || { echo ${ParasiteMarkers.FAIL} code=BACKUP_DELETE_FAILED; exit 87; }")
+        appendLine("[ ! -e $dir ] && [ ! -L $dir ] || { echo ${ParasiteMarkers.FAIL} code=BACKUP_DELETE_FAILED; exit 87; }")
+        appendLine("echo ${ParasiteMarkers.BACKUP_GONE}")
+    }
+
+    /** Written only after restore, revoke and stop have each been verified. */
+    fun cleanupReceipt(packageName: String, mode: String, restored: Boolean): String {
+        require(HiddenHostPolicy.isValidPackage(packageName) && mode in setOf("LITE", "KSU"))
+        return "MAPLESU_CLEANUP_V1 mode=$mode host=$packageName restored=${if (restored) 1 else 0}"
+    }
+
+    private fun trustedCleanupDirectory(): String {
+        val dir = quote(ParasitePaths.RECOVERY)
+        return "[ -d $dir ] && [ ! -L $dir ] && [ \"\$(stat -c '%a %u' $dir 2>/dev/null)\" = '700 0' ] || exit 88"
+    }
+
+    fun readCleanupCheckpoint(): String = buildString {
+        appendLine("# PARASITE_CLEANUP_READ")
+        val dir = quote(ParasitePaths.RECOVERY)
+        appendLine("if [ -e $dir ] || [ -L $dir ]; then")
+        appendLine(trustedCleanupDirectory())
+        appendLine("fi")
+        appendLine("F=${quote(ParasitePaths.CLEANUP_CHECKPOINT)}")
+        appendLine("if [ ! -e \"\$F\" ] && [ ! -L \"\$F\" ]; then echo ${ParasiteMarkers.CLEANUP_NONE}; exit 0; fi")
+        appendLine("[ -f \"\$F\" ] && [ ! -L \"\$F\" ] && [ \"\$(stat -c '%a %u' \"\$F\" 2>/dev/null)\" = '600 0' ] || { echo ${ParasiteMarkers.FAIL} code=CLEANUP_UNTRUSTED; exit 88; }")
+        appendLine("cat \"\$F\" || exit 88")
+    }
+
+    fun beginCleanup(packageName: String, mode: String, restored: Boolean): String = buildString {
+        val receipt = quote(cleanupReceipt(packageName, mode, restored))
+        appendLine("# PARASITE_CLEANUP_BEGIN")
+        appendLine("F=${quote(ParasitePaths.CLEANUP_CHECKPOINT)}; T=\"\$F.tmp\"")
+        appendLine("[ ! -e \"\$F\" ] && [ ! -L \"\$F\" ] && [ ! -L \"\$T\" ] || exit 88")
+        val dir = quote(ParasitePaths.RECOVERY)
+        appendLine("mkdir -p $dir || exit 88")
+        appendLine("[ ! -L $dir ] && [ \"\$(stat -c '%u' $dir 2>/dev/null)\" = '0' ] || exit 88")
+        appendLine("chmod 700 $dir || exit 88")
+        appendLine(trustedCleanupDirectory())
+        appendLine("umask 077")
+        appendLine("printf %s $receipt > \"\$T\" && chmod 600 \"\$T\" && chown 0:0 \"\$T\" || exit 88")
+        appendLine("mv -f \"\$T\" \"\$F\" || exit 88")
+        appendLine("[ \"\$(stat -c '%a %u' \"\$F\" 2>/dev/null)\" = '600 0' ] && [ \"\$(cat \"\$F\")\" = $receipt ] || exit 88")
+        appendLine("echo ${ParasiteMarkers.CLEANUP_READY}")
+    }
+
+    fun removeCleanupIdentity(): String = buildString {
+        appendLine(RecoveryIdentityScripts.remove())
+        listOf(ParasitePaths.IDENTITY_FILE, ParasitePaths.IDENTITY_TEMP).forEach { path ->
+            val file = quote(path)
+            appendLine("[ ! -e $file ] && [ ! -L $file ] || { echo ${ParasiteMarkers.FAIL} code=IDENTITY_DELETE_FAILED; exit 86; }")
+        }
+    }
+
+    fun finishCleanup(packageName: String, mode: String, restored: Boolean): String = buildString {
+        appendLine("# PARASITE_CLEANUP_FINISH")
+        appendLine(trustedCleanupDirectory())
+        appendLine("F=${quote(ParasitePaths.CLEANUP_CHECKPOINT)}")
+        appendLine("[ -f \"\$F\" ] && [ ! -L \"\$F\" ] && [ \"\$(stat -c '%a %u' \"\$F\" 2>/dev/null)\" = '600 0' ] && [ \"\$(cat \"\$F\")\" = ${quote(cleanupReceipt(packageName, mode, restored))} ] || exit 88")
+        listOf(ParasitePaths.hostBackupDir(packageName), ParasitePaths.IDENTITY_FILE, ParasitePaths.IDENTITY_TEMP).forEach { path ->
+            val file = quote(path)
+            appendLine("[ ! -e $file ] && [ ! -L $file ] || exit 88")
+        }
+        appendLine("rm -f \"\$F\" || exit 88")
+        appendLine("[ ! -e \"\$F\" ] && [ ! -L \"\$F\" ] || exit 88")
+        appendLine("echo ${ParasiteMarkers.CLEANUP_GONE}")
+    }
 }

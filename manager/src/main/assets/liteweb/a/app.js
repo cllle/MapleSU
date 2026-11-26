@@ -1672,7 +1672,9 @@ function openModuleWeb(m) {
   // 完整的模块网页需要 KernelSU 的 JS 桥（spawn/包列表等），浏览器里是精简版
   var appLink = el("a", "btn small");
   appLink.textContent = "在管理器里打开";
-  appLink.href = "ksu://webui/" + encodeURIComponent(m.id);
+  appLink.href = "intent://webui?id=" + encodeURIComponent(m.id) +
+    "&webToken=" + encodeURIComponent(P.split("/").filter(Boolean)[1] || "") +
+    "#Intent;scheme=ksu;package=dev.maplesu.manager;end";
   bar.appendChild(appLink);
   box.appendChild(bar);
   var frame = el("iframe", "webui-frame");

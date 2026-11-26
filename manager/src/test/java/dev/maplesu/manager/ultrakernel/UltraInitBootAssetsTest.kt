@@ -111,6 +111,67 @@ class UltraInitBootAssetsTest {
         assertTrue(files.listFiles().orEmpty().isEmpty())
     }
 
+    @Test fun abiEvidenceIsCopiedBoundAndReusedWithTheGeneration() {
+        val files = temporary.newFolder()
+        val evidence = "{\"method\":\"same-kmi-module-loader\"}\n".toByteArray()
+        val bundled = bundle(evidence = evidence)
+        val first = UltraInitBootAssets.load(files, opener(bundled))!!
+        assertEquals(UltraKernelSpec.sha256(evidence), first.targetInputSha256["abiEvidence"])
+        assertArrayEquals(evidence, File(first.targetBoot.parentFile, "abi-evidence.json").readBytes())
+        val second = UltraInitBootAssets.load(files, { path ->
+            assertEquals("ultra-init-bridge/manifest.json", path)
+            ByteArrayInputStream(bundled.getValue("manifest.json"))
+        })!!
+        assertEquals(first.targetBoot, second.targetBoot)
+        assertEquals(first.targetInputSha256, second.targetInputSha256)
+        assertNoTemporaryFiles(files)
+    }
+
+    @Test fun missingAbiEvidenceKeepsHeldArtifactAndSelection() {
+        val files = temporary.newFolder()
+        val first = UltraInitBootAssets.load(files, opener(bundle()))!!
+        val held = first.targetBoot.readBytes()
+        val selection = File(files, "ultra-init-bridge.current").readBytes()
+        val next = bundle(1, "{}\n".toByteArray()).toMutableMap().apply { remove("abi-evidence.json") }
+        val failure = runCatching { UltraInitBootAssets.load(files, opener(next)) }.exceptionOrNull()
+        assertTrue(failure is FileNotFoundException)
+        assertEquals("ultra-init-bridge/abi-evidence.json", failure?.message)
+        assertArrayEquals(selection, File(files, "ultra-init-bridge.current").readBytes())
+        assertArrayEquals(held, first.targetBoot.readBytes())
+        assertEquals(first.targetBoot, UltraInitBootAssets.load(files, { throw FileNotFoundException(it) })!!.targetBoot)
+        assertNoTemporaryFiles(files)
+    }
+
+    @Test fun changedAbiEvidenceKeepsHeldArtifactAndSelection() {
+        val files = temporary.newFolder()
+        val first = UltraInitBootAssets.load(files, opener(bundle()))!!
+        val held = first.targetBoot.readBytes()
+        val selection = File(files, "ultra-init-bridge.current").readBytes()
+        val next = bundle(2, "{}\n".toByteArray()).toMutableMap().apply {
+            put("abi-evidence.json", "{\"changed\":true}\n".toByteArray())
+        }
+        val failure = runCatching { UltraInitBootAssets.load(files, opener(next)) }.exceptionOrNull()
+        assertEquals("ULTRA_INIT_ARTIFACT_HASH:abiEvidence", failure?.message)
+        assertArrayEquals(selection, File(files, "ultra-init-bridge.current").readBytes())
+        assertArrayEquals(held, first.targetBoot.readBytes())
+        assertEquals(first.targetBoot, UltraInitBootAssets.load(files, { throw FileNotFoundException(it) })!!.targetBoot)
+        assertNoTemporaryFiles(files)
+    }
+
+    @Test fun oversizedAbiEvidenceKeepsHeldArtifactAndSelection() {
+        val files = temporary.newFolder()
+        val first = UltraInitBootAssets.load(files, opener(bundle()))!!
+        val held = first.targetBoot.readBytes()
+        val selection = File(files, "ultra-init-bridge.current").readBytes()
+        val next = bundle(3, ByteArray(1024 * 1024 + 1) { 32 })
+        val failure = runCatching { UltraInitBootAssets.load(files, opener(next)) }.exceptionOrNull()
+        assertEquals("ULTRA_INIT_ASSET_SIZE_LIMIT", failure?.message)
+        assertArrayEquals(selection, File(files, "ultra-init-bridge.current").readBytes())
+        assertArrayEquals(held, first.targetBoot.readBytes())
+        assertEquals(first.targetBoot, UltraInitBootAssets.load(files, { throw FileNotFoundException(it) })!!.targetBoot)
+        assertNoTemporaryFiles(files)
+    }
+
     private fun assertNoTemporaryFiles(files: File) {
         assertTrue(files.listFiles().orEmpty().none { it.name.startsWith(".ultra-init-") })
     }
@@ -119,7 +180,7 @@ class UltraInitBootAssetsTest {
         ByteArrayInputStream(bundle[path.removePrefix("ultra-init-bridge/")] ?: throw FileNotFoundException(path))
     }
 
-    private fun bundle(variant: Int = 0): Map<String, ByteArray> {
+    private fun bundle(variant: Int = 0, evidence: ByteArray? = null): Map<String, ByteArray> {
         val fixture = Class.forName("dev.maplesu.image.UltraInitBootProducerTest")
         fun bytes(name: String, vararg args: Any): ByteArray {
             val method = fixture.getDeclaredMethod(name, *args.map { it.javaClass }.toTypedArray())
@@ -135,7 +196,12 @@ class UltraInitBootAssetsTest {
             "Module.symvers" to "fixture symvers\n".toByteArray(),
             "target-contract.json" to "{}\n".toByteArray(),
         )
+        if (evidence != null) files["abi-evidence.json"] = evidence
         val manifest = buildJsonObject {
+            if (evidence != null) {
+                put("abiEvidence", "abi-evidence.json")
+                put("abiEvidenceSha256", UltraKernelSpec.sha256(evidence))
+            }
             put("schemaVersion", 1)
             put("kernelRelease", "6.6.1-fixture")
             put("kernelSha256", UltraKernelSpec.sha256(kernel))

@@ -19,7 +19,7 @@ typedef uintptr_t msu_loader_uptr;
 #endif
 
 #define MSU_LOADER_MAGIC 0x4355534dU
-#define MSU_LOADER_VERSION 2U
+#define MSU_LOADER_VERSION 3U
 #define MSU_LOADER_MAX_SECTIONS 32U
 #define MSU_LOADER_MAX_CHUNKS 256U
 #define MSU_LOADER_MAX_MEMORY_BYTES 1048576U
@@ -42,7 +42,7 @@ struct msu_loader_binding {
 };
 struct msu_loader_header {
     msu_loader_u32 magic, version, total_bytes, image_bytes, memory_bytes, entry_offset;
-    msu_loader_u32 section_count, chunk_count, import_count, reloc_count, payload_crc, flags;
+    msu_loader_u32 section_count, chunk_count, import_count, reloc_count, payload_crc, kernel_memory_bytes;
     msu_loader_u32 chunk_table_offset;
 };
 struct msu_loader_section {
@@ -78,7 +78,11 @@ enum msu_loader_error {
 /* Internal materializer: binding and image must be immutable, retained objects
  * supplied by the protected boot-owned anchor. CRC detects corruption and does
  * not authenticate those objects. No userspace pointer or request may supply
- * binding, image, imports, relocations, or image identity. Protocol v2 stores the chunk table separately. descriptor_crc covers the descriptor bytes
+ * binding, image, imports, relocations, or image identity. Protocol v3 binds a
+ * separate kernel memory extent for imports, including target-BTF-verified BSS
+ * objects. Functions remain file-bound at generation; all source reads remain
+ * image_bytes-bound here. Versions 1 and 2 are rejected. The chunk table is
+ * separate. descriptor_crc covers the descriptor bytes
  * followed by the entire chunk table in that order. Chunk destinations are
  * uniquely derived from the ordered sections and validated file-byte cursor.
  *

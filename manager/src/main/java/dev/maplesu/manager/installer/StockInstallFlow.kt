@@ -27,16 +27,20 @@ internal object StockInstallFlow {
         signing: LenovoSigningSession? = null,
         log: (String) -> Unit = {},
         initBootArtifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null,
+        resolveInitBootArtifact: ((File) -> dev.maplesu.image.UltraInitBootProducer.Artifact?)? = null,
+        onPrepareSubmitted: () -> Unit = {},
     ): Bundle {
         InstallerServiceClient.beginInstallation(context, taskId, target)
         val restoreManager = if (restoreOriginal) selectedManager.orEmpty() else ""
         val source = File(context.cacheDir, "native-source-$taskId.img")
         var prepareAttempted = false
         var recoveredDeployment: dev.maplesu.manager.ultrakernel.UltraKernelDeploymentNamespace? = null
-        return StockInstallAttempt.run(source, partition, prepare = {
+        var pairedSource: File? = null
+        return try { StockInstallAttempt.run(source, partition, prepare = {
             val prepared = InstallerServiceClient.withService(context, persistent = true, rootTarget = target) {
                 // A root connection failure before this callback has not sent a prepare request.
                 prepareAttempted = true
+                onPrepareSubmitted()
                 if (signingOptions.enabled) it.prepareNativeSignedInstall(taskId, target.workMode.name, partition,
                     restoreOriginal, restoreManager, conflictAccepted, signingOptions.mode(partition).name)
                 else it.prepareNativeInstall(taskId, target.workMode.name, partition, restoreOriginal,
@@ -46,18 +50,36 @@ internal object StockInstallFlow {
                 prepared.getString("state") == "PREPARED") { "INSTALLER_SERVICE_RESPONSE_INVALID" }
             onPrepared(prepared)
             if (target == InstallTargetMode.ULTRA && partition == "init_boot") {
-                val artifact = requireNotNull(initBootArtifact) {
-                    "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED:bridge.ko,handoff,target-kernel-loading-contract"
-                }
-                @Suppress("DEPRECATION")
-                val boot = prepared.getParcelableArrayList<Bundle>("partitionRows")
-                    ?.singleOrNull { it.getString("name") == "boot" }
-                check(boot != null && boot.getLong("size") == artifact.targetBoot.length() &&
-                    boot.getString("preSha256") == Hashes.sha256(artifact.targetBoot)) {
-                    "ULTRA_KERNEL_INIT_BOOT_TARGET_CHANGED"
+                if (initBootArtifact?.isKmiComponent != true) {
+                    @Suppress("DEPRECATION")
+                    val boot = prepared.getParcelableArrayList<Bundle>("partitionRows")
+                        ?.singleOrNull { it.getString("name") == "boot" }
+                    check(boot != null) { "ULTRA_INIT_PAIRED_BOOT_REQUIRED" }
+                    // openNativeInstallImage exports this task's final boot source (restored original
+                    // on a carrier change), rather than re-reading the still-patched live partition.
+                    val paired = File.createTempFile("native-paired-$taskId-", ".img", context.cacheDir)
+                    pairedSource = paired
+                    run {
+                        val meta = Bundle()
+                        val descriptor = InstallerServiceClient.withService(context, persistent = true, rootTarget = target) {
+                            it.openNativeInstallImage(taskId, "boot", meta)
+                        }
+                        ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                            check(meta.getString("partition") == "boot" && meta.getLong("size") == boot.getLong("size") &&
+                                meta.getString("sha256") == boot.getString("sourceSha256")) { "INSTALLER_IMAGE_CHANGED" }
+                            copySource(input, paired, boot.getLong("size"))
+                        }
+                        check(paired.length() == boot.getLong("size") &&
+                            Hashes.sha256(paired) == boot.getString("sourceSha256")) { "INSTALLER_IMAGE_CHANGED" }
+                        val artifact = requireNotNull(resolveInitBootArtifact?.invoke(paired) ?: initBootArtifact) {
+                            "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED:bridge.ko,handoff,target-kernel-loading-contract"
+                        }
+                        UltraInitBootInstallTarget.requireCompatible(artifact, prepared.getString("kernelRelease").orEmpty(),
+                            boot.getString("sourceSha256"), boot.getLong("size"))
+                    }
                 }
             }
-            if (target == InstallTargetMode.ULTRA && restoreOriginal && selectedImage == null) {
+            if (target == InstallTargetMode.ULTRA && prepared.getBoolean("restoreOriginal") && selectedImage == null) {
                 val lineage = dev.maplesu.manager.workmode.service.ModeSwitchCandidateInput(
                     dev.maplesu.manager.ultrakernel.UltraKernelContextAssets(context),
                     dev.maplesu.manager.compat.UltraStateStorage.flash(context.filesDir))
@@ -157,7 +179,7 @@ internal object StockInstallFlow {
                 error is java.util.concurrent.CancellationException || error is Error ||
                 installerFailureDiagnostic(error) != "INSTALLER_OPERATION_FAILED") error
             else IllegalStateException(code, error)
-        })
+        }) } finally { pairedSource?.delete() }
     }
 
     private fun copySource(input: InputStream, destination: File, maximum: Long) {

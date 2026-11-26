@@ -590,6 +590,7 @@ public:
     PatchBase(const PatchBase& other);   // _ZN15default_modules11module_root9PatchBaseC2ERKS1_
     ~PatchBase();                        // _ZN15default_modules11module_root9PatchBaseD2Ev
 
+    KModErr emit_check_current_allow_selinux_to_x10_checked(asmjit::a64::Assembler* a);
     void emit_check_current_allow_selinux_to_x10(asmjit::a64::Assembler* a);
 
     KModErr patch_kernel_before_hook(uint64_t kaddr, const asmjit::a64::Assembler* a);
@@ -638,7 +639,7 @@ KModErr PatchAvcDenied::patch_avc_denied() {
         asmjit::Label handler_end = handler_a->newLabel();
         kernel_module::arm64_before_hook_start(handler_a);
         handler_a->cbz(w0, handler_end);
-        this->emit_check_current_allow_selinux_to_x10(handler_a);
+        RETURN_IF_ERROR(this->emit_check_current_allow_selinux_to_x10_checked(handler_a));
         handler_a->cbz(x10, handler_end);
         handler_a->mov(w0, wzr);          // 放行：avc_denied 返回 0
         handler_a->bind(handler_end);

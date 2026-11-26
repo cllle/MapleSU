@@ -122,6 +122,7 @@ template<class... Args> void arm64_module_asm_func_start(Args...) {}
 template<class... Args> void arm64_module_asm_func_end(Args...) {}
 namespace export_symbol {
 template<class... Args> void get_current(Args...) {}
+template<class... Args> KModErr get_current_checked(Args... args) { get_current(args...); return KModErr::OK; }
 template<class Reg> void get_task_mm(asmjit::a64::Assembler*, KModErr& error, Reg) { error = KModErr::OK; }
 template<class Reg> void mmput(asmjit::a64::Assembler*, KModErr& error, Reg) { error = KModErr::OK; }
 }

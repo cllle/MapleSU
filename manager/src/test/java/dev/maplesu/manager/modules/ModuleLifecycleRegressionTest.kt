@@ -30,7 +30,7 @@ class ModuleLifecycleRegressionTest {
         assertTrue("Only uncertain writes need a read-only silent readback", refresh.contains("moduleOperationReadbackNeeded"))
         assertTrue(refresh.contains("fetchModuleList(checkUpdate = false, resort = false, showRefreshing = false)"))
         val load = vm.substringAfter("private suspend fun loadModuleList(").substringBefore("fun fetchModuleList(")
-        assertTrue(load.contains("repo.getModules()"))
+        assertTrue(Regex("""repo\.getModules\s*(?:\(|\{)""").containsMatchIn(load))
         assertFalse("List loading never preinstalls modules", vm.contains("ensureBundled"))
     }
 }

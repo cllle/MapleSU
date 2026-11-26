@@ -15,11 +15,14 @@ from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 from policy_btf_abi import Btf
 from policy_reference_abi import ReferenceAbi
+from policy_claim_routes import RAW_FAMILIES, inspect_selected_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "runtime/ultra/identity/kernel"
 KERNELS = ["android12-5.10", "android13-5.15", "android14-6.1",
            "android15-6.6", "android16-6.12", "android17-6.18"]
+MODULE_ROUTE_BINDING = None
+MODULE_ROUTE_INPUTS = None
 KERNEL_618_SOURCE = None
 KERNEL_618_OBJTREE = None
 KERNEL_618_TOOLCHAIN = None
@@ -100,6 +103,16 @@ UID_CALLBACKS = {
     "msu_uid_snapshot_reclaim_work": "msu_uid_snapshot_reclaim_work",
     "msu_uid_gateway_dispatch.validate": "msu_management_validate_credentials",
 }
+BOOT_EVENTS_CALLBACKS = {
+    "file_operations.read": "boot_read", "file_operations.read_iter": "boot_read_iter",
+    "file_operations.release": "boot_release", "kprobe.pre_handler": "boot_read_pre",
+}
+BOOT_EVENTS_LAYOUTS = {
+    "file_operations": (4, {"owner": 6, "read": 8, "read_iter": 10, "release": 12}),
+    "kprobe": (14, {"symbol_name": 16, "pre_handler": 18}),
+    "kiocb": (20, {"ki_filp": 22, "ki_pos": 24, "ki_complete": 26, "ki_flags": 28}),
+    "iov_iter": (30, {"count": 32}), "pt_regs": (34, {"regs": 36}),
+}
 R09_FREEZE = ROOT / ".tmp/p3-p4-owner-20261117/r09/SOURCE-FREEZE.json"
 R09_FREEZE_SHA256 = "6866113e8135cd566d3d95a7a803841c17cdf61267763b75a2f5eef24c5fcf45"
 R09_CHANGESET = R09_FREEZE.with_name("SOURCE-CHANGESET.json")
@@ -118,7 +131,7 @@ P2_ROUTE_DELTA = ROOT / "docs/parallel/2026-11-17/evidence/mainline-integration/
 P2_ROUTE_DELTA_SHA256 = "887e2deb4661286aad759620f496300e4d13c7b922bc159f03dd4825440a72a5"
 SOURCE_MIGRATION = ROOT / ".tmp/mainline-source-integration/current-intake-preparation-20261118/naming-migration/FINAL-SOURCE-MAP.json"
 SOURCE_MIGRATION_SHA256 = "d766da5fc7c5e6ad3687735fcaf7604fadfc51562c7dc0d9de6b6afc44add496"
-BUILD_TOOLS = [Path(__file__), ROOT / "scripts/policy_object_debug.py", ROOT / "scripts/apply-ultra-kprobe-text-owner.py", ROOT / "scripts/policy_btf_abi.py",
+BUILD_TOOLS = [Path(__file__), ROOT / "scripts/policy_claim_routes.py", ROOT / "scripts/policy_object_debug.py", ROOT / "scripts/apply-ultra-kprobe-text-owner.py", ROOT / "scripts/policy_btf_abi.py",
                ROOT / "scripts/policy-kernel-clang.py", ROOT / "scripts/policy_reference_abi.py",
                ROOT / "scripts/policy_payload_publish.py",
                ROOT / "native-inputs/policy/android17-6.18/source/seccomp.c",
@@ -1097,7 +1110,17 @@ def verify_runtime_claim(full_path, runtime_path):
     return receipt
 
 
-def write_runtime_manifest(assets, out, inputs, support, results):
+def claim_release_version():
+    source = ROOT / "manager/build.gradle.kts"
+    version = source.read_text(encoding="utf-8-sig")
+    names = re.findall(r'^\s*versionName\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"\s*$', version, re.M)
+    codes = re.findall(r'^\s*versionCode\s*=\s*([0-9]+)\s*$', version, re.M)
+    if len(names) != 1 or len(codes) != 1 or int(codes[0]) <= 0:
+        raise ValueError("Claim publication requires one exact Manager release version")
+    return dict(appVersion=names[0], versionCode=int(codes[0]))
+
+
+def write_runtime_manifest(assets, out, inputs, support, results, module_routes=None):
     """Package every original ABI fact using bounded selected-family gzip chunks."""
     payloads = {}
     for row in results:
@@ -1133,7 +1156,11 @@ def write_runtime_manifest(assets, out, inputs, support, results):
             raise ValueError("Retirement support variant family closure differs")
         for family, bootstrap in variants.items():
             payloads[family]["support"] = {"bootstrap": bootstrap}
-    manifest = dict(schemaVersion=2, inputs=inputs, support=support, payloads=payloads)
+    manifest = dict(schemaVersion=2, **claim_release_version(), inputs=inputs, support=support, payloads=payloads)
+    if module_routes is not None:
+        if set(payloads) != RAW_FAMILIES:
+            raise ValueError("Module-route publication requires all four actual raw families")
+        manifest["moduleRoutes"] = module_routes
     data = (json.dumps(manifest, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     if not 0 < len(data) <= 1048576:
         raise ValueError("Runtime manifest is outside the unchanged product asset size bound")
@@ -1201,6 +1228,8 @@ def inspect(path):
         if RUNTIME_LAYOUT_SELECTION is not None:
             record["runtimeLayout"] = runtime_layout_record(path, elf, defined)
             record["sessionAbi"] = session_abi_record(path, elf)
+            record["bootEventsAbi"] = boot_events_abi_record(path, elf)
+            record["ksuCompatAbi"] = ksu_compat_abi_record(path, elf)
             if runtime_profiles_enabled():
                 record["runtimeProfiles"] = runtime_profiles_record(path, elf, defined)
         return record
@@ -1309,7 +1338,7 @@ def kernel_environment(kernel, out):
     mounts = ["--mount", f"type=bind,source={ROOT},target=/source,readonly",
               "--mount", f"type=bind,source={out},target=/output"]
     if kernel == "android17-6.18":
-        baseline = ROOT / "native-inputs/kernel-build/android17-6.18"
+        baseline = ROOT / ".deps" / "maplesu-kernel-618"
         source = KERNEL_618_SOURCE or baseline / "source"
         prepared = KERNEL_618_OBJTREE or ROOT / ("work/ultra-native-manager-claim-20261113/"
                                                 "prototype/android17-6.18/kdir")
@@ -3661,7 +3690,7 @@ def su_component_probe(name):
         for index, function in enumerate(SU_NAMESPACE_FUNCTIONS):
             result += "typeof(&" + function + ") msu_su_namespace_decl_" + str(index) + " __used;\n__ADDRESSABLE(" + function + ");\n"
         for index, variable in enumerate(SU_NAMESPACE_DATA):
-            result += "typeof(" + variable + ") *msu_su_namespace_data_" + str(index) + " __used;\n"
+            result += "typeof(" + variable + ") *msu_su_namespace_data_" + str(index) + " __used = &" + variable + ";\n"
         for prefix, (kind, _, _) in SU_NAMESPACE_TYPES.items():
             result += "static struct " + kind + " *msu_su_namespace_type_" + prefix + " __used;\n"
         return result + "#endif\n"
@@ -3764,6 +3793,23 @@ def su_namespace_words(path):
             "sectionFlags": section["sh_flags"], "objectIdentity": identity(path)}
 
 
+def su_namespace_object_declaration(declarations, variable):
+    """Expand the actual data probe pointee; named pointer ABI intentionally omits its body."""
+    indexes = declarations.variables.get(variable, ())
+    if len(indexes) != 1:
+        raise ValueError("SU namespace data declaration missing/ambiguous: " + variable)
+    pointer = declarations.resolve(declarations.types[indexes[0]][3])
+    if declarations.types[pointer][1] != 2 or declarations.type_size(pointer) != 8:
+        raise ValueError("SU namespace data declaration is not one native pointer: " + variable)
+    pointee = declarations.resolve(declarations.types[pointer][3])
+    if not pointee or declarations.types[pointee][1] not in (4, 5):
+        raise ValueError("SU namespace data declaration has no complete aggregate: " + variable)
+    signature = declarations.signature(pointee)
+    if declarations.type_size(pointee) <= 0 or ":" not in signature:
+        raise ValueError("SU namespace data declaration aggregate is incomplete: " + variable)
+    return "*" + signature
+
+
 def collect_su_namespace_abi(target, reference, policy, objects, record):
     native = record["nativeNamespace"]
     try:
@@ -3818,7 +3864,7 @@ def collect_su_namespace_abi(target, reference, policy, objects, record):
                     item["cfi"] = {"mode": "kcfi", "typeidSymbol": "__kcfi_typeid_" + name, "declarationTypeid": matches[0]["st_value"] & 0xffffffff, "referencePrefixWord": marker["prefixWord"], "referencePrefixVerified": True}
                 item["verified"] = True
         for index, name in enumerate(SU_NAMESPACE_DATA):
-            declared = declarations.variable("msu_su_namespace_data_" + str(index))
+            declared = su_namespace_object_declaration(declarations, "msu_su_namespace_data_" + str(index))
             signature = reference.variable(name)
             marker = evidence.get("suDataMarkers", {}).get(name, {})
             item = native["dataAbi"][name] = {"signature": signature, "declarationSignature": declared, "marker": marker, "verified": False}
@@ -4213,6 +4259,12 @@ def build_support(out, retirement_policy=None, bootstrap_only=False):
             report[name] = {"bytes": binary.stat().st_size, "sha256": sha(binary),
                             "entryOffset": 0, "imports": [], "relocations": 0,
                             "sourceInputsIdentity": identity(source_receipt)}
+            if name == "materializer":
+                versions = re.findall(r"^#define MSU_LOADER_VERSION (\d+)U$",
+                    (source_root / "identity/kernel/manager_claim_loader.h").read_text(), re.M)
+                if versions != ["3"]:
+                    raise ValueError("Selected materializer source is not protocol v3")
+                report[name]["protocolVersion"] = int(versions[0])
             if name == "bootstrap":
                 if HOST_RETIREMENT_SELECTION is not None:
                     callback, = elf.get_section_by_name(".symtab").get_symbol_by_name("msu_manager_resident_retire_work")
@@ -4410,8 +4462,10 @@ def build(kernel, out):
             makefile.write("msu_manager_claim-y += manager_dynamic_layout.o\n"
                            "CFLAGS_manager_dynamic_layout.o += -g\n"
                            "CFLAGS_manager_resident_host.o += -DMSU_RAW_RESIDENT_LOOKUP=1\n"
+                            "CFLAGS_boot_events.o += -DMSU_BOOT_EVENTS_RAW_RESIDENT=1\n"
                            "CFLAGS_su_nonroot_transition_work.o += -DMSU_SU_NONROOT_WORK_RAW_RESIDENT=1\n"
                            "CFLAGS_su_exec_session.o += -DMSU_SU_EXEC_SESSION_RAW_RESIDENT=1\n"
+                           "CFLAGS_manager_ksu_compat.o += -DMSU_KSU_COMPAT_RAW_RESIDENT=1\n"
                            f"CFLAGS_su_exec_session.o += -I/output/{kernel}/project/runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/kernel\n")
             makefile.write("msu_manager_claim-y += " + " ".join(name + ".o" for name in RUNTIME_ADDITIONAL_OBJECTS) + "\n")
             for name in RUNTIME_ADDITIONAL_OBJECTS:
@@ -5171,9 +5225,11 @@ def collect_host_runtime_abi(target, payload, reference):
             for row in HOST_RETIREMENT_SELECTION["files"]:
                 expected = next((item["after"] for item in RUNTIME_LAYOUT_SELECTION["files"]
                     if item["logicalPath"] == row["logicalPath"]), row["after"]) if RUNTIME_LAYOUT_SELECTION else row["after"]
-                if Path(row["logicalPath"]).name in ("manager_claim_bootstrap.c", "manager_resident_abi.h") and \
-                        actual_sources.get(row["logicalPath"]) != expected:
-                    raise ValueError("Retirement Image callback/native source pair differs")
+                if Path(row["logicalPath"]).name in ("manager_claim_bootstrap.c", "manager_resident_abi.h"):
+                    actual = actual_sources.get(row["logicalPath"])
+                    if actual is None or dict(actual, path=Path(actual["path"]).resolve()) != \
+                            dict(expected, path=Path(expected["path"]).resolve()):
+                        raise ValueError("Retirement Image callback/native source pair differs")
             with (support / "bootstrap.elf").open("rb") as stream:
                 image_elf = ELFFile(stream)
                 callback, = image_elf.get_section_by_name(".symtab").get_symbol_by_name("msu_manager_resident_retire_work")
@@ -5523,6 +5579,27 @@ def apply_su_component_metadata_abi():
             target[key + "Bytes"] = "sizeof(((" + kind + " *)0)->" + member + ")"
     SU_COMPONENT_FUNCTIONS["su_install_registry"] = (
         *SU_COMPONENT_FUNCTIONS["su_install_registry"], "msu_su_lease_saved_profile")
+
+
+def apply_su_component_runtime_layout_abi(replacements):
+    """Bind the two current-runtime layout additions to their selected sources."""
+    if SU_COMPONENT_METADATA_SELECTION is None:
+        return
+    for prefix, filename, kind, added in (
+        ("installEntry", "su_install_registry.c", "msu_su_install_entry", "source_invalidated"),
+        ("executionReceipt", "su_profile_execution.h", "msu_su_execution_receipt", "task_profile"),
+    ):
+        if filename not in replacements:
+            raise ValueError("Runtime SU layout source absent: " + filename)
+        members = _su_selected_struct_members(replacements[filename].read_text(encoding="utf-8"), kind)
+        previous = SU_COMPONENT_LAYOUTS[prefix][2]
+        if members.count(added) != 1 or tuple(member for member in members if member != added) != previous:
+            raise ValueError("Runtime SU layout is not its exact one-member successor: " + prefix)
+        SU_COMPONENT_LAYOUTS[prefix] = (kind, "manager_su_component_facts", members)
+        for member in members:
+            key = prefix + "".join(word.capitalize() for word in member.split("_"))
+            SU_COMPONENT_FACTS[key + "Offset"] = "offsetof(struct " + kind + ", " + member + ")"
+            SU_COMPONENT_FACTS[key + "Bytes"] = "sizeof(((struct " + kind + " *)0)->" + member + ")"
 
 
 # Call apply_su_component_metadata_abi() immediately after the metadata successor
@@ -6326,9 +6403,9 @@ def collect_task_profile_implementation(target, payload, record, policy):
         "msu_task_profile_trace_bind": ('lookup("__tracepoint_sys_enter")', "msu_task_profile_trace_bind_error", "mutex_lock", "mutex_unlock"),
         "msu_task_profile_trace_open": ("msu_task_profile_target_ready()", "tracepoint_probe_register_prio", "msu_task_profile_sys_enter", "INT_MIN", "smp_store_release"),
         "msu_task_profile_trace_close": ("smp_store_release", "tracepoint_probe_unregister", "tracepoint_synchronize_unregister", "msu_task_profile_trace_registered", "msu_task_profile_marker_close()"),
-        "msu_task_profile_marker_open": ("IS_ENABLED(CONFIG_KRETPROBES)", "IS_ENABLED(CONFIG_PREEMPT_RT)", "msu_task_profile_marker_ready()", "register_kretprobe", "msu_task_profile_marker_entry", "msu_task_profile_marker_return"),
+        "msu_task_profile_marker_open": ('IS_ENABLED(CONFIG_KRETPROBES)', 'msu_task_profile_marker_ready()', 'register_kretprobe', 'msu_task_profile_marker_entry', 'msu_task_profile_marker_return', 'raw_spin_lock_irqsave', 'WRITE_ONCE(msu_task_profile_marker.opened, true)', 'msu_task_profile_marker_close()'),
         "msu_task_profile_marker_close": ("unregister_kretprobe", "msu_task_profile_marker_lock", "kfree"),
-        "msu_task_profile_marker_update": ("read_lock", "read_unlock", "rcu_read_lock()", "rcu_read_unlock()", "msu_task_profile_marker_mode()", "msu_su_runtime_trace_mark_task(thread)", "msu_task_profile_work(thread)"),
+        "msu_task_profile_marker_update": ('raw_spin_lock_irqsave', 'raw_spin_unlock_irqrestore', 'rcu_read_lock()', 'rcu_read_unlock()', 'rcu_dereference_raw(process_head->next)', 'rcu_dereference_raw(process->next)', 'signal_struct, thread_head', 'rcu_dereference_raw(thread_head->next)', 'rcu_dereference_raw(thread_node->next)', 'MSU_DYN_CONTAINER(thread_node, task_struct, thread_node)', 'msu_task_profile_marker_mode()', 'msu_su_runtime_trace_mark_task(thread)', 'msu_task_profile_work(thread)'),
         "msu_task_profile_marker_return": ("msu_task_profile_marker_update()",),
         "msu_task_profile_marker_entry": ("regs_get_kernel_argument", "msu_task_profile_tracepoint", "msu_task_profile_marker.exit_tracepoint"),
         "msu_task_profile_sys_enter": ("msu_task_profile_trace_ready()", "test_bit(MSU_TASK_PROFILE_DISABLE_ROOT_BIT", "__NR_execve", "__NR_execveat", "copy_from_user_nofault", "WRITE_ONCE(regs->syscallno, -1)"),
@@ -6689,8 +6766,8 @@ RUNTIME_SU_CURRENT_INPUTS = {name: ROOT / SU_COMPONENT_ROOT / name for name in
     ("su_install_registry.c", "su_install_registry.h", "su_profile_apply.c", "su_profile_apply.h",
      "su_profile_execution.c", "su_profile_execution.h", "su_profile_namespace.c", "su_profile_namespace.h")}
 RUNTIME_SU_CURRENT_SHA256 = {
-    "su_install_registry.c": "571cfa501b0065d04f18b2f603f77af6f032a87b08161725f5fbc6eeeeeab3ab",
-    "su_install_registry.h": "0e6d0b4876f5c34a09d9f517d8d0cd95f7c2eca6ec4e764863674cda70919392",
+    "su_install_registry.c": "6d84c1b94869c1381c0d35d75732a835ee2a5c5e138b34e4243caadeec44d280",
+    "su_install_registry.h": "cd3157c98f0aad35a625259d219281be38ca8f4962e35aa3aed3d35618d9f14b",
     "su_profile_apply.c": "8f21982f62a402339227c95a5d9d91d3e69dc36638297a28f91ed227d907bc46",
     "su_profile_apply.h": "cc21e93424dc29c97df3dd79e91b64ba100a38414a5345c029e7cfd44add92fc",
     "su_profile_execution.c": "2452c98074edad9d00e6328c7c61233dbb1f4f6fcdb3a545baf5abce36234426",
@@ -6701,13 +6778,13 @@ RUNTIME_SU_CURRENT_SHA256 = {
 RUNTIME_ADDITIONAL_OBJECTS = ("manager_early_fixed", "manager_early_oem", "manager_early_root",
     "manager_early_selinux", "manager_early_runtime_factory", "manager_early_root_backend",
     "manager_early_selinux_backend", "su_nonroot_transition", "su_nonroot_transition_work",
-    "su_nonroot_mount_source", "native_lookup", "su_exec_session")
+    "su_nonroot_mount_source", "native_lookup", "su_exec_session", "boot_events", "manager_ksu_compat")
 RUNTIME_ADDITIONAL_INPUTS = {name: SOURCE / name for name in
     ("manager_dynamic_layout.c", "manager_dynamic_layout.h", *(unit + suffix
-     for unit in RUNTIME_ADDITIONAL_OBJECTS if unit not in ("native_lookup", "su_exec_session")
+     for unit in RUNTIME_ADDITIONAL_OBJECTS if unit not in ("native_lookup", "su_exec_session", "boot_events")
      for suffix in (".c", ".h")))}
 RUNTIME_ADDITIONAL_INPUTS.update({name: ROOT / "runtime/ultra/boot/init-bridge" / name for name in
-    ("native_lookup.c", "native_lookup.h", "native_cfi.h")})
+    ("native_lookup.c", "native_lookup.h", "native_cfi.h", "boot_events.c", "boot_events.h", "preinit.h")})
 RUNTIME_ADDITIONAL_INPUTS.update({name: ROOT / "runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/kernel" / name
     for name in ("su_exec_session.c", "su_exec_session.h")})
 RUNTIME_ADDITIONAL_INPUTS["su_session_receipt.h"] = ROOT / "runtime/maplesu-sdk/sdk/src/payload/su/su_session_receipt.h"
@@ -6832,7 +6909,9 @@ def select_runtime_layout_sources(path, expected_sha256):
             "msu_su_apply_held_stages": ("msu_su_profile_apply_held", "msu_task_state_release_current",
                 "msu_task_profile_apply_current", "msu_su_lease_validate", "msu_su_profile_namespace_apply_held"),
         }
-    EXPORTS = tuple(dict.fromkeys((*EXPORTS, "msu_runtime_layout", "msu_su_session_abi_words", *task_profile_exports())))
+        apply_su_component_runtime_layout_abi(replacements)
+    EXPORTS = tuple(dict.fromkeys((*EXPORTS, "msu_runtime_layout", "msu_su_session_abi_words",
+                                 "msu_boot_events_abi_words", "msu_ksu_compat_layout", *task_profile_exports())))
     if runtime_profiles_enabled():
         EXPORTS = tuple(dict.fromkeys((*EXPORTS, "msu_su_runtime_profiles")))
     return RUNTIME_LAYOUT_SELECTION
@@ -7102,6 +7181,192 @@ def session_abi_record(path, elf):
     return result
 
 
+def boot_events_abi_record(path, elf):
+    """Bind the raw producer's native layouts/callbacks to its actual object."""
+    target, obj = path.parent, path.parent / "boot_events.o"
+    provenance = object_provenance(target, "boot_events")
+    command = target / ".boot_events.o.cmd"
+    policy = session_cfi_policy(command)
+    btf = object_btf(obj)
+
+    def symbol(image, name, kind):
+        table = image.get_section_by_name(".symtab")
+        matches = table.get_symbol_by_name(name) if table else None
+        if not matches or len(matches) != 1 or matches[0]["st_info"]["type"] != kind or \
+                not isinstance(matches[0]["st_shndx"], int):
+            raise ValueError("Boot event native symbol missing/ambiguous: " + name)
+        item = matches[0]
+        section = image.get_section(item["st_shndx"])
+        at, size = item["st_value"] - section["sh_addr"], item["st_size"]
+        if at < 0 or size <= 0 or at + size > section["sh_size"]:
+            raise ValueError("Boot event native symbol bounds: " + name)
+        return item, section, at, size
+
+    name = "msu_boot_events_abi_words"
+    item, section, at, size = symbol(elf, name, "STT_OBJECT")
+    if section.name != ".msu.boot_events.abi" or section["sh_type"] != "SHT_PROGBITS" or \
+            section["sh_flags"] & 7 != 2 or at or size != 152 or section["sh_size"] != size or \
+            sum(entry.name == section.name for entry in elf.iter_sections()) != 1:
+        raise ValueError("Boot event ABI must have one immutable/NX 152-byte section")
+    raw = section.data()
+    words = [int.from_bytes(raw[pos:pos + 4], "little") for pos in range(0, size, 4)]
+    if words[:4] != [0x4d534245, 1, size, 1] or object_words(obj, name) != words:
+        raise ValueError("Boot event ABI schema/final/same-object bytes differ")
+    layouts = {}
+    for owner, (base, members) in BOOT_EVENTS_LAYOUTS.items():
+        layout = btf.named_structure_selected(owner, members)
+        alignment = words[base + 1]
+        if layout["bytes"] != words[base] or not alignment or alignment > 4096 or \
+                alignment & (alignment - 1) or words[base] % alignment:
+            raise ValueError("Boot event native object size/alignment: " + owner)
+        for member, index in members.items():
+            field = layout["members"][member]
+            if (field["offset"], field["bytes"]) != tuple(words[index:index + 2]) or not field["bytes"]:
+                raise ValueError("Boot event native member differs from same-TU BTF: " + owner + "." + member)
+        layouts[owner] = dict(layout, alignment=alignment)
+    callbacks = {}
+    with obj.open("rb") as stream:
+        native = ELFFile(stream)
+        _, native_section, _, native_size = symbol(native, name, "STT_OBJECT")
+        if native_section.name != section.name or native_section["sh_flags"] & 7 != 2 or native_size != size:
+            raise ValueError("Boot event ABI omitted its immutable same-TU provenance")
+        for member, callback in BOOT_EVENTS_CALLBACKS.items():
+            owner, field = member.split(".")
+            signature = btf.function(callback)
+            if btf.member_function(owner, field) != "*" + signature:
+                raise ValueError("Boot event callback differs from native member: " + callback)
+            source, source_section, source_at, _ = symbol(native, callback, "STT_FUNC")
+            final, final_section, final_at, _ = symbol(elf, callback, "STT_FUNC")
+            if not source_section["sh_flags"] & 4 or not final_section["sh_flags"] & 4 or \
+                    source["st_value"] % 4 or final["st_value"] % 4:
+                raise ValueError("Boot event callback is outside actual code: " + callback)
+            prefix, object_type = None, None
+            if policy["mode"] == "kcfi":
+                if source_at < 4 or final_at < 4:
+                    raise ValueError("Boot event callback lacks its KCFI entry prefix: " + callback)
+                object_type = int.from_bytes(source_section.data()[source_at - 4:source_at], "little")
+                prefix = int.from_bytes(final_section.data()[final_at - 4:final_at], "little")
+                if prefix != object_type:
+                    raise ValueError("Boot event object/final callback KCFI mismatch: " + callback)
+            callbacks[callback] = dict(symbol=callback, member=member, signature=signature,
+                offset=final["st_value"], kcfiPrefix=prefix, objectKcfiType=object_type,
+                objectKcfiTypeSource="actual-object-entry-prefix")
+    sources = {"runtime/ultra/boot/init-bridge/" + name: identity(selected_native_source(name))
+               for name in ("boot_events.c", "boot_events.h")}
+    for source in sources.values():
+        if not any(all(dependency[key] == source[key] for key in ("bytes", "sha256"))
+                   for dependency in provenance["dependencies"]):
+            raise ValueError("Boot event ABI omitted a selected source/header dependency")
+    configs = [entry for entry in provenance["dependencies"] if Path(entry["path"]).name == ".config"]
+    if len(configs) != 1:
+        raise ValueError("Boot event ABI configuration dependency is missing/ambiguous")
+    return dict(schemaVersion=1, symbol=name, offset=item["st_value"], bytes=size,
+        section=section.name, sectionFlags=section["sh_flags"], values=words,
+        compiledSha256=hashlib.sha256(raw).hexdigest(), layouts=layouts, callbacks=callbacks,
+        cfiPolicy=policy, claimSha256=sha(path), sourceSelectionIdentity=RUNTIME_LAYOUT_SELECTION["identity"],
+        sourceIdentities=sources, objectIdentity=identity(obj), commandIdentity=identity(command),
+        dependencyReceiptIdentity=identity(target / "build-dependencies/boot_events.json"),
+        dependencies=provenance["dependencies"], configIdentity=configs[0])
+
+
+def ksu_compat_abi_record(path, elf):
+    """Retain this descriptor's real native fops/task-work and callback ABI."""
+    target, obj = path.parent, path.parent / "manager_ksu_compat.o"
+    provenance = object_provenance(target, "manager_ksu_compat")
+    command = target / ".manager_ksu_compat.o.cmd"
+    policy = session_cfi_policy(command)
+    if not re.search(r"(?:^|\s)-DMSU_KSU_COMPAT_RAW_RESIDENT=1(?:\s|$)", command.read_text()):
+        raise ValueError("KSU compatibility descriptor lacks its real raw-resident owner selection")
+    btf = object_btf(obj)
+
+    def symbol(image, name, kind):
+        table = image.get_section_by_name(".symtab")
+        matches = table.get_symbol_by_name(name) if table else None
+        if not matches or len(matches) != 1 or matches[0]["st_info"]["type"] != kind or \
+                not isinstance(matches[0]["st_shndx"], int):
+            raise ValueError("KSU compatibility native symbol missing/ambiguous: " + name)
+        item = matches[0]
+        section = image.get_section(item["st_shndx"])
+        at, size = item["st_value"] - section["sh_addr"], item["st_size"]
+        if at < 0 or size <= 0 or at + size > section["sh_size"]:
+            raise ValueError("KSU compatibility symbol bounds: " + name)
+        return item, section, at, size
+
+    name = "msu_ksu_compat_layout"
+    item, section, at, size = symbol(elf, name, "STT_OBJECT")
+    if section.name != ".msu.ksu-compat.layout" or section["sh_type"] != "SHT_PROGBITS" or \
+            section["sh_flags"] & 7 != 2 or at or size != 56 or section["sh_size"] != size:
+        raise ValueError("KSU compatibility ABI must have one immutable/NX 56-byte section")
+    raw = section.data()
+    words = [int.from_bytes(raw[pos:pos + 4], "little") for pos in range(0, size, 4)]
+    if words[0] != 1 or object_words(obj, name) != words:
+        raise ValueError("KSU compatibility ABI schema/final/same-object bytes differ")
+    fields = {"owner": 3, "unlocked_ioctl": 5, "release": 9}
+    compat = words[7:9] != [0xffffffff, 0]
+    if compat:
+        fields["compat_ioctl"] = 7
+    fops = btf.named_structure_selected("file_operations", fields)
+    if fops["bytes"] != words[1] or not words[2] or words[2] & (words[2] - 1) or words[1] % words[2]:
+        raise ValueError("KSU compatibility file_operations size/alignment differs")
+    for member, index in fields.items():
+        field = fops["members"][member]
+        if (field["offset"], field["bytes"]) != tuple(words[index:index + 2]):
+            raise ValueError("KSU compatibility file_operations member differs: " + member)
+    callback = btf.named_structure_selected("callback_head", ("func",))
+    field = callback["members"]["func"]
+    if callback["bytes"] != words[11] or (field["offset"], field["bytes"]) != tuple(words[12:14]):
+        raise ValueError("KSU compatibility task_work layout differs")
+    members = {"msu_ksu_ioctl": "file_operations.unlocked_ioctl", "msu_ksu_release": "file_operations.release",
+        "msu_ksu_install_resume": "callback_head.func"}
+    if compat:
+        members["msu_ksu_compat_ioctl"] = "file_operations.compat_ioctl"
+    callbacks = {}
+    with obj.open("rb") as stream:
+        native = ELFFile(stream)
+        _, native_section, _, native_size = symbol(native, name, "STT_OBJECT")
+        if native_section.name != section.name or native_section["sh_flags"] & 7 != 2 or native_size != size:
+            raise ValueError("KSU compatibility omitted immutable same-TU provenance")
+        for function, member in members.items():
+            owner, field = member.split(".")
+            signature = btf.function(function)
+            if btf.member_function(owner, field) != "*" + signature:
+                raise ValueError("KSU compatibility callback differs from native member: " + function)
+            source, source_section, source_at, _ = symbol(native, function, "STT_FUNC")
+            final, final_section, final_at, _ = symbol(elf, function, "STT_FUNC")
+            if not source_section["sh_flags"] & 4 or not final_section["sh_flags"] & 4 or \
+                    source["st_value"] % 4 or final["st_value"] % 4:
+                raise ValueError("KSU compatibility callback is outside actual code: " + function)
+            prefix, object_type = None, None
+            if policy["mode"] == "kcfi":
+                if source_at < 4 or final_at < 4:
+                    raise ValueError("KSU compatibility callback lacks KCFI prefix: " + function)
+                object_type = int.from_bytes(source_section.data()[source_at - 4:source_at], "little")
+                prefix = int.from_bytes(final_section.data()[final_at - 4:final_at], "little")
+                if prefix != object_type:
+                    raise ValueError("KSU compatibility object/final KCFI mismatch: " + function)
+            callbacks[function] = dict(symbol=function, member=member, signature=signature,
+                offset=final["st_value"], kcfiPrefix=prefix, objectKcfiType=object_type,
+                objectKcfiTypeSource="actual-object-entry-prefix")
+    sources = {"runtime/ultra/identity/kernel/" + name: identity(selected_native_source(name))
+               for name in ("manager_ksu_compat.c", "manager_ksu_compat.h")}
+    for source in sources.values():
+        if not any(all(dependency[key] == source[key] for key in ("bytes", "sha256"))
+                   for dependency in provenance["dependencies"]):
+            raise ValueError("KSU compatibility ABI omitted selected source/header dependency")
+    configs = [entry for entry in provenance["dependencies"] if Path(entry["path"]).name == ".config"]
+    if len(configs) != 1:
+        raise ValueError("KSU compatibility ABI configuration dependency missing/ambiguous")
+    return dict(schemaVersion=1, symbol=name, offset=item["st_value"], bytes=size,
+        section=section.name, sectionFlags=section["sh_flags"], values=words,
+        compiledSha256=hashlib.sha256(raw).hexdigest(),
+        layouts=dict(file_operations=dict(fops, alignment=words[2]), callback_head=callback),
+        callbacks=callbacks, cfiPolicy=policy, claimSha256=sha(path),
+        sourceSelectionIdentity=RUNTIME_LAYOUT_SELECTION["identity"], sourceIdentities=sources,
+        objectIdentity=identity(obj), commandIdentity=identity(command),
+        dependencyReceiptIdentity=identity(target / "build-dependencies/manager_ksu_compat.json"),
+        dependencies=provenance["dependencies"], configIdentity=configs[0])
+
+
 def runtime_profiles_enabled():
     if RUNTIME_LAYOUT_SELECTION is None:
         return False
@@ -7217,6 +7482,8 @@ def main():
         "work/ultra-native-manager-claim-20261113/claim-entry/build"))
     parser.add_argument("--kernels", nargs="+", choices=KERNELS, default=KERNELS)
     parser.add_argument("--assets", type=Path, help="Publish all six payloads and support code to this assets directory")
+    parser.add_argument("--module-route-catalog", type=Path)
+    parser.add_argument("--module-route-plan", type=Path)
     parser.add_argument("--publish-existing", action="store_true",
                         help="Verify and package the exact existing six-family generation without compilation")
     parser.add_argument("--reference-abi-only", action="store_true",
@@ -7333,8 +7600,17 @@ def main():
         select_task_profile_sources(args.task_profile_source_selection, args.task_profile_source_selection_sha256)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    if args.assets and set(args.kernels) != set(KERNELS):
-        parser.error("--assets requires all six kernel families")
+    global MODULE_ROUTE_BINDING, MODULE_ROUTE_INPUTS
+    if bool(args.module_route_catalog) != bool(args.module_route_plan):
+        parser.error("module-route catalog and strict plan must be supplied together")
+    if args.module_route_catalog:
+        if not args.assets or set(args.kernels) != RAW_FAMILIES or RUNTIME_LAYOUT_SELECTION is None:
+            parser.error("module routes require assets, all four raw families and current runtime selection")
+        MODULE_ROUTE_BINDING = inspect_selected_catalog(args.module_route_catalog,
+            args.module_route_plan, RUNTIME_LAYOUT_SELECTION)
+        MODULE_ROUTE_INPUTS = (args.module_route_catalog, args.module_route_plan)
+    if args.assets and set(args.kernels) != set(KERNELS) and MODULE_ROUTE_BINDING is None:
+        parser.error("--assets requires six raw families or four raw plus actual strict legacy module routes")
     if args.publish_existing and (not args.assets or args.reference_abi_only):
         parser.error("--publish-existing requires --assets and excludes --reference-abi-only")
     if args.reference_abi_only and args.assets:
@@ -7348,7 +7624,7 @@ def main():
     selected_inputs = [core_baseline_input(row["newPath"], ROOT / row["newPath"])
                        for row in selection["sourceMigration"]["selectedInputs"]]
     su_receipts = su_selected_receipts()
-    before = {str(s.relative_to(ROOT)): sha(s) for s in [*SOURCES, *PUBLICATION_GATE_INPUTS, *SUPPORT_SOURCES, *selected_inputs,
+    before = {str(s.relative_to(ROOT)): sha(s) for s in [ROOT / "manager/build.gradle.kts", *SOURCES, *PUBLICATION_GATE_INPUTS, *SUPPORT_SOURCES, *selected_inputs,
               *su_source_paths(), *su_receipts, *core_selection_inputs(), *host_deployment_selection_inputs(),
               *source_correction_inputs(), PROTOCOL, FRAME, *BUILD_TOOLS,
               *su_source_paths(), *su_receipts, *core_selection_inputs(), *host_deployment_selection_inputs(),
@@ -7395,7 +7671,10 @@ def main():
             shutil.copyfile(out / row["kernel"] / "claim.so", family / "claim.so")
             if "retirementSupport" in row:
                 shutil.copyfile(out / row["kernel"] / "support/bootstrap.bin", family / "bootstrap.bin")
-        write_runtime_manifest(assets, out, before, support, results)
+        if MODULE_ROUTE_BINDING is not None and inspect_selected_catalog(args.module_route_catalog,
+                args.module_route_plan, RUNTIME_LAYOUT_SELECTION) != MODULE_ROUTE_BINDING:
+            raise ValueError("Selected module routes changed during raw compilation")
+        write_runtime_manifest(assets, out, before, support, results, MODULE_ROUTE_BINDING)
     return 0 if passed else 1
 
 

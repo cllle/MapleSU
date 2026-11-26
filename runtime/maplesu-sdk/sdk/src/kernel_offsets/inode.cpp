@@ -162,7 +162,7 @@ namespace {
     KModErr err = get_kernel_shellcode_u64_result(
             [](asmjit::a64::Assembler* assembler, asmjit::a64::GpX& result) -> KModErr {
                 result = asmjit::a64::regs::x10;
-                kernel_module::export_symbol::get_current(assembler, result);
+                RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(assembler, result));
                 return KModErr::OK;
             },
             current_task);

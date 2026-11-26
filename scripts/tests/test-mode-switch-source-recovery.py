@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
@@ -53,7 +54,7 @@ def main():
         frozen.append(target)
     runner = args.out / 'runner.py'
     runner.write_bytes(Path(__file__).read_bytes())
-    java = jdk_tool("java")
+    java = jdk_tool()
     runtime_java = identity(java)
     compiler = next(rec['path'] for rec in runtime['buildDependencies'] if 'kotlin-compiler-embeddable' in rec['path'])
     coroutines = next(rec['path'] for rec in runtime['buildDependencies'] if 'kotlinx-coroutines-core-jvm' in rec['path'])

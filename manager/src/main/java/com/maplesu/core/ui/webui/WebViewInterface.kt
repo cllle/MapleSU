@@ -34,22 +34,25 @@ import java.util.concurrent.Future
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.CompletionException
 
-class WebViewInterface internal constructor(
-    private val state: WebUIState,
+class WebViewInterface private constructor(
+    private val state: WebUIState?,
+    private val session: WebUiSessionHost?,
     private val shellFactory: () -> Shell,
 ) {
-    constructor(state: WebUIState) : this(state, { createRootShell(true) })
-    private val webView get() = state.webView
-    private val modDir get() = state.modDir
+    constructor(state: WebUIState) : this(state, null, { createRootShell(true) })
+    internal constructor(state: WebUIState, shellFactory: () -> Shell) : this(state, null, shellFactory)
+    internal constructor(session: WebUiSessionHost, shellFactory: () -> Shell) : this(null, session, shellFactory)
+    private val webView get() = state?.webView
+    private val modDir get() = session?.moduleDir ?: requireNotNull(state).modDir
     private val callbacks = WebUiCallbackScripts(ModeRuntime.active == WorkMode.KSU)
     private val fileIo = KsuIO(shellFactory, ::pageOpen)
-    private val packageManager = KsuPm(::pageOpen)
+    private val packageManager = KsuPm(::pageOpen, ::apps)
     private val lifecycleLock = Any()
     private var destroyed = false
-    private var commandView = state.webView
-    private val moduleInfoId = state.moduleId
+    private var commandView = state?.webView
+    private val moduleInfoId = session?.moduleId ?: state?.moduleId
     private val moduleInfoActivation = ModeRuntime.activation
-    private var moduleInfoSeed = state.moduleInfoJson.also { state.moduleInfoJson = null }
+    private var moduleInfoSeed = state?.moduleInfoJson.also { state?.moduleInfoJson = null }
     private val commands = mutableSetOf<Command>()
     private val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -59,8 +62,9 @@ class WebViewInterface internal constructor(
     }
 
     private fun pageOpen(): Boolean = synchronized(lifecycleLock) {
-        if (destroyed || !state.isModuleSessionCurrent || moduleInfoActivation != ModeRuntime.activation)
-            return@synchronized false
+        if (destroyed || moduleInfoActivation !== ModeRuntime.activation) return@synchronized false
+        if (session != null) return@synchronized session.isCurrent()
+        if (state?.isModuleSessionCurrent != true) return@synchronized false
         if (commandView == null) commandView = webView
         webView === commandView
     }
@@ -146,10 +150,14 @@ class WebViewInterface internal constructor(
     }
 
     @JavascriptInterface
-    fun exec(cmd: String): String {
+    fun exec(cmd: String): String = executeSynchronous(cmd, null)
+
+    internal fun executeSynchronous(cmd: String, options: String?): String {
         return try {
+            require('\u0000' !in cmd) { "Invalid command" }
+            val finalCommand = StringBuilder().also { processOptions(it, options) }.append(cmd).toString()
             val command = openCommand() ?: return ""
-            try { ShellUtils.fastCmd(command.shell, cmd).takeIf { pageOpen() } ?: "" }
+            try { ShellUtils.fastCmd(command.shell, finalCommand).takeIf { pageOpen() } ?: "" }
             finally { finishCommand(command) }
         } catch (error: Exception) {
             // The legacy overload exposes stdout only. Keep that contract and
@@ -230,6 +238,11 @@ class WebViewInterface internal constructor(
     }
 
     private fun postExecResult(callbackFunc: String, code: Int, stdout: String, stderr: String) {
+        if (session != null) {
+            if (pageOpen()) session.emit(JSONObject().put("kind", "exec").put("callback", callbackFunc)
+                .put("code", code).put("stdout", stdout).put("stderr", stderr))
+            return
+        }
         callbacks.exec(callbackFunc, code, stdout, stderr)?.let(::postJavascript)
     }
 
@@ -247,7 +260,10 @@ class WebViewInterface internal constructor(
         }
 
         val emitData = fun(name: String, data: String) {
-            callbacks.data(callbackFunc, name, data)?.let(::postJavascript)
+            if (session != null) {
+                if (pageOpen()) session.emit(JSONObject().put("kind", "data").put("callback", callbackFunc)
+                    .put("stream", name).put("value", data))
+            } else callbacks.data(callbackFunc, name, data)?.let(::postJavascript)
         }
 
         val stdout = object : CallbackList<String>({ it.run() }) {
@@ -300,11 +316,20 @@ class WebViewInterface internal constructor(
     }
 
     private fun postSpawnResult(callbackFunc: String, code: Int, error: String) {
+        if (session != null) {
+            if (pageOpen()) session.emit(JSONObject().put("kind", "exit").put("callback", callbackFunc)
+                .put("code", code).put("stderr", error))
+            return
+        }
         callbacks.result(callbackFunc, code, error)?.let(::postJavascript)
     }
 
     @JavascriptInterface
     fun toast(msg: String) {
+        if (session != null) {
+            if (pageOpen()) session.emit(JSONObject().put("kind", "toast").put("message", msg))
+            return
+        }
         val target = webView?.takeIf { pageOpen() } ?: return
         target.post {
             if (pageOpen() && webView === target) Toast.makeText(target.context, msg, Toast.LENGTH_SHORT).show()
@@ -314,6 +339,10 @@ class WebViewInterface internal constructor(
     @JavascriptInterface
     fun fullScreen(enable: Boolean) {
         if (!pageOpen()) return
+        if (session != null) {
+            session.emit(JSONObject().put("kind", "fullScreen").put("enable", enable))
+            return
+        }
         val context = webView?.context
         if (context is Activity) {
             Handler(Looper.getMainLooper()).post {
@@ -330,16 +359,19 @@ class WebViewInterface internal constructor(
 
     @JavascriptInterface
     fun enableEdgeToEdge(enable: Boolean = true) {
-        if (pageOpen()) state.isInsetsEnabled = enable
+        if (!pageOpen()) return
+        if (session != null) session.emit(JSONObject().put("kind", "edgeToEdge").put("enable", enable))
+        else state?.isInsetsEnabled = enable
     }
 
     @JavascriptInterface
     fun moduleInfo(): String {
         if (!pageOpen()) return "{}"
-        val moduleId = state.moduleId ?: File(modDir).name
+        if (session != null) return session.moduleInfoJson.takeIf { pageOpen() } ?: "{}"
+        val moduleId = state?.moduleId ?: File(modDir).name
         val seed = synchronized(lifecycleLock) {
             val pending = moduleInfoSeed.also { moduleInfoSeed = null }
-            if (pageOpen() && state.moduleId == moduleInfoId && ModeRuntime.activation === moduleInfoActivation) pending else null
+            if (pageOpen() && state?.moduleId == moduleInfoId && ModeRuntime.activation === moduleInfoActivation) pending else null
         }
         val metadata = seed?.let { runCatching { JSONObject(it) }.getOrNull() }
             ?.takeIf { it.optString("id") == moduleId }
@@ -364,10 +396,12 @@ class WebViewInterface internal constructor(
         }.toString()
     }
 
+    private fun apps() = session?.apps() ?: webUIApps()
+
     @JavascriptInterface
     fun listPackages(type: String): String {
         if (!pageOpen()) return "[]"
-        val packageNames = webUIApps()
+        val packageNames = apps()
             .filter { appInfo ->
                 if (appInfo.special) return@filter false
                 val flags = appInfo.packageInfo.applicationInfo?.flags ?: 0
@@ -394,7 +428,7 @@ class WebViewInterface internal constructor(
         // 入参是 JS 拼的字符串，畸形 JSON 不能让异常冲出 JS 桥；失败返回空数组 "[]"
         val packageNames = runCatching { JSONArray(packageNamesJson) }.getOrElse { JSONArray() }
         val jsonArray = JSONArray()
-        val appMap = webUIApps().filterNot { it.special }.associateBy { it.packageName }
+        val appMap = apps().filterNot { it.special }.associateBy { it.packageName }
         for (i in 0 until packageNames.length()) {
             val pkgName = packageNames.getString(i)
             val appInfo = appMap[pkgName]
@@ -422,9 +456,13 @@ class WebViewInterface internal constructor(
 
     @JavascriptInterface
     fun exit() {
+        if (session != null) {
+            if (pageOpen()) session.emit(JSONObject().put("kind", "exitPage"))
+            return
+        }
         val target = webView?.takeIf { pageOpen() } ?: return
         target.post {
-            if (pageOpen() && webView === target) state.requestExit()
+            if (pageOpen() && webView === target) state?.requestExit()
         }
     }
 }

@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+
 import sys
+import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -21,7 +23,7 @@ def identity(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--java', type=Path, default=jdk_tool("java"))
+    parser.add_argument('--java', type=Path, default=jdk_tool())
     parser.add_argument('--suite', action='append')
     parser.add_argument('--sample', type=Path, action='append', default=[])
     args = parser.parse_args()
@@ -62,7 +64,7 @@ def main():
     source_list = args.out / 'javac.args'
     source_list.write_text('\n'.join('"' + str(p).replace('\\', '/') + '"' for p in frozen),
                            encoding='utf-8')
-    status = run('javac', [args.java.with_name('javac.exe'), '--release', '17', '-encoding',
+    status = run('javac', [args.java.with_name('javac' + ('.exe' if os.name == 'nt' else '')), '--release', '17', '-encoding',
                            'UTF-8', '-d', classes, '@' + str(source_list)])
     if status == 0:
         classpath = os.pathsep.join(map(str, [classes, args.out / 'source/image-core/src/test/resources']))
@@ -75,7 +77,7 @@ def main():
                     receipt['skipped'].append(dict(suite=suite, reason='requires two real-image --sample inputs'))
                     continue
                 extra = args.sample
-            code = run(suite, [args.java, '-Xmx768m', '-Djava.io.tmpdir=' + os.environ['TEMP'],
+            code = run(suite, [args.java, '-Xmx768m', '-Djava.io.tmpdir=' + (os.environ.get("TEMP") or tempfile.gettempdir()),
                                '-cp', classpath, 'dev.maplesu.image.' + suite, *extra])
             status = status or code
     receipt['sourcesUnchanged'] = records == [identity(Path(r['path'])) for r in records]

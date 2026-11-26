@@ -36,7 +36,7 @@ KModErr PatchAuditLogStart::patch_audit_log_start() {
     asmjit::Label label_end = a->newLabel();
 
     kernel_module::arm64_before_hook_start(a);
-    emit_check_current_allow_selinux_to_x10(a);
+    RETURN_IF_ERROR(emit_check_current_allow_selinux_to_x10_checked(a));
     a->cbz(asmjit::a64::x10, label_end);
     a->mov(asmjit::a64::w0, asmjit::a64::wzr);
     kernel_module::arm64_before_hook_end(a, false);

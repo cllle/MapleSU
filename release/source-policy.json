@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "public_scope": "release-candidate",
+  "public_scope": "work-in-progress-source-checkpoint",
   "excluded_prefixes": [
     ".handoff/",
     ".private/",
@@ -21,7 +21,13 @@
     "zygisk/",
     "third_party/rezygisk/",
     "runtime/ultra/reference/",
-    ".tmp/"
+    ".tmp/",
+    "docs/parallel/",
+    "notes/",
+    ".scratch/",
+    "runtime/maplesu-sdk/sdk/notes/work/",
+    "runtime/upstream-pro/",
+    "jailbreak-providers/skroot-ghostlock/gates/out/"
   ],
   "allowed_binaries": {
     "gradle/wrapper/gradle-wrapper.jar": "7a9ce74cff467ca1bf60a4fcd9f05185acceda4d0f382434d393e17864262c5d",
@@ -73,13 +79,13 @@
   "release_blockers": [
     {
       "id": "complete-source-build",
-      "resolved": true,
-      "detail": "Complete Manager release, client AAR and consumer APK built from the source export with all 196 tasks executed. Native SDK, helper and paired backend match the development inputs; the client AAR matches the previous cloud release. Source archive input hashes and host suites verified."
+      "resolved": false,
+      "detail": "This work-in-progress source checkpoint has not completed a clean source-export build. Historical source-export build results do not establish acceptance of this snapshot."
     },
     {
       "id": "maplesu-5.2.1-acceptance",
       "resolved": false,
-      "detail": "MapleSU 5.2.1 has no accepted same-generation release. The latest complete SDK clean builds report 160 member-gate problems across 78 failed members (raw producer exit 7). Source-only review and stage completed with stageGranted=false. The matching signed APK, image and required device regressions remain unverified. Historical complete-source-build results do not resolve this blocker."
+      "detail": "MapleSU 5.2.1 has no accepted same-generation Release from this source checkpoint. SDK member gates, matching signed Manager and boot/init_boot artifacts, installation paths and required device regressions remain pending. Source review and retained-input hashes do not establish runtime acceptance."
     }
   ],
   "excluded_files": [
@@ -113,7 +119,50 @@
     "tools/tests/test_verify_pro_sdk_505.py",
     "tools/verify_development_package.py",
     "tools/verify_dual_mode.py",
-    "tools/verify_packages.py"
+    "tools/verify_packages.py",
+    "AGENTS.md",
+    "Maple.md",
+    "docs/SDK-IMAGE-PATCHER-CONTINUATION-PROMPT.md",
+    "docs/SDK-REFACTOR-CONTINUATION-PROMPT.md",
+    "docs/SDK-REFACTOR-INTEGRATION.md",
+    "docs/SDK-REFACTOR-P0.md",
+    "docs/SDK-REFACTOR-P1.md",
+    "docs/SDK-REFACTOR-P2.md",
+    "docs/SDK-REFACTOR-P3.md",
+    "docs/SDK-REFACTOR-P4-DEVELOPMENT-CLOSEOUT-20261120.md",
+    "docs/SDK-REFACTOR-P4-TODO-20261120.md",
+    "docs/SDK-REFACTOR-P4.md",
+    "docs/SDK-REFACTOR-P5-P7-HANDOFF.md",
+    "docs/SDK-REFACTOR-P5-P7.md",
+    "docs/SDK-REFACTOR-PARALLEL-BOUNDARIES.md",
+    "docs/SDK-REFACTOR-PROGRESS.md",
+    "docs/SDK-REFACTOR-REGRESSION-SUPPLEMENT.md",
+    "pelican-ride.html",
+    "runtime/maplesu-sdk/sdk/notes/A-RECOVERY-NOTES.md",
+    "runtime/maplesu-sdk/sdk/notes/ACCEPTANCE.md",
+    "runtime/maplesu-sdk/sdk/notes/ARCHIVE-CENSUS-260.json",
+    "runtime/maplesu-sdk/sdk/notes/DEVICE-ITEMS.md",
+    "runtime/maplesu-sdk/sdk/notes/EQUIVALENCE.md",
+    "runtime/maplesu-sdk/sdk/notes/HELPER.md",
+    "runtime/maplesu-sdk/sdk/notes/HISTORY-KERNEL-REQUEST-KEY.json",
+    "runtime/maplesu-sdk/sdk/notes/HISTORY-KERNEL-REQUEST-RECEIPT.json",
+    "runtime/maplesu-sdk/sdk/notes/HISTORY-STORAGE-HISTORY.json",
+    "runtime/maplesu-sdk/sdk/notes/MANIFEST-COVERAGE.md",
+    "runtime/maplesu-sdk/sdk/notes/MEMBER-SOURCE-MAP.tsv",
+    "runtime/maplesu-sdk/sdk/notes/MODULE-DESC-BOUNDS-INTEGRATION.md",
+    "runtime/maplesu-sdk/sdk/notes/MODULE-DESC-BOUNDS-SYMBOL-DELTA.json",
+    "runtime/maplesu-sdk/sdk/notes/MODULE-STATE-HISTORY.json",
+    "runtime/maplesu-sdk/sdk/notes/MODULE-STATE-INTEGRATION.md",
+    "runtime/maplesu-sdk/sdk/notes/MODULE-STATE-SYMBOL-DELTA.json",
+    "runtime/maplesu-sdk/sdk/notes/PAYLOADS.md",
+    "runtime/maplesu-sdk/sdk/notes/SAMPLE-CONCLUSION-TEMPLATE.md",
+    "runtime/maplesu-sdk/sdk/notes/SAMPLE-REPORT.md",
+    "runtime/maplesu-sdk/sdk/notes/UNRECOVERED.md",
+    "runtime/maplesu-sdk/sdk/notes/equivalence-report.json",
+    "runtime/maplesu-sdk/sdk/notes/payload-capability-report.json",
+    "scripts/cleanup-d-space.ps1",
+    "scripts/cleanup-p2-build-space.ps1",
+    "scripts/clear-disposable-caches.ps1"
   ],
   "independent_repositories": [
     {

@@ -63,7 +63,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -279,7 +278,6 @@ fun ModulePagerMiuix(
         showShortcutDialog.value = true
     }
 
-    val refreshTick = remember { mutableIntStateOf(0) }
     var fabHeight by remember { mutableStateOf(FloatingActionButtonDefaults.MinHeight) }
     val listBottomPadding = bottomInnerPadding + 12.dp +
         (if (uiState.installButtonVisible) fabHeight + 36.dp else 0.dp)
@@ -531,7 +529,6 @@ fun ModulePagerMiuix(
                 pullToRefreshState = pullToRefreshState,
                 onRefresh = {
                     actions.onRefresh()
-                    refreshTick.intValue++
                 },
                 refreshTexts = refreshTexts,
                 contentPadding = contentPadding,
@@ -572,7 +569,6 @@ fun ModulePagerMiuix(
                         listState,
                         uiState.sortEnabledFirst,
                         uiState.sortActionFirst,
-                        refreshTick.intValue,
                         isBusy = { latestRefreshing.value },
                     ) { latestModules.value }
                     Box(modifier = if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier) {
@@ -794,6 +790,7 @@ private fun ModuleList(
             val moduleUpdateInfo = updateInfoMap[module.id] ?: ModuleUpdateInfo.Empty
             val content: @Composable () -> Unit = {
                 ModuleItem(
+                    modifier = Modifier.animateItem(),
                     module = module,
                     isPending = module.id in pendingModuleIds,
                     removalPending = module.id in removalChanges,
@@ -847,6 +844,7 @@ fun ModuleItem(
     removalPending: Boolean = false,
     recoveryOnly: Boolean = false,
     environmentWebUiAvailable: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     val secondaryContainer = colorScheme.secondaryContainer
     val actionIconTint = colorScheme.onSurface
@@ -882,7 +880,7 @@ fun ModuleItem(
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp)
+        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp)
             .onSizeChanged { cardSize = it }.then(cardArtModifier),
         insideMargin = PaddingValues(16.dp),
         colors = if (art != null) CardColors(Color.Transparent, colorScheme.onSurfaceContainer)

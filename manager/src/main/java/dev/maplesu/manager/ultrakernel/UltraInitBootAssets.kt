@@ -25,7 +25,7 @@ internal object UltraInitBootAssets {
         "handoff" to 16L * 1024 * 1024, "bridge" to 64L * 1024 * 1024,
         "targetContract" to 1024L * 1024, "config" to 1024L * 1024,
         "sessionAbi" to 1024L * 1024, "bundleSources" to 1024L * 1024,
-        "taskProfileAbi" to 1024L * 1024,
+        "taskProfileAbi" to 1024L * 1024, "abiEvidence" to 1024L * 1024,
         "moduleSymvers" to 64L * 1024 * 1024, "btf" to 64L * 1024 * 1024,
         "ksuInit" to 16L * 1024 * 1024,
     )

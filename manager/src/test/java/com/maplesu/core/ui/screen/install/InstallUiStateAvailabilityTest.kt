@@ -11,7 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InstallUiStateAvailabilityTest {
-    @Test fun automaticInstallKeepsTheObservedTargetAndStillRequiresAPatchableSource() {
+    @Test fun automaticInstallKeepsTheObservedTargetWithoutRequiringAPreviewPlan() {
         for (carrier in listOf(InstallPartition.BOOT, InstallPartition.INIT_BOOT)) {
             val current = state(partition = carrier).copy(
                 partitionOptions = listOf(InstallPartition.BOOT, InstallPartition.INIT_BOOT),
@@ -20,7 +20,7 @@ class InstallUiStateAvailabilityTest {
             )
             assertEquals(UltraInstallRoute(carrier.wire), current.ultraRoute)
             assertTrue(current.canInstall)
-            assertFalse(current.copy(bootFlow = null).canInstall)
+            assertTrue(current.copy(bootFlow = null).canInstall)
             assertFalse(current.copy(targetSelectable = false).canInstall)
             val other = if (carrier == InstallPartition.BOOT) InstallPartition.INIT_BOOT else InstallPartition.BOOT
             assertEquals(UltraInstallRoute(other.wire), current.copy(partition = other).ultraRoute)
@@ -75,7 +75,7 @@ class InstallUiStateAvailabilityTest {
         sourceLoading = sourceLoading,
     )
 
-    // ── Ultra：仍然由步骤 ③ 的 Pro 内核目标决定 ─────────────────────────────
+    // ── Ultra：boot 读取真实内核，init_boot 在执行时选择 KMI 组件 ──────────────
 
     @Test
     fun nextIsAvailableOnceBootAndKernelVersionAreChosen() {
@@ -113,7 +113,7 @@ class InstallUiStateAvailabilityTest {
     }
 
     @Test
-    fun currentPartitionWaitsForRootAndStockBackupConfirmation() {
+    fun currentPartitionRespectsThePageLifecycleAndSourceSelection() {
         assertFalse(state(directAccessReady = false).hasInstallSource)
         assertFalse(state(directAccessReady = false).canInstall)
         assertFalse(state(sourceLoading = true).hasInstallSource)
@@ -121,9 +121,14 @@ class InstallUiStateAvailabilityTest {
     }
 
     @Test
-    fun nextIsDisabledWhileTheKernelVersionIsNotSelectable() {
-        // 步骤 ③ 还没选出目标（识别中 / 修不了 / 还没选 boot）→ 不能进入修补。
-        assertFalse(state(target = null).canInstall)
+    fun nextDoesNotTreatAReadingOrFailedPreviewAsAnExecutionVerdict() {
+        for (partition in listOf(InstallPartition.BOOT, InstallPartition.INIT_BOOT)) {
+            val selected = state(target = null, partition = partition)
+            assertTrue(selected.canInstall)
+            assertTrue(selected.copy(bootFlow = InstallBootFlow.reading("chosen.img", "")).canInstall)
+            assertTrue(selected.copy(bootFlow = InstallBootFlow.failed("chosen.img", "",
+                "ULTRA_KERNEL_GENERATE_SITE_COVERAGE")).canInstall)
+        }
     }
 
     @Test
@@ -157,8 +162,8 @@ class InstallUiStateAvailabilityTest {
     }
 
     @Test
-    fun normalDirectInstallIsUnavailableWhenTheKernelIsUnsupported() {
-        assertFalse(
+    fun normalDefersTheKernelVerdictToTheExecutionSource() {
+        assertTrue(
             state(
                 method = InstallMethod.DirectInstall,
                 target = null,
@@ -166,6 +171,38 @@ class InstallUiStateAvailabilityTest {
                 normalDecision = normalBlocked(),
             ).canInstall,
         )
+    }
+
+    @Test
+    fun pageAvailabilityDoesNotTurnAnExecutionFailureIntoSuccess() {
+        val decision = dev.maplesu.manager.installer.InstallTargetDispatch.decide(
+            dev.maplesu.manager.installer.InstallTargetRequest(
+                target = InstallTargetMode.NORMAL,
+                source = dev.maplesu.manager.installer.InstallSourceKind.CURRENT_PARTITION,
+                partition = "init_boot",
+                kernelRelease = "unreadable",
+            ),
+        )
+        assertTrue(decision is InstallTargetDecision.Blocked)
+        assertEquals(InstallTargetCodes.KMI_UNPARSEABLE, (decision as InstallTargetDecision.Blocked).code)
+        assertTrue(state(mode = InstallTargetMode.NORMAL, normalDecision = decision).canInstall)
+    }
+
+    @Test fun normalFileDoesNotBindTheChosenKmiToTheCurrentDevice() {
+        for (deviceRelease in listOf("", "6.1.99-android14-11", "6.6.89-android15-8")) {
+            val decision = dev.maplesu.manager.installer.InstallTargetDispatch.decide(
+                dev.maplesu.manager.installer.InstallTargetRequest(
+                    target = InstallTargetMode.NORMAL,
+                    source = dev.maplesu.manager.installer.InstallSourceKind.IMAGE,
+                    partition = "init_boot",
+                    kernelRelease = deviceRelease,
+                    availableKmis = listOf("android15-6.6"),
+                ),
+            )
+            assertTrue(decision is InstallTargetDecision.Ready)
+            assertEquals(null, (decision as InstallTargetDecision.Ready).kmi)
+            assertEquals("init_boot", decision.partition)
+        }
     }
 
     @Test
@@ -184,9 +221,9 @@ class InstallUiStateAvailabilityTest {
 
     @Test
     fun ultraIgnoresTheNormalDecision() {
-        // Ultra 的判据只看 bootFlow：即使 Normal 的结论是 Ready 也不能让 Ultra 可点。
-        assertFalse(
-            state(target = null, mode = InstallTargetMode.ULTRA, normalDecision = normalReady()).canInstall,
+        assertTrue(
+            state(target = null, mode = InstallTargetMode.ULTRA, partition = InstallPartition.BOOT,
+                normalDecision = normalReady()).canInstall,
         )
     }
 

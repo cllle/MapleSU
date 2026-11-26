@@ -72,4 +72,10 @@
     <string name="install_boot_saved_no_root">No access to the boot partition; the patched image was saved only.</string>
     <string name="install_boot_saved_no_transaction">This entry cannot write a partition directly; the patched image was saved only.</string>
     <string name="install_boot_saved_release_mismatch">This image targets kernel %1$s but the running kernel is %2$s; the patched image was saved only.</string>
+    <string name="install_paired_boot_title">Companion boot image</string>
+    <string name="install_paired_boot_select">Select or replace companion boot</string>
+    <string name="install_paired_boot_needed">Select the boot image that belongs to this init_boot. The patched image will be saved.</string>
+    <string name="install_paired_boot_checking">Checking the selected image pair…</string>
+    <string name="install_paired_boot_ready">Resolved for %1$s · patch and save</string>
+    <string name="install_paired_boot_current">Current device boot · %1$s</string>
 </resources>

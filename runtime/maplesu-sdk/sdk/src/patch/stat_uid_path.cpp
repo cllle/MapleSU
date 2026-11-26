@@ -28,7 +28,8 @@ extern "C" void maplesu_emit_uid_stat_copy(Assembler* a, KModErr& error,
  a->mov(x11, source);
  a->mov(x10, sp);
  kernel_module::string_ops::kstrcpy(a, x10, x11);
- kernel_module::export_symbol::get_current(a, x12);
+ error = kernel_module::export_symbol::get_current_checked(a, x12);
+ if (is_failed(error)) return;
  a->ldr(x12, ptr(x12, layout[0]));
  a->ldr(w12, ptr(x12, layout[1])); // Same full cred.uid as the allowlist and exec path.
  aarch64_asm_set_x_cstr_ptr(a, x15, std::string("0123456789abcdef"));

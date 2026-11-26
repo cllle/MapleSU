@@ -25,6 +25,8 @@ def main():
                         default=ROOT / ".tmp/p0-mode-a-tests/compile-inputs.json")
     parser.add_argument("--manager-build", type=Path,
                         default=ROOT / ".tmp/p1-delivery-r7/gradle-build/manager")
+    parser.add_argument("--consumer-classes", type=Path, action="append",
+                        help="explicit dependency class roots (for example current Release Kotlin/Java/image/installer)")
     parser.add_argument("--resource-jar", type=Path,
                         help="current generated Manager R.jar, ahead of cached dependencies")
     parser.add_argument("--tests", nargs="+",
@@ -33,17 +35,20 @@ def main():
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     inputs = json.loads(args.compile_inputs.read_text(encoding="utf-8"))
-    cached = args.manager_build / "intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes"
-    if not cached.is_dir():
-        parser.error(f"Manager dependency classes missing: {cached}")
+    consumer_classes = args.consumer_classes or [
+        args.manager_build / "intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes",
+        args.manager_build / "intermediates/javac/debug/compileDebugJavaWithJavac/classes",
+        ROOT / ".tmp/p0-mode-a-tests/b2-wiring.jar",
+        ROOT / ".tmp/p0-mode-a-tests/c-installer-classes",
+    ]
+    consumer_classes = [path.resolve() for path in consumer_classes]
+    if any(not path.exists() for path in consumer_classes):
+        parser.error("Dependency class root missing: " + ", ".join(str(path) for path in consumer_classes if not path.exists()))
+    cached = consumer_classes[0]
     java = shutil.which("java")
     if not java:
         parser.error("Java 21 is required")
-    deps = [cached,
-            args.manager_build / "intermediates/javac/debug/compileDebugJavaWithJavac/classes",
-            ROOT / ".tmp/p0-mode-a-tests/b2-wiring.jar",
-            ROOT / ".tmp/p0-mode-a-tests/c-installer-classes",
-            *map(Path, inputs["libraries"])]
+    deps = [*consumer_classes, *map(Path, inputs["libraries"])]
     if args.resource_jar:
         deps.insert(0, args.resource_jar.resolve())
     deps.insert(0, cached_jar("org.json", "json", "20240303"))
@@ -69,7 +74,8 @@ def main():
         "com/maplesu/core/data/model/Module.kt",
         "com/maplesu/core/data/repository/ModuleRepositoryImpl.kt",
         "com/maplesu/core/ui/screen/module/ModulePreinit.kt",
-        "dev/maplesu/manager/modules/ModuleListParsers.kt"]]
+        "dev/maplesu/manager/modules/ModuleListParsers.kt",
+        "dev/maplesu/manager/workmode/ModeRuntime.kt"]]
     tests = ["KsuModuleInstallTest", "KsuParsersAndSettingsTest", "KsuModuleActionTest",
              "KsuModuleIdContractTest", "KsuCommandConstructionTest", "KsuSettingsFeatureOutputTest",
              "KsuVersionIdentityTest", "KsuUapiFreezeTest", "KsuBootReceiptTest",
@@ -99,7 +105,7 @@ def main():
     classpath = os.pathsep.join(map(str, [jar] + deps))
     commands = [[java, "-Xmx768m", "-cp", os.pathsep.join(map(str, compiler_deps)),
                  "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
-                 "-jvm-target", "21", "-Xfriend-paths=" + str(cached),
+                 "-jvm-target", "21", "-Xfriend-paths=" + ",".join(map(str, consumer_classes)),
                  "-classpath", os.pathsep.join(map(str, deps)), "-d", str(jar),
                  *map(str, sources)],
                 [java, "-cp", classpath, "org.junit.runner.JUnitCore",
@@ -118,7 +124,8 @@ def main():
         passed=result.returncode == 0 and unchanged, exitCode=result.returncode,
         sourcesUnchanged=unchanged, sourceSha256=digests, tests=tests,
         apkProduced=False, deviceTestsPerformed=False, partitionWrites=False,
-        dependencyClasses=str(cached), compileInputs=str(args.compile_inputs),
+        dependencyClasses=str(cached), consumerClassRoots=list(map(str, consumer_classes)),
+        compileInputs=str(args.compile_inputs),
     ), indent=2) + "\n", encoding="utf-8")
     raise SystemExit(result.returncode if unchanged else 1)
 

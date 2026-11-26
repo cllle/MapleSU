@@ -582,7 +582,7 @@ int msu_read_observed_record_identity(struct msu_record_bytes global,
 #define MSU_SIGNING_CERT_BYTES 1024U
 struct signing_ref { msu_rec_u32 index, flags; size_t at; };
 struct signing_record {
-    struct signing_ref current, past[MSU_SIGNING_CERTS];
+    struct signing_ref current_signer, past[MSU_SIGNING_CERTS];
     msu_rec_u32 past_count, scheme;
 };
 static void start_document(struct parser *p, struct msu_record_bytes b,
@@ -601,7 +601,7 @@ static __attribute__((__noinline__)) int signing_record(struct msu_record_bytes 
     struct event *e = &scratch->event;
     struct span *stack = scratch->stack;
     unsigned int depth = 0, roots = 0, matches = 0, target = 0;
-    unsigned int sigs = 0, pasts = 0, current = 0, past = 0;
+    unsigned int sigs = 0, pasts = 0, current_signer = 0, past = 0;
     msu_rec_u32 expected_past = 0, count;
     char namebuf[256];
     if (!b.data || !b.length || b.length > MSU_RECORD_LIMIT) return -1;
@@ -630,8 +630,8 @@ static __attribute__((__noinline__)) int signing_record(struct msu_record_bytes 
                 out->scheme < 1 || out->scheme > 4) return -1;
         } else if (target && depth == 4 && is(stack[2], "sigs")) {
             if (is(e->name, "cert")) {
-                if (++current != 1 || number(get(e, "index"), &out->current.index)) return -1;
-                out->current.at = p.pos;
+                if (++current_signer != 1 || number(get(e, "index"), &out->current_signer.index)) return -1;
+                out->current_signer.at = p.pos;
             } else if (is(e->name, "pastSigs")) {
                 if (++pasts != 1 || out->scheme < 3 ||
                     number(get(e, "count"), &expected_past) ||
@@ -646,8 +646,8 @@ static __attribute__((__noinline__)) int signing_record(struct msu_record_bytes 
         } else if (target && depth > 3 && is(stack[2], "sigs")) return -1;
         if (e->self) { if (depth == 2) target = 0; --depth; }
     }
-    if (depth || roots != 1 || matches != 1 || sigs != 1 || current != 1 ||
-        past != expected_past || (past && out->past[past - 1].index != out->current.index)) return -1;
+    if (depth || roots != 1 || matches != 1 || sigs != 1 || current_signer != 1 ||
+        past != expected_past || (past && out->past[past - 1].index != out->current_signer.index)) return -1;
     out->past_count = past; return 0;
 }
 static int hex_digit(msu_rec_u8 c)
@@ -697,7 +697,7 @@ static __attribute__((__noinline__)) int signing_digests(struct msu_record_bytes
         if (e->type != 1 || !is(e->name, "cert") || !(key = get(e, "key"))) continue;
         if (number(get(e, "index"), &index)) return -1;
         for (i = 0; i <= record->past_count; ++i) {
-            const struct signing_ref *ref = i ? &record->past[i - 1] : &record->current;
+            const struct signing_ref *ref = i ? &record->past[i - 1] : &record->current_signer;
             if (index == ref->index) {
                 if (found[i] || p.pos > ref->at) return -1;
                 needed = 1;
@@ -706,7 +706,7 @@ static __attribute__((__noinline__)) int signing_digests(struct msu_record_bytes
         if (!needed) continue;
         if (signing_key(*key, certificate, &bytes) || sha256(context, certificate, bytes, digest)) return -1;
         for (i = 0; i <= record->past_count; ++i) {
-            const struct signing_ref *ref = i ? &record->past[i - 1] : &record->current;
+            const struct signing_ref *ref = i ? &record->past[i - 1] : &record->current_signer;
             if (index == ref->index) {
                 found[i] = 1; sizes[i] = (msu_rec_u32)bytes;
                 memcpy(digests[i], digest, 32);

@@ -12,6 +12,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -72,7 +73,7 @@ fun ModulePager(
 
     val webUILauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
-    ) { viewModel.fetchModuleList(resort = false) }
+    ) { viewModel.refreshAfterReturn() }
 
     // Request notification permission for download progress notifications
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -86,7 +87,7 @@ fun ModulePager(
     // WebUI 解析失败（SDK 拒绝 / 端口没起来 / 非 HTTP / 代理不可用）：用对话框说明原因，
     // 不用 Toast —— Toast 一闪而过就等同于「点了没反应」。
     // Keep the list interactive while a module starts, and merge clicks per module.
-    val openingWebUi = remember { mutableMapOf<String, Job>() }
+    val openingWebUi = remember { mutableStateMapOf<String, Job>() }
     var webUiFailure by remember { mutableStateOf<WebUiFailure?>(null) }
     var webUiRetryModuleId by remember { mutableStateOf<String?>(null) }
     fun openEnvironmentWebUi(moduleId: String, moduleName: String = "", moduleInfo: Module? = null) {
@@ -164,13 +165,7 @@ fun ModulePager(
 
     LifecycleResumeEffect(Unit) {
         if (initialResumeHandled.value && latestIsCurrentPage) {
-            val state = viewModel.uiState.value
-            if (!state.isRefreshing) {
-                viewModel.fetchModuleList(
-                    checkUpdate = !state.hasLoaded || viewModel.isNeedRefresh,
-                    resort = !state.hasLoaded,
-                )
-            }
+            viewModel.refreshAfterReturn()
         }
         initialResumeHandled.value = true
         onPauseOrDispose {}
@@ -178,7 +173,7 @@ fun ModulePager(
 
     val actions = ModuleActions(
         onRefresh = {
-            viewModel.fetchModuleList(checkUpdate = true)
+            viewModel.fetchModuleList(checkUpdate = true, resort = false, coalesce = true)
         },
         onSearchStatusChange = {
             viewModel.updateSearchStatus(it)
@@ -242,6 +237,7 @@ fun ModulePager(
             viewModel.toggleSortEnabledFirst()
         },
         onOpenWebUi = { module ->
+            viewModel.markNeedRefresh()
             if (ModuleWebUiLauncher.isUltraModuleId(module.id)) {
                 openEnvironmentWebUi(module.id, module.name, module)
             } else {
@@ -276,7 +272,8 @@ fun ModulePager(
 
     when (uiMode) {
         UiMode.Miuix -> ModulePagerMiuix(
-            uiState = rawUiState.copy(isUltra = activeMode == WorkMode.LITE, modeResolved = activeMode != null, isCurrentPage = isCurrentPage),
+            uiState = rawUiState.copy(isUltra = activeMode == WorkMode.LITE, modeResolved = activeMode != null,
+                isCurrentPage = isCurrentPage, pendingModuleIds = rawUiState.pendingModuleIds + openingWebUi.keys),
             confirmDialogState = rawUiState.confirmDialogState,
             moduleEvent = viewModel.moduleEvent,
             actions = actions,
@@ -286,7 +283,8 @@ fun ModulePager(
         )
 
         UiMode.Material -> ModulePagerMaterial(
-            uiState = rawUiState.copy(isUltra = activeMode == WorkMode.LITE, modeResolved = activeMode != null, isCurrentPage = isCurrentPage),
+            uiState = rawUiState.copy(isUltra = activeMode == WorkMode.LITE, modeResolved = activeMode != null,
+                isCurrentPage = isCurrentPage, pendingModuleIds = rawUiState.pendingModuleIds + openingWebUi.keys),
             confirmDialogState = rawUiState.confirmDialogState,
             moduleEvent = viewModel.moduleEvent,
             actions = actions,

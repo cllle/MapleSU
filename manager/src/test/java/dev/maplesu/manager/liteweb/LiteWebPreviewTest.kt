@@ -105,6 +105,68 @@ class LiteWebPreviewTest {
     }
 
     @Test
+    fun requestedPortUsesLiveOwnerAndPreservesToken() {
+        val existing = LiteWebPreviewConfig(token, 18427)
+        val store = FakeStore(value = existing)
+        val calls = mutableListOf<Int>()
+        val result = LiteWebPreviewCoordinator(store).preparePreviewUrl(18437) { current, requested ->
+            assertEquals(existing, current)
+            calls += requested
+            store.value = current.copy(port = requested)
+            null
+        } as LiteWebPreviewResult.Ok
+        assertEquals(18437, result.info.port)
+        assertEquals(existing.copy(port = 18437), store.value)
+        assertEquals(listOf(18437), calls)
+        assertEquals(0, store.writes)
+    }
+
+    @Test
+    fun missingConfigUsesRequestedPortAndExactReadback() {
+        val store = FakeStore()
+        val result = LiteWebPreviewCoordinator(store, tokenGenerator = { token }).preparePreviewUrl(18437)
+        assertEquals(18437, (result as LiteWebPreviewResult.Ok).info.port)
+        assertEquals(LiteWebPreviewConfig(token, 18437), store.value)
+        assertEquals(1, store.writes)
+    }
+
+    @Test
+    fun sameRequestedPortDoesNotReplaceExistingConfig() {
+        val existing = LiteWebPreviewConfig(token, 18427)
+        val store = FakeStore(value = existing)
+        val result = LiteWebPreviewCoordinator(store).preparePreviewUrl(18427) { _, _ -> error("same port") }
+        assertEquals(18427, (result as LiteWebPreviewResult.Ok).info.port)
+        assertEquals(existing, store.value)
+        assertEquals(0, store.writes)
+    }
+
+    @Test
+    fun portConflictPreservesOldConfigAndOwnerError() {
+        val existing = LiteWebPreviewConfig(token, 18427)
+        val store = FakeStore(value = existing)
+        val result = LiteWebPreviewCoordinator(store).preparePreviewUrl(18437) { _, _ ->
+            LiteWebPreviewResult.Failed(LiteWebPortPolicy.CODE_CONFLICT)
+        }
+        assertEquals(LiteWebPortPolicy.CODE_CONFLICT, (result as LiteWebPreviewResult.Failed).code)
+        assertEquals(existing, store.value)
+        assertEquals(0, store.writes)
+    }
+
+    @Test
+    fun ownerSuccessRequiresPersistedRequestedPortAndOriginalToken() {
+        val existing = LiteWebPreviewConfig(token, 18427)
+        for (after in listOf(existing, existing.copy(token = "f".repeat(64), port = 18437))) {
+            val store = FakeStore(value = existing)
+            val result = LiteWebPreviewCoordinator(store).preparePreviewUrl(18437) { _, _ ->
+                store.value = after
+                null
+            }
+            assertEquals(LiteWebPreviewCodes.READBACK_FAILED, (result as LiteWebPreviewResult.Failed).code)
+            assertEquals(0, store.writes)
+        }
+    }
+
+    @Test
     fun noWritePermissionReturnsFailure() {
         val store = FakeStore(value = null, writeResult = false)
         val result = LiteWebPreviewCoordinator(store, tokenGenerator = { token }).preparePreviewUrl()

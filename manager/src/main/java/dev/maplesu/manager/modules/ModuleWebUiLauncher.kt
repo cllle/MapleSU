@@ -41,13 +41,16 @@ import dev.maplesu.manager.modules.webui.WebUiOpenResult
 import dev.maplesu.manager.modules.webui.WebUiOpenSpec
 import dev.maplesu.manager.modules.webui.WebUiRoute
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
+import dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup
 import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
 import dev.maplesu.manager.soter.SoterLane
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import dev.maplesu.manager.workmode.ModeRuntime
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -143,14 +146,17 @@ object ModuleWebUiLauncher {
         probeBudgetMillis: Long = READY_DEADLINE_MS,
         probeIntervalMillis: Long = PROBE_INTERVAL_MS,
         environmentProbe: (Context) -> Boolean = {
-            // Backend identity selects the route; the live SDK request still owns
-            // authentication and readiness. Do not put a second root IPC in front.
-            if (UltraEnvironmentProbe.usesUltraBackend(it)) !UltraEnvironmentProbe.isSafeMode(it)
+            // Reuse the observed state without adding a foreground root query.
+            // Backend identity alone does not prove the SDK environment started.
+            if (UltraEnvironmentProbe.usesUltraBackend(it))
+                UltraEnvironmentProbe.currentSnapshot(it).state == UltraEnvironmentProbe.State.Running
             else UltraEnvironmentProbe.refresh(it, force = false) == UltraEnvironmentProbe.State.Running
         },
         moduleInfo: Module? = null,
     ): WebUiFailure? = withContext(Dispatchers.IO) {
         val app = context.applicationContext
+        val openContext = currentCoroutineContext()
+        val activation = ModeRuntime.activation
         if (!WebUiOpenPolicy.mayNavigate(WebUiOpenRequest(moduleId, origin, tokenValid = true))) {
             return@withContext null
         }
@@ -177,15 +183,34 @@ object ModuleWebUiLauncher {
         val ownerScope = UltraEnvironmentProbe.webUiOwnerScope(app)
         val sink = evidenceSink ?: defaultEvidenceSink(app)
         val coordinator = WebUiOpenCoordinator(
-            sdkOpen = sdkOpenRunner ?: defaultSdkOpenRunner(app),
+            sdkOpen = SdkOpenRunner { target ->
+                openContext.ensureActive()
+                if (ModeRuntime.activation !== activation) SdkOpenOutcome(false, errorCode = "SDK_CREDENTIAL_SCOPE_CHANGED")
+                else (sdkOpenRunner ?: defaultSdkOpenRunner(app)).open(target)
+            },
             probe = httpReadyProbe ?: defaultHttpReadyProbe(probeBudgetMillis, probeIntervalMillis),
             gate = compatibilityCheck ?: defaultCompatibilityCheck(app),
             onStage = { event -> recordStage(sink, event) },
             flights = openFlights,
             pageOpen = { ready ->
                 val url = ModuleWebUiPlan.loopbackUrl(ready.port)
-                if (url == null) fail(WebUiFailureReason.PORT_MISSING, "port=${ready.port}")
-                else launch(app, url, id32, moduleName, route, ready.moduleDir, moduleInfoJson, sessionRevision, ownerScope)
+                val currentOwner = UltraEnvironmentProbe.webUiOwnerScope(app)
+                if (ModeRuntime.activation !== activation || (ownerScope != null && currentOwner != ownerScope)) {
+                    fail(WebUiFailureReason.SDK_REJECTED, "SDK_CREDENTIAL_SCOPE_CHANGED")
+                } else if (url == null) fail(WebUiFailureReason.PORT_MISSING, "port=${ready.port}")
+                else launch(app, url, id32, moduleName, route, ready.moduleDir, moduleInfoJson, sessionRevision, currentOwner)
+            },
+            prepareEnvironment = if (!isPro || running) null else suspend {
+                if (UltraEnvironmentProbe.isSafeMode(app)) {
+                    fail(WebUiFailureReason.ENVIRONMENT_NOT_RUNNING, "ULTRA_SAFE_MODE_ACTIVE")
+                } else {
+                    val prepared = UltraEnvironmentAutoSetup.ensure(app) {
+                        openContext.isActive && ModeRuntime.activation === activation
+                    }
+                    openContext.ensureActive()
+                    if (prepared.installed) null
+                    else fail(WebUiFailureReason.ENVIRONMENT_NOT_RUNNING, prepared.reason)
+                }
             },
         )
 

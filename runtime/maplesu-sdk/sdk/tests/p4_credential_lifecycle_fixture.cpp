@@ -32,6 +32,9 @@ using kernel_cap_t = u64;
 #define MSU_CRED_CAP_ALL ((1U << 5) - 1)
 #define MAPLESU_EFFECT_COMMITTED 8u
 #define READ_ONCE(value) (value)
+// Host-only layout seam: bind the exact transaction to the fixture structs.
+// Runtime offset discovery/qualification is outside this ownership test.
+#define MSU_DYN_FIELD(object, type, member) ((object)->member)
 #define CAP_EMPTY_SET 0ULL
 #define cap_raise(set, bit) ((set) |= (1ULL << (bit)))
 #ifndef ESTALE
@@ -44,12 +47,23 @@ using kernel_cap_t = u64;
 struct user_namespace { unsigned refs = 0; };
 user_namespace init_user_ns, other_user_ns;
 struct user_struct { unsigned refs = 1; kuid_t uid = 1000; };
-struct group_info { unsigned refs = 1, count = 0; kgid_t gid[MSU_CRED_PROFILE_MAX_GROUPS]{}; };
+struct atomic_t { unsigned refs = 1; };
+struct refcount_t { unsigned refs = 1; };
+#ifndef MSU_GROUP_INFO_REFCOUNT
+#define MSU_GROUP_INFO_REFCOUNT 0
+#endif
+#if MSU_GROUP_INFO_REFCOUNT
+using group_usage = refcount_t;
+#else
+using group_usage = atomic_t;
+#endif
+struct group_info { group_usage usage; unsigned count = 0; kgid_t gid[MSU_CRED_PROFILE_MAX_GROUPS]{}; };
 struct ucounts { unsigned refs = 1; kuid_t uid = 1000; };
 struct security_blob { u32 osid = 11, sid = 12, exec_sid = 13, create_sid = 14, keycreate_sid = 15, sockcreate_sid = 16; };
 struct mm_struct { unsigned refs = 1; };
 struct cred {
     unsigned refs = 1;
+    unsigned non_rcu = 0;
     user_namespace* user_ns = &init_user_ns;
     user_struct* user = nullptr;
     group_info* group_info = nullptr;
@@ -86,6 +100,7 @@ bool sleepable, fail_prepare, fail_alloc_uid, fail_groups, fail_ucounts, domain_
 int commit_error, validate_error, validate_error_at, adopt_error, domain_error;
 unsigned prepares, aborts, commits, validates, adopts, uid_allocs, group_allocs, ucount_sets, domain_prepares;
 unsigned live_creds = 0, live_users = 0, live_groups = 0, live_ucounts = 0, live_security = 0, live_mm = 0;
+unsigned group_sets, group_local_drops, group_created, group_destroyed;
 unsigned checks = 0, cases = 0;
 int mutation_at;
 Mutation mutation, adopt_mutation, commit_mutation;
@@ -120,17 +135,34 @@ static group_info* groups_alloc(unsigned count) {
     auto* value = new group_info;
     value->count = count;
     ++fixture::live_groups;
+    ++fixture::group_created;
     return value;
 }
 static void groups_sort(group_info* value) { std::sort(value->gid, value->gid + value->count); }
 static void put_group_info(group_info* value) {
-    assert(value && value->refs);
-    if (!--value->refs) { --fixture::live_groups; delete value; }
+    assert(value && value->usage.refs);
+    if (!--value->usage.refs) {
+        ++fixture::group_destroyed;
+        --fixture::live_groups;
+        delete value;
+    }
+}
+static void atomic_dec(atomic_t* value) {
+    fixture::check(value->refs == 2, "local atomic group reference is non-last after native setter");
+    --value->refs;
+    ++fixture::group_local_drops;
+}
+static void refcount_dec(refcount_t* value) {
+    fixture::check(value->refs == 2, "local refcount group reference is non-last after native setter");
+    --value->refs;
+    ++fixture::group_local_drops;
 }
 static void set_groups(cred* value, group_info* groups) {
-    ++groups->refs;
+    fixture::check(groups->usage.refs == 1, "new group starts with its one owned allocation reference");
     put_group_info(value->group_info);
+    ++groups->usage.refs;
     value->group_info = groups;
+    ++fixture::group_sets;
 }
 static void put_ucounts(ucounts* value) {
     assert(value && value->refs);
@@ -171,7 +203,7 @@ static cred* clone_cred(const cred* source) {
     auto* value = new cred(*source);
     value->refs = 1;
     ++value->user->refs;
-    ++value->group_info->refs;
+    ++value->group_info->usage.refs;
     ++value->ucounts->refs;
     ++value->user_ns->refs;
     value->security = new security_blob(*source->security);
@@ -198,6 +230,21 @@ static void mmdrop(mm_struct* value) {
     assert(value->refs);
     if (!--value->refs) { --fixture::live_mm; delete value; }
 }
+// Match manager_dynamic_layout.h reference semantics with the existing host
+// allocator/destructor model; no reference operation is an unconditional pass.
+static const cred* msu_dynamic_current_cred() { return current_cred(); }
+static const cred* msu_dynamic_current_real_cred() { return current_real_cred(); }
+static const cred* msu_dynamic_get_cred(const cred* value) {
+    if (!value) return nullptr;
+    const_cast<cred*>(value)->non_rcu = 0;
+    return get_cred(value);
+}
+static void msu_dynamic_put_cred(const cred* value) { put_cred(value); }
+static const cred* msu_dynamic_get_current_cred() {
+    return msu_dynamic_get_cred(msu_dynamic_current_cred());
+}
+static void msu_dynamic_mmgrab(mm_struct* value) { mmgrab(value); }
+static void msu_dynamic_mmdrop(mm_struct* value) { mmdrop(value); }
 static task_struct* share_task(task_struct* source) {
     auto* task = new task_struct{get_cred(source->cred), get_cred(source->real_cred), source->mm, source->self_exec_id};
     if (task->mm) mmgrab(task->mm);
@@ -247,6 +294,7 @@ static int commit_creds(cred* value) {
     return fixture::commit_error;
 }
 static bool cap_issubset(kernel_cap_t a, kernel_cap_t b) { return (a & ~b) == 0; }
+static kernel_cap_t cap_intersect(kernel_cap_t a, kernel_cap_t b) { return a & b; }
 static bool cap_ambient_invariant_ok(const cred* value) {
     return (value->cap_ambient & ~(value->cap_permitted & value->cap_inheritable)) == 0;
 }
@@ -284,6 +332,7 @@ static int adopt_callback(void*, const cred* before, const cred* after) {
 namespace fixture {
 void setup(const char* name) {
     case_name = name;
+    group_sets = group_local_drops = group_created = group_destroyed = 0;
     ++cases;
     sleepable = domain_supported = true;
     fail_prepare = fail_alloc_uid = fail_groups = fail_ucounts = false;
@@ -322,6 +371,8 @@ void teardown() {
     }
     tasks.clear();
     current = original_task = nullptr;
+    check(group_local_drops == group_sets, "each native installation returns exactly one non-last local reference");
+    check(group_destroyed == group_created, "native credential cleanup finally destroys each allocated group exactly once");
     check(live_creds == 0, "all task, receipt, prepare, and adopted cred references balance");
     check(live_users == 0 && live_groups == 0 && live_ucounts == 0,
         "all user/group/ucounts dependency references balance");
@@ -361,7 +412,7 @@ static void failed_before_commit(int status, u32 effects, const cred* original, 
         "failure before commit keeps current credentials and has no committed effect");
     fixture::check(fixture::prepares == expected_prepares && fixture::aborts == expected_aborts && fixture::commits == 0,
         "prepare ownership is aborted exactly once only after allocation");
-    fixture::check(original->refs == 2 && original->user->refs == 1 && original->group_info->refs == 1 &&
+    fixture::check(original->refs == 2 && original->user->refs == 1 && original->group_info->usage.refs == 1 &&
         original->ucounts->refs == 1 && original->user_ns->refs == 1 && current->mm->refs == 1,
         "failure releases held credential/mm references and prepared dependencies");
 }
@@ -418,7 +469,7 @@ int main() {
         check(value->cap_inheritable == caps.inheritable && value->cap_permitted == caps.permitted && value->cap_effective == caps.effective &&
             value->cap_bset == caps.bounding && value->cap_ambient == caps.ambient && effects == MAPLESU_EFFECT_COMMITTED,
             "CAPS writes all five requested sets and retains commit effect");
-        check(value->refs == 2 && old->refs == 2 && value->user->refs == 2 && value->group_info->refs == 2 &&
+        check(value->refs == 2 && old->refs == 2 && value->user->refs == 2 && value->group_info->usage.refs == 2 &&
             uid_allocs == 0 && group_allocs == 0 && ucount_sets == 0,
             "CAPS shares referenced dependencies across distinct credential objects without ID allocations");
         unchanged(old, snapshot, security);
@@ -464,7 +515,7 @@ int main() {
             value->gid == 23456 && value->sgid == 23456 && value->egid == 23456 && value->fsgid == 23456,
             "profile replaces each requested ID field");
         check(value->group_info != old->group_info && value->group_info->count == 3 && value->group_info->gid[0] == 1001 &&
-            value->group_info->gid[1] == 2002 && value->group_info->gid[2] == 3003 && value->group_info->refs == 1,
+            value->group_info->gid[1] == 2002 && value->group_info->gid[2] == 3003 && value->group_info->usage.refs == 1,
             "new supplementary groups are sorted with exactly one credential-owned reference");
         check(adopted_reference == value && value->refs == 3 && old->refs == 1,
             "retaining consumer owns one reference beyond the two committed task slots");
@@ -688,8 +739,25 @@ int main() {
         check(prepares == 0 && commits == 0 && aborts == 0, "profile checks never allocate or publish credentials");
         teardown();
     }
+    {
+        setup("installed groups abort after inherited capability validation");
+        msu_credential_profile profile{};
+        profile.replace_groups = true;
+        profile.groups_count = 1;
+        profile.groups[0] = 42;
+        profile.cap_write_mask = MSU_CRED_CAP_PERMITTED;
+        profile.caps.permitted = 0;
+        const auto* old = current->cred;
+        u32 effects = 99;
+        check(replace(profile, effects) == -EINVAL, "capability failure occurs after successful group installation");
+        check(group_sets == 1 && group_local_drops == 1 && group_destroyed == 1,
+            "abort releases the sole prepared group reference after the local one was returned");
+        failed_before_commit(-EINVAL, effects, old, 1, 1);
+        teardown();
+    }
     std::cout << "p4-credential-lifecycle cases=" << cases << " checks=" << checks << " passed=1 ucounts="
-        << MSU_MANAGEMENT_CRED_UCOUNTS << " cap_last=" << CAP_LAST_CAP
+        << MSU_MANAGEMENT_CRED_UCOUNTS << " group_refcount=" << MSU_GROUP_INFO_REFCOUNT
+        << " cap_last=" << CAP_LAST_CAP
         << "; deterministic host seams; no real kernel concurrency or target execution\n";
     return 0;
 }

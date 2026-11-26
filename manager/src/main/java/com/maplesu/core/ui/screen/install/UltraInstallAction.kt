@@ -43,7 +43,7 @@ internal fun ultraInstallRoute(
     }
     if (direct && resolved == UltraInstallAction.FIRST_PATCH && current != null && partition != current)
         return UltraInstallRoute(partition, "INSTALLER_CARRIER_SWITCH_REQUIRED")
-    if (resolved != UltraInstallAction.RESTORE && partition == "init_boot" && bridgeFailure != null)
+    if (direct && resolved != UltraInstallAction.RESTORE && partition == "init_boot" && bridgeFailure != null)
         return UltraInstallRoute(partition, bridgeFailure)
     return UltraInstallRoute(partition)
 }

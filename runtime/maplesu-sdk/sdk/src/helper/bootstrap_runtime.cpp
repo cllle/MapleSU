@@ -15,6 +15,7 @@
 extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 extern "C" void __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c(const char*);
 extern "C" int maplesu_environment_identity_start();
+extern "C" KModErr maplesu_prepare_su_exec_directory(const char*);
 
 namespace default_modules {
 class module_bypass_mtk_mkp { public: static KModErr init(); };
@@ -88,6 +89,11 @@ KModErr initialize_core(helper_context& context) {
     std::string mode_text;
     RETURN_IF_ERROR(stage(context, "install.mode rc=", read_config(context, "install.mode", mode_text)));
     RETURN_IF_ERROR(stage(context, "allocation-reset rc=", reset_boot_allocation_state(context)));
+    if (helper) {
+        std::string native_directory;
+        RETURN_IF_ERROR(stage(context, "native-su-storage rc=", storage::current_system_directory(native_directory)));
+        RETURN_IF_ERROR(stage(context, "native-su-executable rc=", maplesu_prepare_su_exec_directory(native_directory.c_str())));
+    }
     install::state::VendorAttempt vendor;
     const auto observation = [&](const char* name, install::state::Result value) {
         install::state::ErrnoGuard restore;

@@ -101,7 +101,7 @@ KModErr get_vm_area_struct_vm_start_offset(uint32_t &vm_start_offset, uint32_t &
     RETURN_IF_ERROR(get_kernel_shellcode_u64_result(
         [](asmjit::a64::Assembler *a, asmjit::a64::GpX &result) -> KModErr {
             KModErr call_err = KModErr::ERR_MODULE_ASM;
-            export_symbol::get_current(a, asmjit::a64::regs::x10);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
             export_symbol::get_task_mm(a, call_err, asmjit::a64::regs::x10);
             if (is_ok(call_err)) {
                 export_symbol::mmput(a, call_err, asmjit::a64::regs::x0);
@@ -170,7 +170,7 @@ KModErr get_vm_area_struct_vm_mm_offset(uint32_t &offset) {
     RETURN_IF_ERROR(get_kernel_shellcode_u64_result(
         [](asmjit::a64::Assembler *a, asmjit::a64::GpX &result) -> KModErr {
             KModErr call_err = KModErr::ERR_MODULE_ASM;
-            export_symbol::get_current(a, asmjit::a64::regs::x10);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
             export_symbol::get_task_mm(a, call_err, asmjit::a64::regs::x10);
             export_symbol::mmput(a, call_err, asmjit::a64::regs::x0);
             result = asmjit::a64::regs::x0;
@@ -262,7 +262,7 @@ KModErr get_vm_area_struct_vm_flags_offset(uint32_t &offset) {
     RETURN_IF_ERROR(get_kernel_shellcode_u64_result(
         [](asmjit::a64::Assembler *a, asmjit::a64::GpX &result) -> KModErr {
             KModErr call_err = KModErr::ERR_MODULE_ASM;
-            export_symbol::get_current(a, asmjit::a64::regs::x10);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
             export_symbol::get_task_mm(a, call_err, asmjit::a64::regs::x10);
             if (is_ok(call_err)) {
                 export_symbol::mmput(a, call_err, asmjit::a64::regs::x0);
@@ -394,7 +394,7 @@ KModErr get_vm_area_struct_vm_file_offset(uint32_t &offset) {
     RETURN_IF_ERROR(get_kernel_shellcode_u64_result(
         [](asmjit::a64::Assembler *a, asmjit::a64::GpX &result) -> KModErr {
             KModErr call_err = KModErr::ERR_MODULE_ASM;
-            export_symbol::get_current(a, asmjit::a64::regs::x10);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
             export_symbol::get_task_mm(a, call_err, asmjit::a64::regs::x10);
             if (is_ok(call_err)) {
                 export_symbol::mmput(a, call_err, asmjit::a64::regs::x0);

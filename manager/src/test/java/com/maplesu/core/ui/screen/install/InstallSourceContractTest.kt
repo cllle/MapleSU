@@ -41,16 +41,15 @@ class InstallSourceContractTest {
     }
 
     @Test
-    fun currentPartitionIsAvailableBeforeRootAndRequestsAccessOnlyAfterSelection() {
+    fun currentPartitionDefersRootAndPartitionAccessUntilSubmission() {
         val screen = source("InstallScreen")
         val options = screen.substringAfter("val installMethodOptions").substringBefore("fun showMessage")
         assertTrue(options.contains("add(InstallMethod.DirectInstall)"))
         assertFalse(options.contains("installerTarget != null"))
-        val access = screen.substringAfter("LaunchedEffect(sourceRequest,").substringBefore("val selectFileTip")
-        assertTrue(access.contains("installMethod != InstallMethod.DirectInstall || !existingRootConflictAccepted"))
-        assertTrue(access.contains("StockInstallPreflight.discoverTarget(context, targetMode)"))
-        assertFalse(access.contains("InstallerRootSession.open"))
-        assertTrue(access.contains("withContext(Dispatchers.IO)"))
+        assertTrue(screen.contains("if (!directInstallSuppressed) add(InstallMethod.DirectInstall)"))
+        assertFalse(screen.contains("StockInstallPreflight"))
+        assertFalse(screen.contains("managerRootAvailable("))
+        assertTrue(screen.contains("directAccessReady = !directInstallSuppressed && pageResumed && existingRootConflictAccepted"))
     }
 
     @Test
@@ -58,7 +57,7 @@ class InstallSourceContractTest {
         val screen = source("InstallScreen")
         assertFalse(screen.contains("StockInstallPreflight.inspect("))
         assertFalse(screen.contains("restoreOriginalForInstall"))
-        assertTrue(screen.contains("installerTarget = discovered"))
+        assertFalse(screen.contains("installerTarget"))
         assertFalse(screen.contains("StockImageUnavailableDialog("))
         assertFalse(screen.contains("CurrentPartitionConflictDialog("))
         assertTrue(screen.contains("restoreOriginalImage = restoreOriginalImage"))

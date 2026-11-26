@@ -65,7 +65,9 @@ int msu_manager_claim_materialize(const struct msu_loader_binding *b,
         (target_base < source_base + b->image_bytes && source_base < target_base + capacity))
         return MSU_LOADER_INVALID_BINDING;
     h = (const void *)(source + b->descriptor_offset);
-    if (h->magic != MSU_LOADER_MAGIC || h->version != MSU_LOADER_VERSION || h->flags ||
+    if (h->magic != MSU_LOADER_MAGIC || h->version != MSU_LOADER_VERSION ||
+        h->kernel_memory_bytes < b->image_bytes ||
+        source_base + h->kernel_memory_bytes < source_base ||
         h->image_bytes != b->image_bytes || h->total_bytes != b->descriptor_bytes ||
         !h->section_count || h->section_count > MSU_LOADER_MAX_SECTIONS ||
         !h->chunk_count || h->chunk_count > MSU_LOADER_MAX_CHUNKS ||
@@ -141,7 +143,7 @@ int msu_manager_claim_materialize(const struct msu_loader_binding *b,
     if (section != h->section_count || (checksum ^ ~0U) != h->payload_crc)
         return MSU_LOADER_INVALID_PAYLOAD;
     for (i = 0; i < h->import_count; i++)
-        if (imports[i] % 4 || !msu_loader_within(imports[i], 4, b->image_bytes))
+        if (imports[i] % 4 || !msu_loader_within(imports[i], 4, h->kernel_memory_bytes))
             return MSU_LOADER_INVALID_IMPORT;
     for (i = 0; i < h->reloc_count; i++) {
         if (r[i].reserved || r[i].target % 8 ||

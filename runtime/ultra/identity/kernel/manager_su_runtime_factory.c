@@ -36,6 +36,7 @@
 #include "protected_install_kernel.h"
 #include "manager_dynamic_layout.h"
 #include "manager_task_state.h"
+#include "manager_ksu_compat.h"
 
 struct msu_su_runtime_entry {
     struct msu_su_runtime_hook target;
@@ -111,6 +112,68 @@ static void release(void)
     raw_spin_lock_irqsave(&msu_su_runtime_lock, irq);
     if (runtime.users) --runtime.users;
     raw_spin_unlock_irqrestore(&msu_su_runtime_lock, irq);
+}
+static int ksu_begin(u64 expected, bool compare, struct msu_su_registry **output, u64 *fence)
+{
+    const struct cred *cred;
+    struct msu_su_registry *registry;
+    unsigned long irq;
+    int error = 0;
+    if (!sleepable()) return -EWOULDBLOCK;
+    if (!msu_runtime_layout_ready()) return -EAGAIN;
+    cred = msu_dynamic_current_cred();
+    if (!cred || cred != msu_dynamic_current_real_cred() ||
+        MSU_DYN_FIELD(cred, cred, user_ns) != &init_user_ns ||
+        __kuid_val(MSU_DYN_FIELD(cred, cred, uid)) ||
+        __kuid_val(MSU_DYN_FIELD(cred, cred, euid))) return -EPERM;
+    registry = acquire();
+    if (!registry) return -ESHUTDOWN;
+    raw_spin_lock_irqsave(&msu_su_runtime_lock, irq);
+    if (runtime.closed || runtime.installation_closed ||
+        (compare && runtime.installation_fence != expected)) error = -ESTALE;
+    else *fence = runtime.installation_fence;
+    raw_spin_unlock_irqrestore(&msu_su_runtime_lock, irq);
+    if (error) { release(); return error; }
+    *output = registry;
+    return 0;
+}
+int msu_su_runtime_ksu_fence(u64 *fence)
+{
+    struct msu_su_registry *registry;
+    int error;
+    if (!fence) return -EINVAL;
+    error = ksu_begin(0, false, &registry, fence);
+    if (!error) release();
+    return error;
+}
+int msu_su_runtime_ksu_validate(u64 fence)
+{
+    struct msu_su_registry *registry;
+    u64 current_fence;
+    int error = ksu_begin(fence, true, &registry, &current_fence);
+    if (!error) release();
+    return error;
+}
+int msu_su_runtime_ksu_query(u64 fence, u32 full_uid, bool *out_granted,
+    enum msu_su_non_root_umount_policy *out_policy)
+{
+    struct msu_su_registry *registry;
+    enum msu_su_non_root_umount_policy policy;
+    bool granted;
+    unsigned long irq;
+    u64 current_fence;
+    int error;
+    if (!out_granted || !out_policy) return -EINVAL;
+    error = ksu_begin(fence, true, &registry, &current_fence);
+    if (error) return error;
+    error = msu_su_registry_query_root(registry, full_uid, &granted, &policy);
+    raw_spin_lock_irqsave(&msu_su_runtime_lock, irq);
+    if (!error && (runtime.closed || runtime.installation_closed ||
+        runtime.installation_fence != fence)) error = -ESTALE;
+    raw_spin_unlock_irqrestore(&msu_su_runtime_lock, irq);
+    if (!error) { *out_granted = granted; *out_policy = policy; }
+    release();
+    return error;
 }
 /* Native tracepoint marking is an atomic hint, never a credential grant.
  * Init/root/shell seed the fixed KernelSU flow; other fullUIDs need a real
@@ -549,6 +612,15 @@ static u64 msu_su_runtime_before(struct msu_su_gate_frame *frame, const void *co
     uid = __kuid_val(msu_dynamic_current_uid());
     registry = acquire();
     if (!registry) return 0;
+    if (entry->target.kind == MSU_SU_KSU_REBOOT) {
+        long result;
+        if (entry->target.syscall_frame &&
+            msu_ksu_compat_reboot((const void *)(unsigned long)frame->x[0], &result)) {
+            frame->x[0] = (u64)(s64)result;
+            skip = 1;
+        }
+        goto out;
+    }
     if (entry->target.kind == MSU_SU_SETRESUID || entry->target.kind == MSU_SU_SETRESUID16) {
         nonroot_before(registry, entry, frame);
         goto out;
@@ -563,7 +635,7 @@ static u64 msu_su_runtime_before(struct msu_su_gate_frame *frame, const void *co
         original_bytes = strnlen(name, sizeof(name));
         if (original_bytes == sizeof(name) || original_bytes < 3 ||
             memcmp(name + original_bytes - 3, "/su", 4)) goto out;
-        uid_path(replacement, uid);
+        uid_path(replacement, 0);
         /* Resolve the protected deployment from PID1's root before applying
          * the Profile. The actual exec uses this held file through AT_EMPTY_PATH
          * so a changed path cannot inherit the receipt of another executable. */
@@ -785,6 +857,8 @@ int msu_su_runtime_init(const maplesu_host_instance *host,
     runtime.installation_bound = true;
     error = msu_su_nonroot_work_open();
     if (error) goto out;
+    error = msu_ksu_compat_open();
+    if (error) goto out;
     /* The actual target failure is retained; empty registry/source still have
      * a real owner and lifetime. It is not SU or publication success. */
     runtime.target_error = create_entries();
@@ -937,6 +1011,8 @@ int msu_su_runtime_close(void)
     error = msu_task_profile_trace_close();
     helper_error = msu_su_nonroot_work_close();
     if (!error) error = helper_error;
+    helper_error = msu_ksu_compat_close();
+    if (!error) error = helper_error;
     msu_su_nonroot_mount_source_close(runtime.mount_source);
     {
         int source_error = msu_su_nonroot_mount_source_quiesce(runtime.mount_source);
@@ -1015,6 +1091,11 @@ int msu_su_runtime_discarded(void)
         return error;
     }
     error = msu_su_nonroot_work_close();
+    if (error) {
+        mutex_unlock(&msu_su_runtime_mutex);
+        return error;
+    }
+    error = msu_ksu_compat_close();
     if (error) {
         mutex_unlock(&msu_su_runtime_mutex);
         return error;

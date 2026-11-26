@@ -6,6 +6,8 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -15,6 +17,111 @@ import org.junit.rules.TemporaryFolder
 class UltraInitBootCatalogTest {
     @get:Rule val temporary = TemporaryFolder()
     private val generation = "1".repeat(64)
+
+    @Test fun singleFileKmiSelectionHasNoTargetImageOrProof() {
+        val assets = kmiCatalog(listOf(kmiBundle()))
+        val files = temporary.newFolder()
+        assertEquals(listOf("android15-6.6"), UltraInitBootCatalog.availableKmis(files, opener(assets)))
+        val component = UltraInitBootCatalog.resolveKmi(files, opener(assets), "android15-6.6")!!
+        assertTrue(component.isKmiComponent)
+        assertNull(component.targetBoot)
+        assertEquals("", component.targetBootSha256)
+        assertEquals("", component.kernelSha256)
+        assertTrue(component.targetInputSha256.isEmpty())
+        assertNull(UltraInitBootCatalog.resolveKmi(files, opener(assets), "android14-6.1"))
+    }
+
+    @Test fun separateKmiIndexPreservesTheExactTargetCatalog() {
+        val exactBundle = bundle()
+        val assets = catalog(listOf(exactBundle)).apply { putAll(kmiCatalog(listOf(kmiBundle()))) }
+        val files = temporary.newFolder()
+        assertTrue(UltraInitBootCatalog.resolveKmi(files, opener(assets), "android15-6.6")!!.isKmiComponent)
+        val exact = UltraInitBootCatalog.resolve(files, opener(assets), target(exactBundle))!!
+        assertFalse(exact.isKmiComponent)
+        assertEquals(UltraKernelSpec.sha256(exactBundle.getValue("target-boot.img")), exact.targetBootSha256)
+    }
+
+    @Test fun missingPackagedKmiManifestDoesNotReusePrivateCache() {
+        val assets = kmiCatalog(listOf(kmiBundle()))
+        val files = temporary.newFolder()
+        UltraInitBootCatalog.resolveKmi(files, opener(assets), "android15-6.6")
+        val path = assets.keys.single { it.endsWith("/manifest.json") }
+        assets.remove(path)
+        val failure = runCatching {
+            UltraInitBootCatalog.resolveKmi(files, opener(assets), "android15-6.6")
+        }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().startsWith("ULTRA_INIT_KMI_COMPONENT_ASSET_MISSING:"))
+    }
+
+    @Test fun listingKmisReadsOnlyTheIndexAndCreatesNoFiles() {
+        val assets = kmiCatalog(listOf(kmiBundle()))
+        val files = temporary.newFolder()
+        val reads = mutableListOf<String>()
+        val open = opener(assets)
+        assertEquals(listOf("android15-6.6"), UltraInitBootCatalog.availableKmis(files) { path ->
+            reads += path
+            open(path)
+        })
+        assertEquals(listOf("ultra-init-bridge/catalog-kmi.json"), reads)
+        assertTrue(files.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test fun selectingKmiDoesNotImportOtherKernels() {
+        val assets = kmiCatalog(listOf(kmiBundle()))
+        val indexPath = "ultra-init-bridge/catalog-kmi.json"
+        val index = Json.parseToJsonElement(assets.getValue(indexPath).decodeToString()).jsonObject
+        val row = index.getValue("components").jsonArray.single().jsonObject
+        val otherHash = "b".repeat(64)
+        val other = JsonObject(row + mapOf("kmi" to JsonPrimitive("android14-6.1"),
+            "manifestSha256" to JsonPrimitive(otherHash),
+            "prefix" to JsonPrimitive("components/$otherHash/")))
+        assets[indexPath] = JsonObject(index + ("components" to JsonArray(listOf(row, other))))
+            .toString().toByteArray()
+        val reads = mutableListOf<String>()
+        val open = opener(assets)
+        val component = UltraInitBootCatalog.resolveKmi(temporary.newFolder(), { path ->
+            reads += path
+            open(path)
+        }, "android15-6.6")!!
+        assertEquals("android15-6.6", component.componentKmi)
+        assertFalse(reads.any { it.startsWith("ultra-init-bridge/components/$otherHash/") })
+    }
+
+    @Test fun kmiNeverGuessesBetweenCfiVariants() {
+        val first = kmiBundle()
+        val second = first.toMutableMap().apply {
+            this["manifest.json"] = getValue("manifest.json").decodeToString().replace("\"kcfi\"", "\"none\"").toByteArray()
+        }
+        val assets = kmiCatalog(listOf(first, second))
+        val files = temporary.newFolder()
+        assertEquals(listOf("android15-6.6"), UltraInitBootCatalog.availableKmis(files, opener(assets)))
+        val failure = runCatching { UltraInitBootCatalog.resolveKmi(files, opener(assets), "android15-6.6") }.exceptionOrNull()
+        assertEquals("ULTRA_INIT_KMI_COMPONENT_AMBIGUOUS:android15-6.6", failure?.message)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun kmiBundle(): Map<String, ByteArray> = Class.forName("dev.maplesu.image.UltraInitBootProducerTest")
+        .getDeclaredMethod("kmiBundle").apply { isAccessible = true }.invoke(null) as Map<String, ByteArray>
+
+    private fun kmiCatalog(bundles: List<Map<String, ByteArray>>): MutableMap<String, ByteArray> {
+        val assets = linkedMapOf<String, ByteArray>()
+        val entries = bundles.map { bundle ->
+            val encoded = bundle.getValue("manifest.json")
+            val manifest = Json.parseToJsonElement(encoded.decodeToString()).jsonObject
+            val digest = UltraKernelSpec.sha256(encoded)
+            val prefix = "components/$digest/"
+            bundle.forEach { (path, bytes) -> assets["ultra-init-bridge/$prefix$path"] = bytes }
+            buildJsonObject {
+                for (field in listOf("kmi", "architecture", "pageSize", "cfiMode")) put(field, manifest.getValue(field))
+                put("manifestSha256", digest); put("prefix", prefix)
+            }
+        }
+        assets["ultra-init-bridge/catalog-kmi.json"] = buildJsonObject {
+            put("schema", "maplesu-init-bridge-catalog/2"); put("sourceGenerationSha256", "a".repeat(64))
+            put("components", JsonArray(entries))
+        }.toString().toByteArray()
+        return assets
+    }
 
     @Test fun absentCatalogRetainsActualDefaultImporter() {
         val bundle = bundle()
@@ -164,7 +271,13 @@ class UltraInitBootCatalogTest {
             return method.invoke(null, *args) as ByteArray
         }
         val kernel = bytes("kernel")
-        val bridge = bytes("module").also { it[it.lastIndex] = variant.toByte() }
+        val bridge = bytes("module").also {
+            // The exact-target resolver reads a real ELF symbol table, including its null entry.
+            val elf = ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN)
+            val symbols = elf.getLong(40).toInt() + 3 * elf.getShort(58).toInt()
+            elf.putInt(symbols + 40, 1).putLong(symbols + 56, 24)
+            it[it.lastIndex] = variant.toByte()
+        }
         val files = linkedMapOf("target-boot.img" to bytes("image", kernel, ByteArray(0)),
             "ultra-init" to bytes("handoff"), "bridge.ko" to bridge,
             "target.config" to "CONFIG_ARM64=y\nCONFIG_MODULES=y\nCONFIG_ARM64_4K_PAGES=y\n".toByteArray(),

@@ -17,6 +17,8 @@ import dev.maplesu.manager.workmode.WorkMode
 import dev.maplesu.manager.workmode.detect.ModeState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URI
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
@@ -74,7 +76,7 @@ class LiteWebAdminController(
      * token 不存在时生成一次并持久化；**不启动 daemon、不写 hidden、不备份、不卸载**。
      * 无 root 写权限/读回失败 → null + [previewError] 原因。
      */
-    suspend fun preparePreviewUrl(): LiteWebUrlInfo? = withContext(Dispatchers.IO) {
+    suspend fun preparePreviewUrl(requestedPort: Int? = null): LiteWebUrlInfo? = withContext(Dispatchers.IO) {
         if (!canRunHere()) {
             previewFailure = if (ModeRuntime.active == null) {
                 LiteWebPreviewCodes.MODE_UNRESOLVED
@@ -83,7 +85,7 @@ class LiteWebAdminController(
             }
             return@withContext null
         }
-        when (val result = previewCoordinator().preparePreviewUrl()) {
+        when (val result = previewCoordinator().preparePreviewUrl(requestedPort, ::applyRecoveryPort)) {
             is LiteWebPreviewResult.Ok -> {
                 previewFailure = ""
                 result.info
@@ -113,6 +115,53 @@ class LiteWebAdminController(
 
     private fun configuredPort(): Int = runCatching { readWebuiConfig()?.port }.getOrNull()
         ?: prefs.getInt(KEY_PORT, LiteWebPortPolicy.DEFAULT_PORT)
+
+    /** Live owners rebind over authenticated HTTP; a stopped owner changes config under the same lease. */
+    private fun applyRecoveryPort(current: LiteWebPreviewConfig, requestedPort: Int): LiteWebPreviewResult.Failed? {
+        try {
+            val connection = URI(current.url() + "api/config/port").toURL().openConnection() as HttpURLConnection
+            try {
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 1_500
+                connection.readTimeout = 5_000
+                connection.instanceFollowRedirects = false
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write("{\"webuiPort\":$requestedPort}".toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                val stream = if (status == 200) connection.inputStream else connection.errorStream
+                val fields = stream?.bufferedReader()?.use { LiteWebJson.parseFlatObject(it.readText()) }
+                if (status == 200 && fields?.get("ok") == "true" && fields["webuiPort"] == requestedPort.toString()) {
+                    return null
+                } else {
+                    fields?.get("error")?.takeIf { it.matches(Regex("[A-Z][A-Z0-9_]+")) }?.let {
+                        return LiteWebPreviewResult.Failed(it)
+                    }
+                }
+            } finally {
+                connection.disconnect()
+            }
+        } catch (_: Exception) {
+            // The offline path checks the same owner lease and expected config; it never rewrites a live owner.
+        }
+        val apk = runCatching { app.applicationInfo.sourceDir }.getOrNull()
+            ?: return LiteWebPreviewResult.Failed("LITEWEB_PORT_APPLY_UNVERIFIED")
+        val quotedApk = "'" + apk.replace("'", "'\\''") + "'"
+        val identity = liteWebPortIdentity(current.port, current.token)
+        val script = "APK=$quotedApk; [ -f \"\$APK\" ] && [ ! -L \"\$APK\" ] || exit 1; " +
+            "CLASSPATH=\"\$APK\" /system/bin/timeout -k 1 8 /system/bin/app_process /system/bin " +
+            "dev.maplesu.manager.liteweb.daemon.LiteWebDaemonMain --set-port $identity $requestedPort"
+        val result = runCatching { RootExec.execute(app, script) }.getOrNull()
+            ?: return LiteWebPreviewResult.Failed("LITEWEB_PORT_APPLY_UNVERIFIED")
+        val receipts = result.output.lineSequence().map(String::trim)
+            .filter { it.startsWith("LITEWEB_PORT_UPDATE ") }.toList()
+        val code = receipts.singleOrNull()?.removePrefix("LITEWEB_PORT_UPDATE ")
+            ?.takeIf { it.matches(Regex("[A-Z][A-Z0-9_]+")) }
+            ?: return LiteWebPreviewResult.Failed("LITEWEB_PORT_APPLY_UNVERIFIED")
+        return if (result.ok && code == "OK") null else {
+            LiteWebPreviewResult.Failed(code.takeUnless { it == "OK" } ?: "LITEWEB_PORT_APPLY_UNVERIFIED")
+        }
+    }
 
     /** root 只读 `webui.conf`（0600）；读不到/损坏 → null。 */
     private fun readWebuiConfig(): LiteWebPreviewConfig? {

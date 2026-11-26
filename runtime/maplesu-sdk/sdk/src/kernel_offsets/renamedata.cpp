@@ -218,6 +218,13 @@ static KModErr get_renamedata_old_dir_and_new_dir_offset(uint32_t& old_dir_offse
         return err;
     }
 
+    // Resolve the emitter before changing comm or allocating hook result slots.
+    aarch64_asm_ctx asm_ctx = init_aarch64_asm();
+    asmjit::a64::Assembler* a = asm_ctx.assembler();
+    asmjit::Label skip_label = a->newLabel();
+    arm64_before_hook_start(a);
+    RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::x10));
+
     char original_name[16] = {0};
     if (prctl(PR_GET_NAME, original_name, 0, 0, 0) != 0) {
         return KModErr::ERR_MODULE_PR_GET_NAME;
@@ -258,14 +265,8 @@ static KModErr get_renamedata_old_dir_and_new_dir_offset(uint32_t& old_dir_offse
                 std::memcpy(&name_first, pattern_name.data(), sizeof(name_first));
                 std::memcpy(&name_second, pattern_name.data() + 8, sizeof(name_second));
 
-                aarch64_asm_ctx asm_ctx = init_aarch64_asm();
-                asmjit::a64::Assembler* a = asm_ctx.assembler();
-                asmjit::Label skip_label = a->newLabel();
-                arm64_before_hook_start(a);
-
                 // current->comm must carry the probe marker, otherwise the hook
                 // lets the original vfs_rename() run untouched.
-                export_symbol::get_current(a, asmjit::a64::x10);
                 aarch64_asm_mov_x(a, asmjit::a64::x11, comm_offset);
                 a->add(asmjit::a64::x10, asmjit::a64::x10, asmjit::a64::x11);
                 a->ldr(asmjit::a64::x11, ptr(asmjit::a64::x10));

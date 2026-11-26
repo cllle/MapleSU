@@ -38,6 +38,9 @@ int msu_manager_owner_claim(struct msu_manager_owner *owner,
  * This path does not allocate, read files, verify APKs or acquire a read lock. */
 bool msu_manager_owner_allowed(const struct msu_manager_owner *owner,
     u32 actual_uid, u32 *epoch);
+/* Read-only init-user-ns root projection of current signed bindings. No binding
+ * returns the fixed KSU invalid appId (~0U); this never enrolls a Manager. */
+int msu_manager_owner_appid(const struct msu_manager_owner *owner, u32 *appid);
 
 /* Trusted kernel installation lifecycle only. Advance before revalidation;
  * zero means exhausted/closed until a new boot-owned instance is initialized. */

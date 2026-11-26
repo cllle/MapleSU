@@ -15,7 +15,7 @@ Ultra grants SU through kernel patches; Normal carries the KernelSU module ecosy
 [![GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-8B5CF6?style=flat-square)](LICENSE)
 [![Telegram](https://img.shields.io/badge/Telegram-@KernelMapleSU-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/KernelMapleSU)
 
-[简体中文](README.md) · **English** · [Deutsch](README.de.md) · [Русский](README.ru.md)
+[简体中文](README.md) · **English**
 
 [Documentation](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Build](docs/BUILD.md) · [SDK](docs/SDK.md) · [Modules](docs/MODULES.md) · [Contributing](CONTRIBUTING.md)
 
@@ -258,7 +258,7 @@ No step of MapleSU was taken alone. At the centre of the wall is the author, Map
 
 | Member | Role | About | Links |
 | --- | --- | --- | --- |
-| MapleAutumn | Author | ![UI](https://img.shields.io/badge/UI-F58B55?style=flat-square&logo=jetpackcompose&logoColor=white) ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square&logo=kotlin&logoColor=white) | — |
+| MapleAutumn | Author | ![UI](https://img.shields.io/badge/UI-F58B55?style=flat-square&logo=jetpackcompose&logoColor=white) ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square&logo=kotlin&logoColor=white)<br>“『时光流转，愿你能与珍爱之人再度重逢』🍁” | — |
 | 晚风 | Special thanks · Beta tester | Behind-the-scenes supporter · Co-developer | [GitHub](https://github.com/bywanfeng) |
 | 小酒 | Special thanks · Beta tester | Behind-the-scenes supporter · Co-developer | [Telegram](https://t.me/qingyu177) |
 | 佐佐鱼 | Special thanks · Beta tester | Contributed to the jailbreak approach · Provided the 橘子7 privilege-escalation implementation ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat-square&logo=cplusplus&logoColor=white)<br>“如果有事通过🤖 @yutou\_004\_bot 联系我，私聊拉黑” | [GitHub](https://github.com/Yutou04-sa) · [Telegram](https://t.me/Yutou04) |
@@ -267,7 +267,7 @@ No step of MapleSU was taken alone. At the centre of the wall is the author, Map
 | 临冬诗意渐渐 | Beta tester | — | — |
 | 邵 | Beta tester | — | [Telegram](https://t.me/llopjky) |
 | LinLeyu | Beta tester | — | [Telegram](https://t.me/linleyu_0v0) |
-| 沧海 | Beta tester | — | — |
+| 沧海 | Beta tester | “国一火泰斗火洛杉矶最强的火” | [Telegram](https://t.me/chgyh666) |
 | qingmingnbi | Beta tester | — | [Telegram](https://t.me/qingmingnbi) |
 | 奶霸 | Beta tester | — | — |
 | 怪我怜悯一生 | Beta tester | — | [Telegram](https://t.me/hexciphc) |

@@ -18,6 +18,11 @@ extern "C" KModErr __wrap__ZN13kernel_module29maplesu_request_set_auth_modeENS_1
 extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(){return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv";}
 extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*){}
 extern "C" int64_t maplesu_prepare_kernel_request()noexcept{return 0;}
+// This fixture tests real request TLS preparation, not layout/publication locks.
+extern "C" void maplesu_hook_fork_prepare()noexcept{}
+extern "C" void maplesu_hook_fork_complete()noexcept{}
+extern "C" bool maplesu_btf_try_fork_prepare()noexcept{return true;}
+extern "C" void maplesu_btf_fork_complete()noexcept{}
 namespace kernel_module{uint32_t get_page_size(){return 4096;} KModErr get_current_caps_snapshot(caps_info&,bool&){return KModErr::ERR_MODULE_TEST_CHANNEL;}}
 namespace default_modules::module_root{KModErr set_current_root(bool){return KModErr::ERR_MODULE_TEST_CHANNEL;}RootTransitionResult current_root_transition(){return {};}}
 static bool consume(void*,const uint8_t*,size_t){return true;}

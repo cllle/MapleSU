@@ -766,11 +766,13 @@ class ModeSwitchFacade(
             )
         }
         val baseSha = ModeSwitchHashes.sha256(baseImage)
-        val targetBootSha = if (target == WorkMode.LITE && partition == "init_boot") currentBootSha256() else null
-        if (providedCandidate != null && targetBootSha != null) {
-            check(initBootArtifact != null && ModeSwitchHashes.sha256(initBootArtifact.targetBoot) == targetBootSha) {
-                "ULTRA_KERNEL_INIT_BOOT_TARGET_CHANGED"
-            }
+        val targetBootSha = if (target == WorkMode.LITE && partition == "init_boot" &&
+            initBootArtifact?.isKmiComponent == false) currentBootSha256() else null
+        if (target == WorkMode.LITE && partition == "init_boot" && initBootArtifact != null) {
+            dev.maplesu.manager.installer.UltraInitBootInstallTarget.requireCompatible(initBootArtifact,
+                environment.deviceFacts()?.kernelRelease.orEmpty(), targetBootSha)
+        } else if (providedCandidate != null && target == WorkMode.LITE && partition == "init_boot") {
+            error("ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED")
         }
         val candidate = if (providedCandidate != null) CandidateResult(providedCandidate.image,
             providedCandidate.sha256, providedCandidate.size) else {
@@ -892,6 +894,10 @@ class ModeSwitchFacade(
         if (targetBootSha != null && currentBootSha256() != targetBootSha) {
             return failAndAbortWithMoves(switchId, "ULTRA_KERNEL_INIT_BOOT_TARGET_CHANGED", "target boot changed",
                 configMover, from, target)
+        }
+        if (target == WorkMode.LITE && partition == "init_boot" && initBootArtifact?.isKmiComponent == true) {
+            dev.maplesu.manager.installer.UltraInitBootInstallTarget.requireCompatible(initBootArtifact,
+                environment.deviceFacts()?.kernelRelease.orEmpty())
         }
         onProgress("S4")
         // M1（切换链同款）：`SelectingModeSwitchClient` 允许 SERVICE→ULTRA 翻转，若 begin 前判成
@@ -1138,9 +1144,10 @@ class ModeSwitchFacade(
         val lease = withContext(Dispatchers.IO) { holdLease(switchId, newTask = true) }
         if (!lease.ok) return InstallCommitOutcome.Rejected(lease.code, lease.detail, switchId)
         if (target == WorkMode.LITE && candidate.partition == "init_boot") {
-            check(initBootArtifact != null && currentBootSha256() == ModeSwitchHashes.sha256(initBootArtifact.targetBoot)) {
-                "ULTRA_KERNEL_INIT_BOOT_TARGET_CHANGED"
-            }
+            val artifact = requireNotNull(initBootArtifact) { "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED" }
+            dev.maplesu.manager.installer.UltraInitBootInstallTarget.requireCompatible(artifact,
+                environment.deviceFacts()?.kernelRelease.orEmpty(),
+                if (artifact.isKmiComponent) null else currentBootSha256())
         }
         val coordinator = InstallCommitCoordinator(
             client = client,

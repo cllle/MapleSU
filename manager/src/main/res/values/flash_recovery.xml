@@ -2,4 +2,11 @@
 <resources>
     <string name="flash_restore_pre_install_message">Restore the boot images from immediately before this installation. This returns the previous working environment; it is not a factory-image restore. Your original-image backups will be kept.</string>
     <string name="flash_restore_pre_install">Restore pre-install state</string>
+    <string name="installer_recovery_query">Check original installation</string>
+    <string name="installer_recovery_querying">Checking original installation…</string>
+    <string name="installer_recovery_return">Return to preparation</string>
+    <string name="installer_recovery_unknown">The original installation status is not yet available. Restore root access or the service connection, then check this task again before starting another installation.</string>
+    <string name="installer_recovery_retry_hint">This attempt has no remaining partition writes. Return to preparation to retry, or choose an image to patch and export without root.</string>
+    <string name="installer_recovery_active">The original installation is still running. Check this task again; another installation will not be submitted.</string>
+    <string name="installer_recovery_restore_hint">Restore the images saved before this installation, or check the original task again.</string>
 </resources>

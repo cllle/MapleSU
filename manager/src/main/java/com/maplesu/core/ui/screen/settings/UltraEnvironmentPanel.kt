@@ -4,6 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -22,6 +23,9 @@ import dev.maplesu.manager.runtime.ultra.UltraEnvFacts
 import dev.maplesu.manager.runtime.ultra.UltraEnvUpgrade
 import dev.maplesu.manager.runtime.ultra.UltraEnvObservation
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentVersion
+import dev.maplesu.manager.runtime.ultra.UltraInstalledIdentityProbe
+import dev.maplesu.manager.runtime.ultra.InstalledIdentity
+import dev.maplesu.manager.runtime.ultra.Source
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +37,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
+
+/** A completed read updates display identity only within the same observation scope. */
+internal fun mergeCompletedReadback(facts: UltraEnvFacts?, scope: String?, identity: InstalledIdentity?): UltraEnvFacts? {
+    if (facts == null || scope == null || facts.observationScope != scope || identity?.source != Source.Readback) return null
+    return facts.copy(installedBuildId = identity.buildId, installedHelperSha256 = identity.helperSha256,
+        identityKnown = true)
+}
 
 /**
  * 首页的「MapleSU_Ultra 工作环境」状态：版本号与更新提示（一份状态，两套皮肤）。
@@ -72,6 +83,7 @@ class UltraEnvironmentUpdatePanel internal constructor(
     private var reading: Job? = null
     private var foreground = false
     private var readGeneration = 0L
+    private var latestFacts: UltraEnvFacts? = null
 
     internal fun resume() { foreground = true; refresh() }
 
@@ -83,7 +95,7 @@ class UltraEnvironmentUpdatePanel internal constructor(
     }
 
     fun refresh() {
-        if (reading?.isActive == true) return
+        if (!foreground || reading?.isActive == true) return
         val generation = ++readGeneration
         val request = readRequests.incrementAndGet()
         reading = scope.launch {
@@ -109,6 +121,13 @@ class UltraEnvironmentUpdatePanel internal constructor(
         }
     }
 
+    internal fun readbackCompleted() {
+        if (!foreground || busy) return
+        val facts = mergeCompletedReadback(latestFacts, UltraEnvironmentUpgrade.observationScope(context),
+            UltraInstalledIdentityProbe.completedReadback(context)) ?: return
+        apply(facts)
+    }
+
     fun startUpgrade() {
         // Available（同版本新构建）与 Unverified（身份读不到 → 重装写身份）都能点；
         // 真正写不写由 UltraEnvironmentUpgrade 再核一次事实，这里只是入口。
@@ -118,6 +137,7 @@ class UltraEnvironmentUpdatePanel internal constructor(
         readGeneration++
         readRequests.incrementAndGet()
         observation = null
+        latestFacts = null
         last = null
         readUnknown = true
         busy = true
@@ -145,7 +165,12 @@ class UltraEnvironmentUpdatePanel internal constructor(
     }
 
     private fun apply(facts: UltraEnvFacts) {
-        observation = UltraEnvObservation.observe(observation, facts, UltraEnvironmentUpgrade.observationScope(context))
+        val currentScope = UltraEnvironmentUpgrade.observationScope(context)
+        // A later completed identity must survive an older full-facts worker finishing.
+        val current = mergeCompletedReadback(facts, currentScope,
+            UltraInstalledIdentityProbe.completedReadback(context)) ?: facts
+        latestFacts = current.takeIf { currentScope != null && it.observationScope == currentScope }
+        observation = UltraEnvObservation.observe(observation, current, currentScope)
         version = observation?.version
         decided = observation?.upgrade ?: UltraEnvUpgrade.None
         readUnknown = observation?.readUnknown ?: true
@@ -178,13 +203,15 @@ fun rememberUltraEnvironmentPanel(
     val panel = remember { UltraEnvironmentUpdatePanel(context, scope) }
     val detectionRevision by ModeRuntime.detectionRevision.collectAsStateWithLifecycle()
     val rootAvailable by UltraEnvironmentProbe.rootAvailability.collectAsStateWithLifecycle(initialValue = false)
+    val identityRevision by UltraInstalledIdentityProbe.readbackRevision.collectAsStateWithLifecycle()
     SideEffect { panel.allowed = visible && upgradeAllowed }
     // The Ultra brand may already be visible from saved local facts before the
     // live mode is active. Re-read when detection settles, without requiring a tab change.
-    LifecycleResumeEffect(visible, foreground, detectionRevision to rootAvailable) {
+    LifecycleResumeEffect(visible, foreground, Pair(detectionRevision, rootAvailable)) {
         if (visible && foreground && ModeRuntime.active == WorkMode.LITE) panel.resume()
         onPauseOrDispose { panel.pause() }
     }
+    LaunchedEffect(panel, identityRevision) { panel.readbackCompleted() }
     return panel
 }
 

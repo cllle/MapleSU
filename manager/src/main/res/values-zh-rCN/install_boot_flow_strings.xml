@@ -66,4 +66,10 @@
     <string name="install_boot_saved_no_root">没有 boot 分区访问权限；已只生成修补镜像。</string>
     <string name="install_boot_saved_no_transaction">当前入口无法直接写入分区；已只生成修补镜像。</string>
     <string name="install_boot_saved_release_mismatch">该镜像对应内核 %1$s，而设备当前内核是 %2$s；已只生成修补镜像。</string>
+    <string name="install_paired_boot_title">配套 boot 镜像</string>
+    <string name="install_paired_boot_select">选择或更换配套 boot</string>
+    <string name="install_paired_boot_needed">请选择与此 init_boot 配套的 boot 镜像，修补后保存镜像。</string>
+    <string name="install_paired_boot_checking">正在解析所选镜像组…</string>
+    <string name="install_paired_boot_ready">已解析 %1$s · 修补并保存</string>
+    <string name="install_paired_boot_current">当前设备 boot · %1$s</string>
 </resources>

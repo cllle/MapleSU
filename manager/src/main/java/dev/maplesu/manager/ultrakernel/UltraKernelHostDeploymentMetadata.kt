@@ -8,6 +8,13 @@ internal object UltraKernelHostDeploymentMetadata {
         "manager_resident_abi.h", "manager_claim_loader.h", "manager_deployment_namespace.h")
     private val support = setOf("manager_claim_bootstrap.c", "manager_claim_bootstrap.h",
         "manager_resident_abi.h", "manager_claim_loader.h", "manager_deployment_namespace.h")
+    private val runtimeNative = setOf("manager_installation_state.c", "manager_installation_state.h",
+        "manager_management.c", "protected_install_kernel.c", "protected_install_kernel.h", "install_records.c", "install_records.h",
+        "manager_su_runtime_factory.c", "manager_su_runtime_factory.h", "manager_su_gate.c", "manager_su_gate.h",
+        "manager_su_runtime_target.c", "su_observed_install_source.c", "su_observed_install_source.h",
+        "su_durable_authority.c", "su_durable_authority.h", "su_durable_modern.c", "su_durable_modern.h")
+    private val runtimeAdded = runtimeNative - setOf("manager_management.c", "protected_install_kernel.c",
+        "protected_install_kernel.h", "install_records.c", "install_records.h")
 
     fun verify(evolution: JsonObject, manifest: JsonObject, coreInputs: Map<String, JsonObject>,
                coreSelection: JsonObject): Map<String, JsonObject> {
@@ -23,15 +30,27 @@ internal object UltraKernelHostDeploymentMetadata {
         }
         fun same(a: JsonObject, b: JsonObject) = a["bytes"] == b["bytes"] && a["sha256"] == b["sha256"]
         val inputs = manifest.getValue("inputs").jsonObject
-        fun selected(value: JsonElement?): JsonObject = identity(value).also { item ->
-            require(inputs.entries.singleOrNull {
+        fun selectedPath(item: JsonObject): String {
+            val matches = inputs.entries.filter {
                 val input = it.key.replace('\\', '/')
                 path(item) == input || path(item).endsWith("/$input")
-            }?.value == item["sha256"]) { "ULTRA_KERNEL_DEPLOYMENT_SELECTED_SOURCE" }
+            }
+            val longest = matches.maxOfOrNull { it.key.replace('\\', '/').length }
+            val selected = matches.singleOrNull { it.key.replace('\\', '/').length == longest }
+            require(selected?.value == item["sha256"]) {
+                "ULTRA_KERNEL_DEPLOYMENT_SELECTED_SOURCE"
+            }
+            return selected!!.key.replace('\\', '/')
+        }
+        fun selected(value: JsonElement?): JsonObject = identity(value).also { selectedPath(it) }
+        val runtimeChannel = evolution["runtimeChannel"]?.jsonPrimitive?.content
+        val runtime = runtimeChannel != null
+        require(!runtime || runtimeChannel == "authenticated-installation-r02-20261119") {
+            "ULTRA_KERNEL_DEPLOYMENT_RUNTIME_CHANNEL"
         }
         require(evolution["schema"]?.jsonPrimitive?.content == "maplesu-host-deployment-source-evolution/1" &&
             evolution["sourceOwner"]?.jsonPrimitive?.content == "HOST" &&
-            evolution["sourceFileCount"]?.jsonPrimitive?.intOrNull == 7 &&
+            evolution["sourceFileCount"]?.jsonPrimitive?.intOrNull == (if (runtime) 25 else 7) &&
             flag("predecessorIsNotFinalHostSource") && !flag("productionWritten") && !flag("targetQualified")) {
             "ULTRA_KERNEL_DEPLOYMENT_SOURCE_EVOLUTION"
         }
@@ -39,7 +58,8 @@ internal object UltraKernelHostDeploymentMetadata {
         require(same(selected(evolution["corePredecessor"]), selected(coreSelection))) {
             "ULTRA_KERNEL_DEPLOYMENT_CORE_PREDECESSOR"
         }
-        val names = native + support
+        val coreOwner = selectedPath(selected(coreSelection)).substringBeforeLast('/')
+        val names = native + support + if (runtime) runtimeNative else emptySet()
         val rows = evolution.getValue("selectedInputs").jsonArray.map { it.jsonObject }
         val byPath = rows.associateBy { it.getValue("logicalPath").jsonPrimitive.content }
         require(byPath.size == rows.size && byPath.keys == names.map { ROOT + it }.toSet()) {
@@ -48,7 +68,7 @@ internal object UltraKernelHostDeploymentMetadata {
         val hasCoreSupport = coreInputs.containsKey(ROOT + "manager_deployment_namespace.h")
         val after = byPath.mapValues { (logical, row) ->
             selected(row["after"]).also { item ->
-                val core = if (hasCoreSupport) coreInputs.getValue(logical) else null
+                val core = if (hasCoreSupport) coreInputs[logical] else null
                 val exactCoreCopy = core != null &&
                     same(item, selected(core["nativeCopyIdentity"] ?: core["after"])) &&
                     path(item).substringAfterLast('/') == logical.substringAfterLast('/')
@@ -60,12 +80,18 @@ internal object UltraKernelHostDeploymentMetadata {
         require(after.values.map(::path).distinct().size == rows.size) { "ULTRA_KERNEL_DEPLOYMENT_SOURCE_ALIAS" }
         val before = byPath.mapValues { (logical, row) ->
             val value = row.getValue("before")
-            if (logical == ROOT + "manager_deployment_namespace.h" && !hasCoreSupport) {
+            val added = logical == ROOT + "manager_deployment_namespace.h" && !hasCoreSupport ||
+                runtime && logical.removePrefix(ROOT) in runtimeAdded
+            require((value is JsonNull) == added) { "ULTRA_KERNEL_DEPLOYMENT_NEW_SOURCE_PREIMAGE" }
+            if (added) {
                 require(value is JsonNull) { "ULTRA_KERNEL_DEPLOYMENT_NEW_SOURCE_PREIMAGE" }
                 null
             } else selected(value).also { item ->
-                val core = if (hasCoreSupport) coreInputs.getValue(logical) else null
-                require(if (core == null) path(item).endsWith("/$logical") else
+                val core = if (hasCoreSupport) coreInputs[logical] else null
+                val name = logical.removePrefix(ROOT)
+                val role = if (name in native || runtime && name in runtimeNative) "native" else "support"
+                require(if (core == null) path(item).endsWith("/$logical") ||
+                    selectedPath(item) == "$coreOwner/selected-$role/$name" else
                     same(item, selected(core["nativeCopyIdentity"] ?: core["after"])) &&
                         path(item).substringAfterLast('/') == logical.substringAfterLast('/')) {
                     "ULTRA_KERNEL_DEPLOYMENT_SOURCE_BEFORE_PATH"
@@ -87,7 +113,7 @@ internal object UltraKernelHostDeploymentMetadata {
             } }
         }.toMap()
         evolution["sourceCorrections"]?.jsonArray?.forEach { selected(it) }
-        for ((role, allowed) in mapOf("native" to native, "support" to support)) {
+        for ((role, allowed) in mapOf("native" to (native + if (runtime) runtimeNative else emptySet()), "support" to support)) {
             val group = previous.getValue(role).jsonObject
             require(group.keys == names) { "ULTRA_KERNEL_DEPLOYMENT_PREVIOUS_INPUTS:$role" }
             for ((name, value) in group) {
@@ -95,16 +121,23 @@ internal object UltraKernelHostDeploymentMetadata {
                     require(value is JsonNull) { "ULTRA_KERNEL_DEPLOYMENT_PREVIOUS_ABSENT:$role:$name" }
                     continue
                 }
+                if (runtime && value is JsonNull) {
+                    require(before.getValue(ROOT + name) == null && name in runtimeAdded) {
+                        "ULTRA_KERNEL_DEPLOYMENT_RUNTIME_NEW_PREDECESSOR:$role:$name"
+                    }
+                    continue
+                }
                 val prior = selected(value)
                 require(path(prior).substringAfterLast('/') == name) { "ULTRA_KERNEL_DEPLOYMENT_PREVIOUS_PATH:$role:$name" }
-                if (hasCoreSupport) {
-                    val core = coreInputs.getValue(ROOT + name)
+                val core = coreInputs[ROOT + name]
+                if (hasCoreSupport && core != null) {
                     val selectedCore = selected(core["nativeCopyIdentity"] ?: core["after"])
                     require(same(prior, selectedCore) && same(prior, before.getValue(ROOT + name)!!)) {
                         "ULTRA_KERNEL_DEPLOYMENT_SELECTED_CORE_PREDECESSOR:$role:$name"
                     }
                 } else if (role == "native") {
-                    require(same(prior, corePredecessors.getValue(name)) && same(prior, before.getValue(ROOT + name)!!)) {
+                    require(same(prior, before.getValue(ROOT + name)!!) &&
+                        (name !in corePredecessors || same(prior, corePredecessors.getValue(name)))) {
                         "ULTRA_KERNEL_DEPLOYMENT_NATIVE_PREDECESSOR:$name"
                     }
                 } else if (name in corePredecessors) {
@@ -117,6 +150,24 @@ internal object UltraKernelHostDeploymentMetadata {
         val host = coreInputs.getValue(ROOT + "manager_resident_host.c")
         require(same(selected(host["nativeCopyIdentity"] ?: host["after"]),
             corePredecessors.getValue("manager_resident_host.c"))) { "ULTRA_KERNEL_DEPLOYMENT_CORE_HOST_SOURCE" }
+        if (runtime) {
+            require(evolution.getValue("runtimeObjects").jsonArray.map { it.jsonPrimitive.content } == listOf(
+                "manager_installation_state", "manager_su_runtime_factory", "manager_su_gate", "manager_su_runtime_target",
+                "su_observed_install_source", "su_durable_authority", "su_durable_modern") &&
+                evolution.getValue("runtimeNativeImports").jsonArray.map { it.jsonPrimitive.content } ==
+                    listOf("get_task_exe_file", "vfs_getxattr", "vfs_setxattr", "vfs_fsync")) {
+                "ULTRA_KERNEL_DEPLOYMENT_RUNTIME_OBJECTS"
+            }
+            val protocol = evolution.getValue("protocolInput").jsonObject
+            val logical = "runtime/ultra/authorization/request_protocol.h"
+            require(protocol["logicalPath"]?.jsonPrimitive?.content == logical &&
+                same(selected(protocol["before"]), selected(coreInputs.getValue(logical)["after"])) &&
+                path(selected(protocol["after"])).endsWith("/$logical")) {
+                "ULTRA_KERNEL_DEPLOYMENT_RUNTIME_PROTOCOL"
+            }
+        } else require(listOf("protocolInput", "runtimeObjects", "runtimeNativeImports").all { evolution[it] == null }) {
+            "ULTRA_KERNEL_DEPLOYMENT_RUNTIME_UNEXPECTED"
+        }
         return after
     }
 }

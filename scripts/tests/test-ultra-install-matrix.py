@@ -8,6 +8,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from native_toolchain import android_jar, jdk_tool
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/specgen"))
 from specgen.product import cached_jar
@@ -22,12 +25,11 @@ def main():
     images = args.images.resolve(strict=True)
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    java = shutil.which("java")
-    javac = shutil.which("javac")
+    java = shutil.which(str(jdk_tool()))
+    javac = shutil.which(str(jdk_tool("javac")))
     if not java or not javac:
         raise RuntimeError("JDK_21_REQUIRED")
-    sdk = Path(os.environ.get("ANDROID_HOME", os.environ.get("ANDROID_SDK_ROOT", "ANDROID_SDK_ROOT")))
-    android = args.android_jar or sdk / "platforms/android-37.0/android.jar"
+    android = args.android_jar or android_jar()
     dependencies = [cached_jar(*entry) for entry in [
         ("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20"),
         ("org.jetbrains", "annotations", "13.0"),

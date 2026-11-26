@@ -239,10 +239,8 @@ internal object UltraKernelResidentAbi {
 
     fun verifyData(kernel: ByteArray, symbols: UltraKernelSymbols, dataSignatures: Map<String, String>) {
         if (dataSignatures.isEmpty()) return
-        val actual = UltraKernelBtf.variableSignatures(kernel, symbols, dataSignatures.keys)
+        UltraKernelBtf.dataObjectSizes(kernel, symbols, dataSignatures)
             ?: error("ULTRA_KERNEL_MANAGEMENT_DATA_BTF_REQUIRED")
-        for ((key, expected) in dataSignatures.toSortedMap()) require(expected.isNotEmpty() &&
-            expected.length <= 65536 && actual[key] == expected) { "ULTRA_KERNEL_MANAGEMENT_DATA_TYPE:$key" }
     }
 
     private val resolver = listOf(
@@ -553,14 +551,20 @@ internal object UltraKernelResidentAbi {
     fun verifyCoreLifecycleMetadata(compiledFacts: Map<String, Int>, uidCompiledFacts: Map<String, Int>,
         compiledLayouts: Map<String, CompiledLayout>, localFunctionAbi: Map<String, String>,
         callbackParameters: Map<String, CallbackOrigin>, readerFenceAbi: Map<String, String>, complete: Boolean,
-        lifecycleRevision: Int) {
-        require(lifecycleRevision in setOf(1, 2)) { "ULTRA_KERNEL_CORE_LIFECYCLE_REVISION" }
-        val layoutTypes = if (lifecycleRevision == 1) coreLayoutTypes else coreLayoutTypes + mapOf(
+        lifecycleRevision: Int, runtimeSuccessor: Boolean = false, runtimeLayoutSuccessor: Boolean = false) {
+        require(lifecycleRevision in setOf(1, 2) && (!runtimeSuccessor || lifecycleRevision == 2)) { "ULTRA_KERNEL_CORE_LIFECYCLE_REVISION" }
+        val revisionTypes = if (lifecycleRevision == 1) coreLayoutTypes else coreLayoutTypes + mapOf(
             "readerFence" to ("msu_uid_reader_fence" to (coreLayoutTypes.getValue("readerFence").second + "retire")),
             "controller" to ("msu_uid_controller_slot" to listOf("state", "host", "fence", "quarantined_transaction",
                 "id", "revision", "closed", "shutdown_pending", "shutdown_complete", "fence_broken")),
             "candidate" to ("msu_uid_candidate_slot" to listOf("snapshot", "controller", "kernel_owner", "id", "session", "expected_revision")),
         )
+        val layoutTypes = revisionTypes + if (runtimeSuccessor) mapOf(
+            "service" to ("msu_runtime_service" to listOf("operation", "host", "lifecycle_owner", "id", "entries", "entry_count",
+                "operations", "helper_sessions", "kind", "reserved", "active", "aborting", "discarded", "factory_owned", "sealed")),
+            "session" to ("msu_management_session" to listOf("operation", "cleanup", "task", "mm", "original", "active", "helper",
+                "service", "id", "exec_id", "principal_uid", "epoch", "references", "attached")),
+        ) else emptyMap()
         val functionNames = coreFunctions + if (lifecycleRevision == 2) setOf("msu_management_discard_unpublished",
             "msu_uid_gateway_prepare_kernel", "msu_uid_gateway_commit_kernel", "msu_uid_gateway_cancel_kernel",
             "msu_uid_gateway_discard_host_unpublished", "msu_uid_snapshot_state_destroy_quiesced", "msu_uid_snapshot_runtime_discard") else emptySet()
@@ -595,7 +599,25 @@ internal object UltraKernelResidentAbi {
                 val alignment = facts.getValue(prefix + "Align")
                 require(bytes > 0 && bytes == layout.bytes && alignment > 0 && alignment and (alignment - 1) == 0 &&
                     bytes % alignment == 0 && layout.members.keys == type.second.toSet()) { "ULTRA_KERNEL_CORE_LAYOUT:$prefix" }
-                val ordered = layout.members.values.sortedBy { it.offset }
+                // CORE selects fact members before the later runtime source adds legacy session state.
+                // Its full BTF signature still includes those exact runtime members.
+                val fullMembers = if (runtimeLayoutSuccessor && prefix == "session") {
+                    val service = layout.members.getValue("service")
+                    val id = layout.members.getValue("id")
+                    val attached = layout.members.getValue("attached")
+                    val legacyGatewayOffset = service.offset.toLong() + service.bytes
+                    val alignedIdOffset = (legacyGatewayOffset + 8 + 7) and -8L
+                    require(service.bytes == 8 && id.bytes == 8 && attached.bytes == 1 &&
+                        legacyGatewayOffset % 8 == 0L && id.offset.toLong() == alignedIdOffset) {
+                        "ULTRA_KERNEL_CORE_SESSION_RUNTIME_LAYOUT"
+                    }
+                    layout.members.values + listOf(
+                        CompiledMember(legacyGatewayOffset.toInt(), 8, "*smsu_legacy_gateway"),
+                        CompiledMember(attached.offset + attached.bytes, attached.bytes, attached.signature),
+                        CompiledMember(attached.offset + attached.bytes * 2, attached.bytes, attached.signature),
+                    )
+                } else layout.members.values
+                val ordered = fullMembers.sortedBy { it.offset }
                 var end = 0L
                 val canonical = "s${type.first}:$bytes{" + ordered.joinToString("") {
                     require(it.offset >= end && it.bytes > 0 && it.offset.toLong() + it.bytes <= bytes &&

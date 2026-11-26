@@ -4,6 +4,7 @@ import com.maplesu.core.ksuApp
 import dev.maplesu.manager.runtime.HookRootExecutor
 import dev.maplesu.manager.runtime.RootManagement
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
+import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -13,11 +14,13 @@ import java.util.concurrent.CountDownLatch
  * the authenticated Ultra executor when its local enforce file is unreadable.
  * SDK systemStatus can also use an app-domain file read; Unknown is preserved.
  */
-fun getSELinuxStatusRaw(): String {
+fun getSELinuxStatusRaw(): String = getSELinuxStatusRaw { File("/sys/fs/selinux/enforce").readText() }
+
+internal fun getSELinuxStatusRaw(readEnforce: () -> String): String {
     val hook = HookRootExecutor.production(ksuApp)
     if (hook.available()) {
         return resolveSELinuxStatus(
-            readEnforce = { File("/sys/fs/selinux/enforce").readText() },
+            readEnforce = readEnforce,
             queryStatus = {
                 val result = hook.run("/system/bin/getenforce")
                 if (result.ok) result.output else ""
@@ -26,10 +29,10 @@ fun getSELinuxStatusRaw(): String {
     }
     if (usesUltraEnvironment()) {
         val scope = currentUltraScope() ?: return "Unknown"
-        return readUltraStatus(scope)
+        return readUltraStatus(scope, readEnforce)
     }
     return resolveSELinuxStatus(
-        readEnforce = { File("/sys/fs/selinux/enforce").readText() },
+        readEnforce = readEnforce,
         queryStatus = {
             // An ordinary app-owned sh has the same SELinux restrictions as this
             // process. Use MapleSU's authenticated executor, not another su manager.
@@ -45,7 +48,11 @@ fun getSELinuxStatusRaw(): String {
 // Reuse a known observation briefly; Unknown never extends its lifetime.
 private const val ULTRA_STATUS_TTL_MS = 5_000L
 
-private data class UltraSELinuxScope(val key: String, val bootId: String)
+private data class UltraSELinuxScope(
+    val key: String?,
+    val bootId: String,
+    val owner: UltraRuntimeClient.ManagerOwnerIdentity?,
+)
 private data class UltraSELinuxObservation(
     val value: String,
     val observedAt: Long,
@@ -55,9 +62,10 @@ private data class UltraSELinuxObservation(
 
 /** Request identity only; the ordinary class never formats credential contents. */
 internal class UltraSELinuxObservationToken internal constructor(
-    internal val key: String,
+    internal val key: String?,
     internal val bootId: String,
     internal val revision: Long,
+    internal val owner: UltraRuntimeClient.ManagerOwnerIdentity?,
 )
 
 private class UltraSELinuxRead(val revision: Long) {
@@ -71,18 +79,20 @@ private var ultraStatusRevision = 0L
 
 private fun currentUltraScope(): UltraSELinuxScope? = runCatching {
     if (HookRootExecutor.production(ksuApp).available() || !usesUltraEnvironment()) return null
-    val key = UltraSdkCredentials.read(ksuApp) ?: return null
+    val key = UltraSdkCredentials.read(ksuApp)
     val bootId = dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId() ?: return null
-    UltraSELinuxScope(key, bootId)
+    val owner = if (key == null) UltraEnvironmentProbe.currentSnapshot(ksuApp).managerOwnerIdentity
+        ?.takeIf { it.fullUid == android.os.Process.myUid() } ?: return null else null
+    UltraSELinuxScope(key, bootId, owner)
 }.getOrNull()
 
-private fun UltraSELinuxObservationToken.scope() = UltraSELinuxScope(key, bootId)
+private fun UltraSELinuxObservationToken.scope() = UltraSELinuxScope(key, bootId, owner)
 
 /** Capture before the producer starts its existing SDK request, on an IO thread. */
 internal fun captureUltraSELinuxObservation(): UltraSELinuxObservationToken? {
     val scope = currentUltraScope() ?: return null
     return synchronized(ultraStatusReads) {
-        UltraSELinuxObservationToken(scope.key, scope.bootId, ultraStatusRevision)
+        UltraSELinuxObservationToken(scope.key, scope.bootId, ultraStatusRevision, scope.owner)
     }
 }
 
@@ -130,12 +140,12 @@ internal fun rememberUltraSELinuxStatus(value: String, token: UltraSELinuxObserv
     }
 }
 
-private fun readUltraStatus(scope: UltraSELinuxScope): String {
+private fun readUltraStatus(scope: UltraSELinuxScope, readEnforce: () -> String): String {
     var cached: String? = null
     var owner = false
     lateinit var token: UltraSELinuxObservationToken
     val read = synchronized(ultraStatusReads) {
-        token = UltraSELinuxObservationToken(scope.key, scope.bootId, ultraStatusRevision)
+        token = UltraSELinuxObservationToken(scope.key, scope.bootId, ultraStatusRevision, scope.owner)
         cached = cachedUltraStatus(scope, token.revision)
         if (cached != null) null else ultraStatusReads[scope]?.takeIf { it.revision == token.revision }
             ?: UltraSELinuxRead(token.revision).also {
@@ -148,7 +158,7 @@ private fun readUltraStatus(scope: UltraSELinuxScope): String {
     if (owner) {
         try {
             val value = runCatching {
-                when (runCatching { File("/sys/fs/selinux/enforce").readText().trim() }.getOrNull()) {
+                when (runCatching { readEnforce().trim() }.getOrNull()) {
                     "1" -> "Enforcing"
                     "0" -> "Permissive"
                     else -> ultraEnvironmentSelinuxStatus(token) ?: "Unknown"
@@ -177,8 +187,13 @@ private fun readUltraStatus(scope: UltraSELinuxScope): String {
  * must render as unknown rather than as Permissive.
  */
 private fun ultraEnvironmentSelinuxStatus(token: UltraSELinuxObservationToken): String? {
-    val client = UltraSdkCredentials.client(ksuApp, token.key, token.bootId)
+    val source = UltraSdkCredentials.client(ksuApp, token.key, token.bootId)
+    fun scopeCurrent(): Boolean = isCurrentObservation(token) && (token.owner == null ||
+        runCatching { source.queryManagerOwnerIdentity().identity }.getOrNull() == token.owner)
+    if (!scopeCurrent()) return null
+    val client = source.scoped(token.key, ::scopeCurrent)
     val receipt = runCatching { client.systemStatus() }.getOrNull()
+    if (!scopeCurrent()) return null
     if (receipt != null && receipt.succeeded && receipt.bool("selinux_readable") != false) {
         when (receipt.int("selinux")) {
             1 -> return "Enforcing"
@@ -189,8 +204,8 @@ private fun ultraEnvironmentSelinuxStatus(token: UltraSELinuxObservationToken): 
     //   {"selinux":-1,"selinux_readable":false} —— 它读不到 enforce。
     // 退回 SDK 的 `run_root_cmd` 跑一次 getenforce：仍然是 SDK 自己的 root 通道，
     // **不碰** libmaplesu_runtime（那条路才会重启系统）。
-    if (!isCurrentObservation(token)) return null
     val rootReceipt = runCatching { client.runRootCommand("/system/bin/getenforce") }.getOrNull()
+    if (!scopeCurrent()) return null
     val text = rootReceipt?.takeIf { it.succeeded }?.string("result")
         ?.let { client.decodeText(it) }?.trim()
     return when (text) {

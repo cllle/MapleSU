@@ -1,15 +1,15 @@
-# tools/specgen — Pro kernel spec generator
+# tools/specgen — Ultra kernel spec generator
 
-Turns **a stock boot image + a 48 byte credential** into a Pro spec (`offset|orig|repl` records)
-that the on-device applier (`manager/.../prokernel/ProKernelSpec` + `ProKernelBuilder`) consumes.
+Turns **a stock boot image + a 48 byte credential** into a Ultra spec (`offset|orig|repl` records)
+that the on-device applier (`manager/.../ultrakernel/UltraKernelSpec` + `UltraKernelBuilder`) consumes.
 
-Production generation delegates to `manager/prokernel` through `specgen/product.py`; its embedded
+Production generation delegates to `manager/ultrakernel` through `specgen/product.py`; its embedded
 recipe uses generated bodies and target-specific metadata. `--self-check` and the Python recipe
 below retain the historical k22 oracle. They do not exercise the current allocator or certify a
 new kernel's boot. In particular, production `avc_info` resolves both the target's `avc_denied`
 offset and its actual RET hook instead of carrying the oracle's packed AVC constants.
 
-Today the only Pro payload that has ever booted a device is `k22` for
+Today the only Ultra payload that has ever booted a device is `k22` for
 `6.6.89-android15-8-g7e1f3c083cc6-abogki467167594-4k`, and its spec is an 18 line table of
 **hard-coded file offsets** with one device's credential baked into three of the records. That is
 why a different kernel, or the same kernel with a different credential, cannot be patched. This
@@ -58,13 +58,13 @@ SELF-CHECK PASS
 | --- | --- | --- |
 | `--boot` | one of | Android boot image, header v0–v4 (v4 is what the applier accepts). The kernel is read at `page_size` and decoded (`RAW_ARM64`, `GZIP`). `LZ4/zstd` are refused by name rather than guessed at. |
 | `--kernel` | one of | a raw ARM64 `Image`, when the boot container is handled elsewhere |
-| `--credential` / `--credential-file` | yes | exactly 48 ASCII `[A-Za-z0-9]`, the same contract as `MapleSuCredentialStore` / `ProKeyProvisioning` |
+| `--credential` / `--credential-file` | yes | exactly 48 ASCII `[A-Za-z0-9]`, the same contract as `MapleSuCredentialStore` / `UltraKeyProvisioning` |
 | `--recipe` | no | defaults to `specgen/recipes/k22.json` |
 | `--symbols` | no | a pre-decoded `offset<TAB>type<TAB>name` dump; otherwise the image is decoded here |
 | `--require-release` | no | refuse to emit when the kernel release differs |
 
 The credential is **not** read from the device. `maplesu-credential.bin` is AES-GCM ciphertext
-under an AndroidKeyStore key, and the Pro rootKey lives in SharedPreferences; both are
+under an AndroidKeyStore key, and the Ultra rootKey lives in SharedPreferences; both are
 device-only. The credential must be explicitly supplied for the target image;
 the generator does not read application-private storage.
 
@@ -82,7 +82,7 @@ the generator does not read application-private storage.
 ...
 ```
 
-`#kernel=` and `#key=` keep the shipped grammar (`ProKernelSpec.parse`). The leading `#` lines are
+`#kernel=` and `#key=` keep the shipped grammar (`UltraKernelSpec.parse`). The leading `#` lines are
 comments to the applier, so a generated spec drops into the existing asset layout unchanged.
 
 `--receipt` is a JSON record with the derived digests, the site roles, the credential slot, the

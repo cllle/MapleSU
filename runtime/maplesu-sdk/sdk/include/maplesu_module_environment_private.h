@@ -7,13 +7,37 @@
 #include <cstring>
 #include <fcntl.h>
 #include <string>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <vector>
 
 extern char** environ;
 
 namespace maplesu::module_environment {
+
+struct KsuCompatInfo { uint32_t version = 0, flags = 0, features = 0, uapi_version = 0; };
+// Probe inside the authenticated Root worker. A valid descriptor, rather than
+// the invalid magic reboot's return value, proves the live query interface.
+inline KsuCompatInfo probe_ksu_compat() {
+    const int saved_errno = errno;
+    KsuCompatInfo result;
+#if defined(SYS_reboot)
+    if (getuid() == 0 && geteuid() == 0) {
+        int fd = -1;
+        (void)syscall(SYS_reboot, 0xdeadbeefU, 0xcafebabeU, 0, &fd);
+        if (fd >= 0) {
+            KsuCompatInfo observed;
+            if (!ioctl(fd, 0x80104b02U, &observed) && observed.version == 10940U &&
+                !observed.flags && !observed.features && !observed.uapi_version) result = observed;
+            if (close(fd)) result = {};
+        }
+    }
+#endif
+    errno = saved_errno;
+    return result;
+}
 
 class Environment final {
 public:
@@ -113,8 +137,9 @@ inline KModErr capture(uint32_t major, uint32_t minor, uint32_t patch,
     // KSU_VER* describe this compatibility userspace, not a KernelSU driver.
     values.emplace_back("KSU_VER=MapleSU " + version);
     values.emplace_back("KSU_VER_CODE=" + std::to_string(uint64_t(major) * 10000 + uint64_t(minor) * 100 + patch));
-    values.emplace_back("KSU_KERNEL_VER_CODE=0");
-    values.emplace_back("KSU_UAPI_VER=0");
+    const auto kernel = probe_ksu_compat();
+    values.emplace_back("KSU_KERNEL_VER_CODE=" + std::to_string(kernel.version));
+    values.emplace_back("KSU_UAPI_VER=" + std::to_string(kernel.uapi_version));
     values.emplace_back(hotload ? "KSU_RUNTIME_MODE=late-load" : "KSU_RUNTIME_MODE=lkm");
     if (hotload) values.emplace_back("KSU_LATE_LOAD=1");
     values.emplace_back(hotload ? "MAPLESU_RUNTIME_MODE=hotload" : "MAPLESU_RUNTIME_MODE=boot");

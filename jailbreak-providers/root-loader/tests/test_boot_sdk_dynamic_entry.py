@@ -62,6 +62,71 @@ class DynamicBuildTest(unittest.TestCase):
 
 
 class DynamicBootstrapTest(unittest.TestCase):
+    def test_dynamic_init_defers_range_abi_selection_to_configure(self):
+        source = (HERE.parent / "module/maplesu_boot_sdk.c").read_text(encoding="utf-8")
+        body = definition(source, "msu_boot_sdk_init")
+        fixture = r'''
+#include <assert.h>
+#include <string.h>
+typedef unsigned long uptr;
+typedef unsigned long long u64;
+#define MSU_PH_NOCFI
+#define MAPLESU_LEGACY_HOOK_METADATA_MAGIC 1u
+#define MAPLESU_LEGACY_HOOK_SCHEMA 1u
+static uptr (*lookup_name)(const char *);
+static int (*root_subject)(void), (*root_handover)(void);
+static void *copy_in,*copy_out,*read_kernel,*write_kernel,*allocate,*allocate_range,*release;
+static void *random_bytes,*memory_ro,*memory_rw,*memory_x,*memory_nx,*flush_code;
+static void *prepare_cred,*commit_cred,*hold_cred,*drop_cred,*legacy_provider_get,*legacy_provider_put;
+static void *release_module;
+static uptr native_execve,kernel_base,native_avc;
+static char sdk_request_metadata;
+static struct { struct { u64 magic,schema,length,provider_get_displacement,provider_put_displacement; } legacy; }
+ sdk_request_descriptor;
+static int missing_allocator,missing_copy,only_noprof;
+static int handover(void) { return 0; }
+static uptr lookup(const char *name) {
+ if(!strcmp(name,"__vmalloc_node_range")||!strcmp(name,"__vmalloc_node_range_noprof")||
+    !strcmp(name,"maplesu_legacy_hook_provider_get")||!strcmp(name,"maplesu_legacy_hook_provider_put"))return 0;
+ if(missing_copy&&!strcmp(name,"copy_from_user_nofault"))return 0;
+ if((missing_allocator||only_noprof)&&!strcmp(name,"vmalloc"))return 0;
+ if(missing_allocator&&!strcmp(name,"vmalloc_noprof"))return 0;
+ return 0x1000;
+}
+#include "init.inc"
+int main(void) {
+ assert(msu_boot_sdk_init(lookup,0,handover)==(MSU_BS_STATIC_BOOTSTRAP?-2:0));
+ assert(!allocate_range);
+ only_noprof=1;
+ assert(msu_boot_sdk_init(lookup,0,handover)==(MSU_BS_STATIC_BOOTSTRAP?-2:0));
+ missing_allocator=1;
+ assert(msu_boot_sdk_init(lookup,0,handover)==-2);
+ missing_allocator=only_noprof=0;missing_copy=1;
+ assert(msu_boot_sdk_init(lookup,0,handover)==-2);
+ return 0;
+}
+'''
+        compiler = host_compiler()
+        self.assertIsNotNone(compiler)
+        with tempfile.TemporaryDirectory(prefix="sdk-init-range-abi-") as directory:
+            base = Path(directory)
+            (base / "init.inc").write_text(body, encoding="utf-8")
+            (base / "fixture.c").write_text(fixture, encoding="utf-8")
+            for native in (0, 1):
+                for static in (0, 1):
+                    for noprof in (0, 1):
+                        for environment in (0, 1):
+                            with self.subTest(native=native, static=static, noprof=noprof, environment=environment):
+                                flags = ["-DMSU_BOOT_SDK_NATIVE=1"] if native else []
+                                binary = base / "fixture"
+                                subprocess.run([compiler, "-std=gnu89", "-Wall", "-Wextra", "-Werror",
+                                    "-Wno-unused-variable", *flags,
+                                    "-DMSU_BS_STATIC_BOOTSTRAP=" + str(static),
+                                    "-DMSU_BS_ALLOCATOR_NOPROF=" + str(noprof),
+                                    "-DMSU_BS_ENVIRONMENT=" + str(environment), "-DMSU_BS_EXECMEM_FREE=0",
+                                    "-I" + str(base), base / "fixture.c", "-o", binary], check=True)
+                                subprocess.run([binary], check=True, timeout=5)
+
     def test_actual_configure_then_bootstrap_reaches_the_qualified_allocator(self):
         source = (HERE.parent / "module/maplesu_boot_sdk.c").read_text(encoding="utf-8")
         fixture = (HERE / "boot_sdk_configuration_test.c").read_text(encoding="utf-8")
@@ -90,6 +155,7 @@ static unsigned char msu_sdk_call_template[4];
 #define MSU_SDK_PGPROT struct sdk_pgprot
 static unsigned char *msu_sdk_call_template_end=msu_sdk_call_template+4,*msu_sdk_call_blr=msu_sdk_call_template;
 static uptr arena,native_execve,avc_result;
+static char original_root_key[49];
 static int probe_installed;
 static maplesu_metadata_v2 sdk_request_metadata;
 static void random_bytes(void *p,unsigned long n){memset(p,0,n);}
@@ -125,7 +191,7 @@ int main(void) {
 }
 '''
         configure = "\n".join(definition(source, name) for name in
-            ("msu_boot_sdk_allocator_pre", "sample_allocator", "configure", "msu_boot_sdk_control"))
+            ("sdk_observation_entry", "msu_boot_sdk_allocator_pre", "sample_allocator", "configure", "msu_boot_sdk_control"))
         bootstrap = "\n".join(definition(source, name) for name in
             ("request_v2_init", "sdk_image_qualified", "bootstrap"))
         compiler = host_compiler()

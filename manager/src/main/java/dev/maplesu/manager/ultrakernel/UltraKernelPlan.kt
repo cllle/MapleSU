@@ -470,7 +470,9 @@ internal class UltraKernelPlan private constructor(
                 input.seek(report.kernelOffset)
                 input.readFully(container)
             }
-            return KernelCompression.decode(
+            if (Thread.currentThread().isInterrupted) throw java.io.IOException("CANCELLED")
+            // This freshly read component has no other owner; RAW needs no decoding copy.
+            return if (report.compression == "RAW_ARM64") container else KernelCompression.decode(
                 container, report.compression, KernelCompression.MAX_KERNEL_BYTES,
             )
         }

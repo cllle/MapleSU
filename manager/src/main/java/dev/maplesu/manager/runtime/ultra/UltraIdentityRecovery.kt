@@ -290,12 +290,14 @@ internal object UltraIdentityRecovery {
     }
 
     private fun completeDeployment(context: Context, key: String, client: UltraRuntimeClient, preparingUpgrade: Boolean, generation: String?): String {
-        val environment = UltraInstalledIdentityProbe.readAndVerify(context, client)
+        val environment = UltraInstalledIdentityProbe.readAndVerify(context, client,
+            readbackTimeoutMillis = UltraInstalledIdentityProbe.MAINTENANCE_READBACK_TIMEOUT_MS)
         if (Thread.currentThread().isInterrupted || blocked(context, preparingUpgrade) || UltraRootKeyStore.read(context) != key) {
             return "IDENTITY_SUSPENDED"
         }
         if (generation != null && !completeGeneration(client, generation)) return "IDENTITY_TUPLE_PUBLISH_UNVERIFIED"
-        return UltraIdentityBootHook.ensure(environment.verification.verified, preparingUpgrade) {
+        return UltraIdentityBootHook.ensure(environment.verification.verified, preparingUpgrade,
+            environment.readbackFailure ?: environment.verification.reason) {
             // The SDK's system directory is the 16-character prefix plus its first character.
             // Do not enumerate all modules, or uninstall a never-installed ID into its state lists.
             val path = "/data/${key.take(16)}${key.first()}/modules/${UltraIdentityBroker.LEGACY_MODULE_ID}"

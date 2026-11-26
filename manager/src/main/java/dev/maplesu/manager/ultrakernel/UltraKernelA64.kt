@@ -418,6 +418,16 @@ internal object UltraKernelA64 {
     /** Invalidate this kernel VA at all translation levels on inner-shareable PEs. */
     fun tlbiVaae1is(rt: Int): Int = sysInstr(0, 8, 3, 3, rt)
 
+    /**
+     * `tlbi vmalle1is` - invalidate every EL1&0 stage-1 translation (all ASIDs, all levels) on
+     * inner-shareable PEs. Rt is the "no register" encoding; the whole domain is invalidated.
+     *
+     * The executor publishes a page it has just moved NX -> RO/X. On the 6.6.89 target a by-VA
+     * `tlbi vaae1is` alone left the first fetch still hitting the pre-publication non-executable
+     * translation (ESR 0x8600000f after BLR), so the publication step uses this full-domain form.
+     */
+    fun tlbiVmalle1is(): Int = sysInstr(0, 8, 3, 0, 31)
+
     fun blr(rm: Int): Int = 0xD63F0000.toInt() or ((rm and 0x1F) shl 5)
 
     // -----------------------------------------------------------------------------------------

@@ -48,10 +48,7 @@ if __name__ == "__main__":
     if args.check:
         manifest_path = args.manifest or ROOT / "runtime/maplesu-sdk/SDK-RELEASE.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-        if "distribution" in manifest:
-            from sdk_distribution import verify_distribution
-            verify_distribution(manifest, ROOT)
-        elif "sourceBuild" in manifest:
+        if "sourceBuild" in manifest:
             from source_sdk_delivery import verify_source_delivery
             verify_source_delivery(manifest, ROOT)
         elif "environmentPolicyBoot" in manifest:

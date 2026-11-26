@@ -194,7 +194,7 @@ void PatchBase::emit_check_current_allow_su_to_x10(Assembler* a, uint64_t arg) {
     Label label_loop = a->newLabel();   // %6
 
     a->mov(x10, Imm(0));
-    kernel_module::export_symbol::get_current(a, x11);
+    if (is_failed(kernel_module::export_symbol::get_current_checked(a, x11))) return;
     a->cbz(x11, label_end);
 
     a->ldr(x11, Mem(x11, static_cast<int32_t>(field0_)));
@@ -243,7 +243,7 @@ KModErr PatchBase::emit_check_current_allow_su_to_x10_checked(Assembler* a, uint
         a->mov(x20, 0);
         aarch64_asm_mov_x(a, x16, lock);
         a->blr(x16);
-        kernel_module::export_symbol::get_current(a, x11);
+        RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, x11));
         a->cbz(x11, done);
         a->ldr(x11, Mem(x11, static_cast<int32_t>(field0_)));
         a->cbz(x11, done);

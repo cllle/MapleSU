@@ -1,0 +1,107 @@
+[
+  {
+    "group": "commons-io",
+    "artifact": "commons-io",
+    "version": "2.20.0",
+    "bytes": 563971,
+    "sha256": "df90bba0fe3cb586b7f164e78fe8f8f4da3f2dd5c27fa645f888100ccc25dd72"
+  },
+  {
+    "group": "junit",
+    "artifact": "junit",
+    "version": "4.13.2",
+    "bytes": 384581,
+    "sha256": "8e495b634469d64fb8acfa3495a065cbacc8a0fff55ce1e31007be4c16dc57d3"
+  },
+  {
+    "group": "org.apache.commons",
+    "artifact": "commons-compress",
+    "version": "1.28.0",
+    "bytes": 1117221,
+    "sha256": "e1522945218456f3649a39bc4afd70ce4bd466221519dba7d378f2141a4642ca"
+  },
+  {
+    "group": "org.apache.commons",
+    "artifact": "commons-lang3",
+    "version": "3.18.0",
+    "bytes": 702952,
+    "sha256": "4eeeae8d20c078abb64b015ec158add383ac581571cddc45c68f0c9ae0230720"
+  },
+  {
+    "group": "org.hamcrest",
+    "artifact": "hamcrest-core",
+    "version": "1.3",
+    "bytes": 45024,
+    "sha256": "66fdef91e9739348df7a096aa384a5685f4e875584cce89386a7a47251c4d8e9"
+  },
+  {
+    "group": "org.jetbrains",
+    "artifact": "annotations",
+    "version": "13.0",
+    "bytes": 17536,
+    "sha256": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478"
+  },
+  {
+    "group": "org.jetbrains.kotlin",
+    "artifact": "kotlin-compiler-embeddable",
+    "version": "2.4.20",
+    "bytes": 58593245,
+    "sha256": "cf97161430683fb9af96dc6a7017ffae1fe8737b80d12eee11f2fe3e76f8ded8"
+  },
+  {
+    "group": "org.jetbrains.kotlin",
+    "artifact": "kotlin-serialization-compiler-plugin-embeddable",
+    "version": "2.4.20",
+    "bytes": 452378,
+    "sha256": "2221ec78c4f8d7367df9a9bd4310c916c5ef70150fb49eeacf238f074f368b52"
+  },
+  {
+    "group": "org.jetbrains.kotlin",
+    "artifact": "kotlin-stdlib",
+    "version": "2.4.20",
+    "bytes": 1853314,
+    "sha256": "2226de463d309d4a5500a481320b3dea515a6981dcae1def531fbc158884e25f"
+  },
+  {
+    "group": "org.jetbrains.kotlinx",
+    "artifact": "kotlinx-coroutines-core-jvm",
+    "version": "1.11.0",
+    "bytes": 1577052,
+    "sha256": "d1d75aa01dffbb4d1c520e67e4c4e7f5f6174718e7cb4632412503f2f0e604fa"
+  },
+  {
+    "group": "org.jetbrains.kotlinx",
+    "artifact": "kotlinx-coroutines-test-jvm",
+    "version": "1.11.0",
+    "bytes": 105295,
+    "sha256": "d4f7ee71da708af4719dceb6d3200c8f9dc5146ea1a812cb628ed53c64196f96"
+  },
+  {
+    "group": "org.jetbrains.kotlinx",
+    "artifact": "kotlinx-serialization-core-jvm",
+    "version": "1.11.0",
+    "bytes": 404509,
+    "sha256": "f4a801c647d4351327cd9e1ac4113e2be9ea37a64ab0abae269c25a52e28f35d"
+  },
+  {
+    "group": "org.jetbrains.kotlinx",
+    "artifact": "kotlinx-serialization-json-jvm",
+    "version": "1.11.0",
+    "bytes": 294166,
+    "sha256": "563a25b4eb5c9128ae9c2479f3d1a5c44dcd176112b91cf03682e906eba5c935"
+  },
+  {
+    "group": "org.json",
+    "artifact": "json",
+    "version": "20240303",
+    "bytes": 78332,
+    "sha256": "3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed"
+  },
+  {
+    "group": "org.tukaani",
+    "artifact": "xz",
+    "version": "1.12",
+    "bytes": 168792,
+    "sha256": "3e158a87bd73d8afb4b6e8239c013b7d049c48563f45860ce99cd2e448cf4a6b"
+  }
+]

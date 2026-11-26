@@ -36,7 +36,7 @@ public final class RamdiskRebuilderTest {
                 for (int oldSize : new int[]{0, 53, 5000}) {
                     byte[] original = BootImageRebuilderTest.fixture(kernelSize, oldSize);
                     Files.write(source, original);
-                    for (int size : new int[]{1, 53, 8193}) {
+                    for (int size : new int[]{0, 1, 53, 8193}) {
                         byte[] replacement = new byte[size];
                         Arrays.fill(replacement, (byte) 0x5a);
                         Files.write(ramdisk, replacement);
@@ -46,6 +46,10 @@ public final class RamdiskRebuilderTest {
                         int start = (4096 + kernelSize + 4095) / 4096 * 4096;
                         check(report.image.kernelSize == kernelSize, "Kernel size preserved");
                         check(report.image.ramdiskSize == size, "Ramdisk size replaced");
+                        check(!report.kernelChanged && report.ramdiskChanged == !Arrays.equals(
+                                Arrays.copyOfRange(original, start, start + oldSize), replacement), "Component change flags");
+                        if (oldSize == 0 && size == 0)
+                            check(Arrays.equals(original, result), "Empty ramdisk no-op is byte identical");
                         check(Arrays.equals(Arrays.copyOfRange(original, 4096, start),
                                 Arrays.copyOfRange(result, 4096, start)), "Kernel and its padding preserved");
                         check(Arrays.equals(replacement, Arrays.copyOfRange(result, start, start + size)), "Ramdisk readback");
@@ -117,8 +121,6 @@ public final class RamdiskRebuilderTest {
                 check("REBUILD_READBACK_MISMATCH".equals(error.getMessage()), "Kernel corruption identified");
                 check(!Files.exists(output), "Corrupt output removed");
             }
-            Files.write(ramdisk, new byte[0]);
-            rejected(source, ramdisk, output, "REPLACEMENT_RAMDISK_SIZE_LIMIT");
             check(Arrays.equals(original, Files.readAllBytes(source)), "All tests preserved original");
             System.out.println("PASS " + passed + " ramdisk rebuild checks");
         } finally {

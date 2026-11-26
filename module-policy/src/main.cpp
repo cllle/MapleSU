@@ -256,34 +256,53 @@ void deny_inherited(sepol_impl &policy, Str source, Str target, Str cls, Str per
         }
     }
 }
-size_t apply_rule(sepol_impl &db, const Rule &rule) {
-    policy_diagnostic.clear();
+struct Atomic {
+    Rule rule;
+    std::function<void(sepol_impl &)> apply;
+};
+// Parsing/expansion performs no policy lookup. Module checks use this same
+// grammar without opening selinuxfs or entering a policy transaction.
+std::vector<Atomic> parse_rule(const Rule &rule, bool module = false) {
+    std::vector<Atomic> out;
+    auto emit = [&](std::string text, std::function<void(sepol_impl &)> apply) {
+        out.push_back({{rule.file, std::move(text), rule.line}, std::move(apply)});
+    };
     Parser p(rule.text);
-    if (p.empty()) return 0;
+    if (p.empty()) return out;
     std::string action = p.one();
-    size_t count = 0;
+    if (module && action == "attradd") action = "typeattribute";
+    if (module && action == "name_transition") action = "type_transition";
     if (action == "type" || action == "attribute") {
         auto name = p.one();
         if (name == "*") throw Failure("declaration requires an explicit symbol");
         auto attrs = p.more() ? p.group() : Strings{};
         if (action == "attribute" && !attrs.empty()) throw Failure("attribute takes one symbol");
         p.end();
-        require(db.add_type(name, action == "type" ? TYPE_TYPE : TYPE_ATTRIB));
-        ++count;
-        for (auto &attr : attrs) { require(db.add_typeattribute(name, attr)); ++count; }
+        if (module && action == "type") {
+            if (attrs.empty()) attrs.push_back("domain");
+            for (auto &attr : attrs) emit("type " + name + " " + attr, [=](sepol_impl &db) {
+                require(db.add_type(name, TYPE_TYPE)); require(db.add_typeattribute(name, attr));
+            });
+        } else {
+            emit(action + " " + name, [=](sepol_impl &db) { require(db.add_type(name, action == "type" ? TYPE_TYPE : TYPE_ATTRIB)); });
+            for (auto &attr : attrs) emit("typeattribute " + name + " " + attr,
+                [=](sepol_impl &db) { require(db.add_typeattribute(name, attr)); });
+        }
     } else if (action == "typeattribute") {
         auto types = p.group(), attrs = p.group(); p.end();
-        for (auto &type : types) for (auto &attr : attrs) { require(db.add_typeattribute(type, attr)); ++count; }
+        for (auto &type : types) for (auto &attr : attrs) emit("typeattribute " + type + " " + attr,
+            [=](sepol_impl &db) { require(db.add_typeattribute(type, attr)); });
     } else if (action == "allow" || action == "deny" || action == "auditallow" || action == "dontaudit") {
         auto sources = p.group(), targets = p.group(), classes = p.group(true), perms = p.group(); p.end();
         int effect = action == "auditallow" ? AVTAB_AUDITALLOW : action == "dontaudit" ? AVTAB_AUDITDENY : AVTAB_ALLOWED;
         bool invert = action == "deny" || action == "dontaudit";
         for (auto &s : sources) for (auto &t : targets) for (auto &c : classes) for (auto &perm : perms) {
             if (t == "self" && s == "*") throw Failure("self with wildcard source is unsupported");
-            auto target = wildcard(t == "self" ? s : t);
-            require(db.add_rule(wildcard(s), target, wildcard(c), wildcard(perm), effect, invert));
-            if (action == "deny") deny_inherited(db, wildcard(s), target, wildcard(c), wildcard(perm));
-            ++count;
+            auto target = t == "self" ? s : t;
+            emit(action + " " + s + " " + target + " " + c + " " + perm, [=](sepol_impl &db) {
+                require(db.add_rule(wildcard(s), wildcard(target), wildcard(c), wildcard(perm), effect, invert));
+                if (action == "deny") deny_inherited(db, wildcard(s), wildcard(target), wildcard(c), wildcard(perm));
+            });
         }
     } else if (action == "allowxperm" || action == "auditallowxperm" || action == "dontauditxperm") {
         auto sources = p.group(), targets = p.group(), classes = p.group(true);
@@ -307,7 +326,9 @@ size_t apply_rule(sepol_impl &db, const Rule &rule) {
             }
             for (auto &s : sources) for (auto &t : targets) for (auto &c : classes) {
                 if (t == "self" && s == "*") throw Failure("self with wildcard source is unsupported");
-                require(db.add_xperm_rule(wildcard(s), wildcard(t == "self" ? s : t), wildcard(c), x, effect)); ++count;
+                auto target = t == "self" ? s : t;
+                emit(action + " " + s + " " + target + " " + c + " ioctl " + range,
+                    [=](sepol_impl &db) { require(db.add_xperm_rule(wildcard(s), wildcard(target), wildcard(c), x, effect)); });
             }
         }
     } else if (action == "type_transition" || action == "type_change" || action == "type_member") {
@@ -316,9 +337,10 @@ size_t apply_rule(sepol_impl &db, const Rule &rule) {
         if (classes.size() != 1) throw Failure("type transition requires one class");
         auto d = p.one(); auto object = p.more() ? p.one() : std::string{}; p.end();
         if (!object.empty() && action != "type_transition") throw Failure("filename only allowed on type_transition");
-        if (!object.empty()) require(db.add_filename_trans(s, t, classes[0], d, object));
-        else require(db.add_type_rule(s, t, classes[0], d, action == "type_transition" ? AVTAB_TRANSITION : action == "type_change" ? AVTAB_CHANGE : AVTAB_MEMBER));
-        ++count;
+        emit(rule.text, [=](sepol_impl &db) {
+            if (!object.empty()) require(db.add_filename_trans(s, t, classes[0], d, object));
+            else require(db.add_type_rule(s, t, classes[0], d, action == "type_transition" ? AVTAB_TRANSITION : action == "type_change" ? AVTAB_CHANGE : AVTAB_MEMBER));
+        });
     } else if (action == "genfscon") {
         auto fs = p.one(), path = p.one();
         // Context includes ':' and is consumed directly from the original rule.
@@ -327,13 +349,24 @@ size_t apply_rule(sepol_impl &db, const Rule &rule) {
         auto first = context.find_first_not_of(" \t");
         auto last = context.find_last_not_of(" \t\r;");
         if (first == std::string::npos) throw Failure("missing genfscon context");
-        require(db.add_genfscon(fs, path, context.substr(first, last - first + 1))); ++count;
+        context = context.substr(first, last - first + 1);
+        emit(rule.text, [=](sepol_impl &db) { require(db.add_genfscon(fs, path, context)); });
     } else if (action == "enforce" || action == "permissive") {
         auto types = p.group(); p.end();
-        for (auto &type : types) { require(db.set_type_state(wildcard(type), action == "permissive")); ++count; }
+        for (auto &type : types) emit(action + " " + type,
+            [=](sepol_impl &db) { require(db.set_type_state(wildcard(type), action == "permissive")); });
     } else throw Failure("unsupported operation " + action);
+    return out;
+}
+void apply_atomic(sepol_impl &db, const Atomic &atomic) {
+    policy_diagnostic.clear();
+    atomic.apply(db);
     if (!policy_diagnostic.empty()) throw Failure(policy_diagnostic);
-    return count;
+}
+size_t apply_rule(sepol_impl &db, const Rule &rule) {
+    auto operations = parse_rule(rule);
+    for (const auto &operation : operations) apply_atomic(db, operation);
+    return operations.size();
 }
 void save(const std::string &path, const std::vector<char> &image);
 void prepare_shared_context(const std::string &path, const std::string &text, const std::string &boot) {
@@ -377,7 +410,7 @@ bool shared_context_file(const std::string &path) {
     return stat(path.substr(0, slash).c_str(), &parent) == 0 &&
         parent.st_dev == device && parent.st_ino == inode && access(library, R_OK) == 0;
 }
-std::vector<Rule> read_rules(const Strings &paths, const std::string &prepare_boot = {}) {
+std::vector<Rule> read_rules(const Strings &paths, const std::string &prepare_boot = {}, bool module = false, bool syntax_only = false) {
     std::vector<Rule> rules;
     for (auto &path : paths) {
         auto bytes = read_file(path);
@@ -386,17 +419,24 @@ std::vector<Rule> read_rules(const Strings &paths, const std::string &prepare_bo
         // Only an admitted boot policy transaction prepares this explicit module
         // adapter. Plain check/save and ordinary SDK calls remain read-only.
         if (!prepare_boot.empty()) prepare_shared_context(path, text, prepare_boot);
-        bool shared = shared_context_file(path);
+        bool shared = !syntax_only && shared_context_file(path);
         if (shared && !maple_shared_file_contract(text.c_str()))
             throw Failure("unsupported LSPosed shared-file contract: " + path);
-        size_t line = 1, start = 0;
+        size_t line = 1, statement_line = 1, start = 0;
+        bool quoted = false, comment = false;
         for (size_t i = 0; i <= text.size(); ++i) {
-            if (i == text.size() || text[i] == '\n') {
+            if (module && i < text.size()) {
+                if (text[i] == '#' && !quoted) comment = true;
+                if (text[i] == '"' && !comment) quoted = !quoted;
+            }
+            if (i == text.size() || text[i] == '\n' || (module && text[i] == ';' && !quoted && !comment)) {
                 auto statement = text.substr(start, i - start);
                 int adapted = shared ? maple_shared_file_rule(statement.c_str()) : 0;
                 if (adapted < 0) throw Failure("unsupported LSPosed shared-file contract: " + path);
-                if (!adapted) rules.push_back({path, statement, line});
-                ++line; start = i + 1;
+                if (!adapted) rules.push_back({path, statement, statement_line});
+                if (i < text.size() && text[i] == '\n') ++line;
+                statement_line = line; start = i + 1;
+                quoted = comment = false;
             }
         }
     }
@@ -420,6 +460,70 @@ void verify_rules(sepol_impl &policy, const std::vector<Rule> &rules) {
     size_t operations = 0;
     if (!apply_all(policy, rules, operations, false)) throw Failure("semantic verification: replay rejected rules");
     if (before != encode(policy)) throw Failure("semantic verification: expected rules missing from policy");
+}
+struct ModuleResult {
+    size_t attempted = 0, skipped = 0, failed = 0, syntax_errors = 0;
+    bool fatal = false;
+    std::vector<Atomic> applied;
+};
+std::vector<Atomic> module_rules(const std::vector<Rule> &rules, ModuleResult &result) {
+    std::vector<Atomic> out;
+    for (const auto &rule : rules) {
+        try {
+            auto expanded = parse_rule(rule, true);
+            out.insert(out.end(), expanded.begin(), expanded.end());
+        } catch (const Failure &e) {
+            ++result.syntax_errors;
+            printf("{\"event\":\"rule\",\"file\":%s,\"line\":%zu,\"status\":\"syntax_error\",\"message\":%s}\n",
+                quote(rule.file).c_str(), rule.line, quote(e.what()).c_str());
+        }
+    }
+    return out;
+}
+void verify_atomics(sepol_impl &policy, const std::vector<Atomic> &operations) {
+    auto before = encode(policy);
+    for (const auto &operation : operations) apply_atomic(policy, operation);
+    if (before != encode(policy)) throw Failure("semantic verification: expected module operations missing from policy");
+}
+// Only ordinary symbol/operation incompatibilities may be skipped. Allocation,
+// serialization and conditional-deny failures abort the entire transaction.
+bool module_rejection(const std::string &message) {
+    return !policy_diagnostic.empty() && message == policy_diagnostic &&
+        (message.find("does not exist") != std::string::npos ||
+         message.find("different flavor") != std::string::npos ||
+         message.find("is an attribute") != std::string::npos ||
+         message.find("is not an attribute") != std::string::npos ||
+         message.find("No class is specified") != std::string::npos ||
+         message.find("does not support") != std::string::npos);
+}
+void apply_module(std::unique_ptr<sepol_impl> &policy, const std::vector<Rule> &rules, ModuleResult &result) {
+    auto operations = module_rules(rules, result);
+    auto baseline = encode(*policy);
+    for (const auto &operation : operations) {
+        ++result.attempted;
+        std::string status = "applied", message;
+        try {
+            apply_atomic(*policy, operation);
+            result.applied.push_back(operation);
+        } catch (const Failure &e) {
+            message = e.what();
+            if (module_rejection(message)) { ++result.skipped; status = "skipped"; }
+            else { ++result.failed; result.fatal = true; status = "failed"; }
+            // Some mutators can reject after a partial change (type + attr,
+            // inherited deny). Rebuild only on rejection, from the frozen
+            // baseline and successful subset; no failed mutation is published.
+            policy = decode(baseline);
+            for (const auto &accepted : result.applied) apply_atomic(*policy, accepted);
+        }
+        printf("{\"event\":\"atomic\",\"file\":%s,\"line\":%zu,\"atomic_index\":%zu,\"operation\":%s,\"status\":%s,\"message\":%s}\n",
+            quote(operation.rule.file).c_str(), operation.rule.line, result.attempted,
+            quote(operation.rule.text).c_str(), quote(status).c_str(), quote(message).c_str());
+        if (result.fatal) break;
+    }
+}
+void module_counts(const ModuleResult &result) {
+    printf(",\"attempted_operations\":%zu,\"applied_operations\":%zu,\"skipped_operations\":%zu,\"failed_operations\":%zu,\"failed_statements\":%zu",
+        result.attempted, result.applied.size(), result.skipped, result.failed, result.syntax_errors);
 }
 char enforcing_state() {
     auto value = read_file(ENFORCE);
@@ -459,7 +563,7 @@ void save(const std::string &path, const std::vector<char> &image) {
     } catch (...) { unlink(name.data()); throw; }
 }
 int run(int argc, char **argv) {
-    if (argc < 2) throw Failure("usage: maplesu-policy check|save|apply|restore [--policy FILE] [--rules FILE]... [--output FILE]");
+    if (argc < 2) throw Failure("usage: maplesu-policy check|save|apply|restore|module-check|module-apply [--policy FILE] [--rules FILE]... [--output FILE]");
     if (std::string_view(argv[1]) == "boot-sdk-info" || std::string_view(argv[1]) == "boot-sdk-start")
         return boot_sdk_control(argc, argv);
 #ifdef MAPLESU_POLICY_HOOK_BACKEND
@@ -545,13 +649,24 @@ int run(int argc, char **argv) {
         else if (option == "--output") output = argv[i];
         else throw Failure("unknown option " + option);
     }
-    if (mode != "check" && mode != "save" && mode != "apply" && mode != "restore") throw Failure("unknown mode " + mode);
+    const bool module = mode == "module-apply", syntax_only = mode == "module-check";
+    if (mode != "check" && mode != "save" && mode != "apply" && mode != "restore" && !module && !syntax_only) throw Failure("unknown mode " + mode);
     if (mode == "save" && output.empty()) throw Failure("save requires --output");
     if (mode != "save" && !output.empty()) throw Failure("--output is valid only with save");
-    if (mode == "apply" && policy_path != LIVE) throw Failure("apply requires current live policy");
-    bool restore = mode == "restore", transaction = mode == "apply" || restore;
+    if ((mode == "apply" || module) && policy_path != LIVE) throw Failure("apply requires current live policy");
+    bool restore = mode == "restore", transaction = mode == "apply" || module || restore;
     if (require_boot_policy && !transaction) throw Failure("--require-boot-policy is valid only with apply or restore");
     if (restore && (policy_path == LIVE || !paths.empty())) throw Failure("restore requires --policy BACKUP without --rules");
+    if (syntax_only) {
+        if (policy_path != LIVE) throw Failure("module-check accepts only --rules");
+        ModuleResult result;
+        auto operations = module_rules(read_rules(paths, {}, true, true), result);
+        result.attempted = operations.size();
+        printf("{\"event\":\"result\",\"status\":%s,\"committed\":false,\"expanded_operations\":%zu",
+            quote(result.syntax_errors ? "validation_failed" : "checked").c_str(), operations.size());
+        module_counts(result); puts("}");
+        return result.syntax_errors ? 2 : 0;
+    }
     const auto boot = transaction ? maplesu::module_policy::current_boot_id() : std::string{};
     auto blocked = [&] {
         if (!maplesu::module_policy::Store::open(false).blocks_transactions(boot, require_boot_policy)) return false;
@@ -573,7 +688,7 @@ int run(int argc, char **argv) {
         }
         initial_enforcing = enforcing_state();
     }
-    auto rules = read_rules(paths, mode == "apply" && require_boot_policy ? boot : std::string{});
+    auto rules = read_rules(paths, (mode == "apply" || module) && require_boot_policy ? boot : std::string{}, module);
     auto live_before = restore ? read_file(LIVE) : std::vector<char>{};
     auto baseline = read_file(policy_path);
     auto policy = decode(baseline);
@@ -582,18 +697,33 @@ int run(int argc, char **argv) {
 #endif
     unsigned version = policy->db->policyvers;
     size_t operations = 0;
-    if (!apply_all(*policy, rules, operations, true)) {
-        printf("{\"event\":\"result\",\"status\":\"validation_failed\",\"committed\":false,\"expanded_operations\":%zu}\n", operations);
+    ModuleResult module_result;
+    bool valid;
+    if (module) {
+        apply_module(policy, rules, module_result);
+        operations = module_result.applied.size();
+        valid = !module_result.fatal && (operations || (!module_result.attempted && !module_result.syntax_errors));
+    } else valid = apply_all(*policy, rules, operations, true);
+    if (!valid) {
+        printf("{\"event\":\"result\",\"status\":\"validation_failed\",\"committed\":false,\"expanded_operations\":%zu", operations);
+        if (module) module_counts(module_result);
+        puts("}");
         return 2;
+    }
+    if (module && !operations) {
+        printf("{\"event\":\"result\",\"status\":\"unchanged\",\"committed\":false");
+        module_counts(module_result); puts("}");
+        return 0;
     }
     auto image = encode(*policy);
     auto checked = decode(image);
-    verify_rules(*checked, rules);
+    if (module) verify_atomics(*checked, module_result.applied);
+    else verify_rules(*checked, rules);
     if (mode == "save") save(output, image);
     if (transaction) {
         if ((restore ? live_before : baseline) != read_file(LIVE)) throw Failure("live policy changed before commit; retry from the new baseline");
         // Re-read the rule files immediately before committing the frozen candidate.
-        auto current_rules = read_rules(paths);
+        auto current_rules = read_rules(paths, {}, module);
         if (current_rules.size() != rules.size()) throw Failure("rule files changed before commit");
         for (size_t i = 0; i < rules.size(); ++i) if (rules[i].text != current_rules[i].text) throw Failure("rule files changed before commit");
         if (enforcing_state() != initial_enforcing) throw Failure("global SELinux state changed before commit");
@@ -610,13 +740,18 @@ int run(int argc, char **argv) {
                 restore_android_netlink(*actual, android_get_device_api_level());
 #endif
                 if (!policy_equivalent(*checked, *actual)) throw Failure("restored policy differs from complete backup");
-            } else verify_rules(*actual, rules);
+            } else if (module) verify_atomics(*actual, module_result.applied);
+            else verify_rules(*actual, rules);
         } catch (const std::exception &e) {
-            printf("{\"event\":\"result\",\"status\":\"applied_verification_failed\",\"committed\":true,\"written_bytes\":%zu,\"message\":%s}\n", image.size(), quote(e.what()).c_str());
+            printf("{\"event\":\"result\",\"status\":\"applied_verification_failed\",\"committed\":true,\"written_bytes\":%zu,\"message\":%s", image.size(), quote(e.what()).c_str());
+            if (module) module_counts(module_result);
+            puts("}");
             return 3;
         }
     }
-    printf("{\"event\":\"result\",\"status\":%s,\"committed\":%s,\"policy_version\":%u,\"input_bytes\":%zu,\"candidate_bytes\":%zu,\"written_bytes\":%zu,\"expanded_operations\":%zu}\n", quote(restore ? "restored" : mode == "apply" ? "applied" : mode == "save" ? "saved" : "checked").c_str(), transaction ? "true" : "false", version, baseline.size(), image.size(), mode == "check" ? 0 : image.size(), operations);
+    printf("{\"event\":\"result\",\"status\":%s,\"committed\":%s,\"policy_version\":%u,\"input_bytes\":%zu,\"candidate_bytes\":%zu,\"written_bytes\":%zu,\"expanded_operations\":%zu", quote(restore ? "restored" : module ? (module_result.skipped || module_result.syntax_errors ? "applied_partial" : "applied") : mode == "apply" ? "applied" : mode == "save" ? "saved" : "checked").c_str(), transaction ? "true" : "false", version, baseline.size(), image.size(), mode == "check" ? 0 : image.size(), operations);
+    if (module) module_counts(module_result);
+    puts("}");
     return 0;
 }
 } // namespace

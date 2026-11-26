@@ -32,7 +32,7 @@ flowchart TD
 | `consumer/` | Example app that runs in its own UID | MapleSU |
 | `image-core/` | Boot and vendor_boot inspection, compression, rebuilding and AVB handling; plain Java | MapleSU; format references are recorded in `third_party/DEPENDENCIES.md` |
 | `installer-core/` | File and block-device writes, multi-partition plans, journals and recovery; plain Java | MapleSU |
-| `runtime/` | Native SU execution, supervised sessions, JNI and the Ultra SDK adapters | MapleSU adapters in `runtime/src` and `runtime/pro`, over pinned inputs in `runtime/upstream` and `runtime/upstream-pro` |
+| `runtime/` | Native SU execution, supervised sessions, JNI and the Ultra SDK adapters | MapleSU adapters in `runtime/src` and `runtime/ultra`, over pinned inputs in `runtime/upstream` and `runtime/upstream-pro` |
 | `patch-engine/` | Native kernel analysis and the Lite patch-plan path, with per-kernel release assets | MapleSU, over a pinned patch core in `patch-engine/upstream` |
 | `native-inputs/` | Retained kernel Images, symbols, policy payloads, BTF, configurations and compatibility contracts | Fixed inputs indexed in `release/native-inputs.json` |
 | `jailbreak-providers/` | Temporary-root providers, authenticated leases and kernel adaptation contracts | Per provider; each records its own source and artifacts |
@@ -68,12 +68,12 @@ flowchart TD
 | `pure-java-modules` | `image-core` and `installer-core` import only the JDK and their own packages, so `python tools/check_host.py` tests them with a bare JDK |
 | `app-facing-modules` | `client` and `consumer` stay out of Manager internals; the three Binder interfaces in `dev.maplesu.manager.runtime` are the only shared types |
 | `aidl-parity` | The Binder AIDL in `client/src/main/aidl` and `manager/src/main/aidl` stays byte-identical, because the Manager does not depend on `client` |
-| `native-boundary` | Only a short list of files loads a native library or declares JNI methods; Ultra reaches its SDK only through `runtime/pro/bridge/NativeBridge.java` |
+| `native-boundary` | Only a short list of files loads a native library or declares JNI methods; Ultra reaches its SDK only through `runtime/ultra/bridge/NativeBridge.java` |
 | `third-party-records` | Every directory under `third_party/` has a source, license or manifest record, and every link in `third_party/DEPENDENCIES.md` resolves; directories without a license text are listed as notes |
 | `docs-paths`, `docs-index` | Paths named on this page exist, every top-level directory is described here, and every guide in `docs/` is reachable from the index |
 | `directory-readmes` | Every top-level directory, except build plumbing and the retained inputs, has a README that says what lives there and how to build and test it, and its local links resolve |
 | `script-layout` | Regression tests live in `scripts/tests/`, and a script that finds the repository root from `__file__` uses the index its depth requires, so moving a file cannot silently point it elsewhere |
-| `pinned-scripts` | The scripts that `runtime/upstream-pro/SDK-RELEASE.json` and the delivery and maintenance records under `runtime/upstream-pro/maintenance/` pin still exist and match their recorded digests; the two repair scripts repointed at the relocated 505 baseline match the digests listed in the checker until the SDK records re-pin them. Skipped where the SDK record is absent |
+| `pinned-scripts` | Explicit WIP checkpoints verify current scripts by path, size and SHA-256 in `release/native-inputs.json`, and retain the recorded SDK input bytes. Other scopes keep the SDK-record digest checks. Formal artifact and runtime acceptance remain separate |
 | `portable-paths` | No first-party file hard-codes a maintainer's workspace, user profile, pinned JDK or Python directory, or device serial; tools are found through the environment variables in the [build guide](BUILD.md#locating-tools). Retained inputs, receipts and pinned upstream trees keep the paths they were recorded with |
 
 The Normal backend has its own machine-checked boundary: `manager/src/ksu/java` holds the KernelSU JNI backend, and `manager/src/test/java/dev/maplesu/manager/ksu/KsuSourceIsolationTest.kt` checks which files may sit beside it and which imports may reach it.
@@ -95,7 +95,9 @@ The Normal backend has its own machine-checked boundary: `manager/src/ksu/java` 
 
 ### Two Kotlin namespaces
 
-- `com.sevenk.core` is the application shell inherited from 7kimisu: most Compose screens and components, navigation, themes, settings and data. MapleSU modifies and extends it.
+- `com.maplesu.core` is the application shell inherited from 7kimisu: most Compose screens and components, navigation, themes, settings and data. MapleSU modifies and extends it.
+
+  The manager's namespace, AIDL and JNI profile lookups use `com.maplesu.core`; its installed package stays `dev.maplesu.manager`. Legacy kernel data paths, external manager package names and foreign ramdisk markers keep their original values so upgrades and migration detection continue to work.
 - `dev.maplesu.manager` holds MapleSU's domain packages and its work-mode screens.
 
 Imports run in both directions today, so treat the split as origin, not as layering.
@@ -105,10 +107,10 @@ Imports run in both directions today, so treat the split as origin, not as layer
 | Package | Responsibility | Start reading at |
 | --- | --- | --- |
 | `workmode/` | Mode model, detection, routing and switching; per-mode settings storage; snapshots; work-mode screens | `workmode/detect/DetectionRules.kt`, `workmode/switch/ModeSwitchPreflight.kt`, `workmode/storage/ModePaths.kt` |
-| `runtime/` | Native SU execution, supervised sessions, the credential store and app authorization; `runtime/pro/` is the Ultra Pro adapter | `runtime/NativeSu.kt`, `runtime/MapleSuCredentialStore.kt`, `runtime/pro/ProRuntimeClient.kt` |
+| `runtime/` | Native SU execution, supervised sessions, the credential store and app authorization; `runtime/ultra/` is the Ultra Pro adapter | `runtime/NativeSu.kt`, `runtime/MapleSuCredentialStore.kt`, `runtime/ultra/UltraRuntimeClient.kt` |
 | `installer/` | Root-side installer service, block-device access, baseline provisioning, stock backup resolution | `installer/BlockPartitionAccess.kt` |
-| `modules/` | Module routing, archive inspection and compatibility records | `modules/ModuleModeRouter.kt`, `modules/compat/ProModuleCompatibilityRegistry.kt` |
-| `prokernel/` | Ultra kernel preparation | `prokernel/ProKernelFlow.kt`, `prokernel/KernelSeries.kt` |
+| `modules/` | Module routing, archive inspection and compatibility records | `modules/ModuleModeRouter.kt`, `modules/compat/UltraModuleCompatibilityRegistry.kt` |
+| `ultrakernel/` | Ultra kernel preparation | `ultrakernel/UltraKernelFlow.kt`, `ultrakernel/KernelSeries.kt` |
 | `patching/` | The Lite boot patcher | `patching/LiteBootPatcher.kt` |
 | `jailbreak/` | Temporary-root provider orchestration | `jailbreak/JailbreakExecutor.kt` |
 | `liteweb/` | Lite web manager: an HTTP admin served by a root service or a standalone daemon | `liteweb/LiteWebAdminController.kt` |
@@ -121,11 +123,11 @@ The smaller packages (`soter/`, `litehidden/`, `parasite/`, `pro/`) are describe
 ### Where new code goes
 
 - **Domain logic and orchestration** goes in `dev.maplesu.manager`. If it needs no Android API and no Manager state, put it in `image-core` or `installer-core`, where `python tools/check_host.py` can test it on a bare JDK.
-- **Native calls** extend an existing site: `manager/src/ksu/java` for Normal, `runtime/pro/bridge/NativeBridge.java` for the Ultra SDK, and the runtime JNI for SU execution. Do not add a library loader elsewhere; `native-boundary` fails if you do.
+- **Native calls** extend an existing site: `manager/src/ksu/java` for Normal, `runtime/ultra/bridge/NativeBridge.java` for the Ultra SDK, and the runtime JNI for SU execution. Do not add a library loader elsewhere; `native-boundary` fails if you do.
 - **App-facing API** goes in `client/`. Mirror any AIDL change in `manager/src/main/aidl`; `aidl-parity` fails otherwise.
-- **Screens** follow the screen they extend in `com.sevenk.core.ui`, or the work-mode screens in `workmode/`. Add Material and Miuix variants together, with English default strings and Simplified Chinese strings.
+- **Screens** follow the screen they extend in `com.maplesu.core.ui`, or the work-mode screens in `workmode/`. Add Material and Miuix variants together, with English default strings and Simplified Chinese strings.
 - **Third-party code** never gets copied into first-party packages. Add a pinned input with a record under `third_party/` and reach it through an existing adapter.
-- **Scripts and tools.** A repository-wide entry point or generator goes in `tools/` and gets a line in its README. Build, identity and regression work for the Ultra backend goes in `scripts/`, with tests in `scripts/tests/`. Do not rename, move or reformat a script that the SDK record pins; `pinned-scripts` fails if you do, and the pinned list is in `tools/check_architecture.py`.
+- **Scripts and tools.** A repository-wide entry point or generator goes in `tools/` and gets a line in its README. Build, identity and regression work for the Ultra backend goes in `scripts/`, with tests in `scripts/tests/`. Update current source input records when changing a pinned tool in a WIP checkpoint; preserve historical SDK receipts. Other scopes must keep the SDK-record digest contract. The pinned list is in `tools/check_architecture.py`.
 - **A new top-level directory** gets its own `README.md`, a row in the repository map above, and, if it is a Gradle module, a row in the module table.
 
 ## Core flows
@@ -146,10 +148,10 @@ The installer selects a packaged LKM by KMI and prepares the boot-image ramdisk 
 
 ### Ultra: kernel preparation
 
-The Ultra installation dispatcher selects `prokernel/ProKernelFlow.kt`. It prepares a patch against the kernel already present in the input boot image:
+The Ultra installation dispatcher selects `ultrakernel/UltraKernelFlow.kt`. It prepares a patch against the kernel already present in the input boot image:
 
 1. Inspect the boot container, decode its ARM64 kernel and read the full kernel release.
-2. Inspect the release assets within the matching kernel series. `prokernel/KernelSeries.kt` lists the series that have a render tier (5.10, 5.15, 6.1, 6.6, 6.12 and 6.18) and refuses the others. Eligible generation paths resolve symbols and render a plan against the target kernel; a declared but invalid asset remains an error.
+2. Inspect the release assets within the matching kernel series. `ultrakernel/KernelSeries.kt` lists the series that have a render tier (5.10, 5.15, 6.1, 6.6, 6.12 and 6.18) and refuses the others. Eligible generation paths resolve symbols and render a plan against the target kernel; a declared but invalid asset remains an error.
 3. Check patch locations, original bytes, relocations, credential slots and generated patch-site coverage against the target kernel.
 4. Rebuild the boot image and record source, kernel and output digests. The builder produces a candidate file and a receipt.
 5. Hand the candidate to the installation transaction, which independently checks and writes the target partition.
@@ -165,7 +167,7 @@ MapleSU maintains the authorization transactions and SDK adaptations around thos
 - Application grants and revocations are written through the selected backend. The Pro adapter reads back the authorization list before updating its displayed state.
 - Pro authorization-table updates are serialized, written and read back before publishing a live pointer. Failed persistence restores the previous live pointer.
 - Boot restoration refreshes the UID mapping of existing grants within the current boot and credential scope.
-- `runtime/pro/ProRuntimeClient.kt` and `runtime/pro/bridge/NativeBridge.java` centralize SDK calls, request context, concurrency control and structured results.
+- `runtime/ultra/UltraRuntimeClient.kt` and `runtime/ultra/bridge/NativeBridge.java` centralize SDK calls, request context, concurrency control and structured results.
 
 The public application SDK is a separate Binder interface. Its clients receive session handles and streams; the native backend credentials stay with the Manager and runtime.
 
@@ -199,7 +201,7 @@ The provider workflow covers admission, privileged lease handover, environment r
 | Ultra KSU-style scripts | MapleSU's adapted script runner with ordered lifecycle hooks | Module scripts, properties, mounts and optional policy rules |
 | Ultra native modules | Native descriptors and lifecycle calls through the compatible Pro SDK backend | Module ABI, SDK version, kernel interfaces and action-specific compatibility records |
 
-Ultra supports the native module ABI documented in the retained SDK. That module ABI differs from the application Binder SDK and from Linux `.ko` modules. `modules/compat/ProModuleCompatibilityRegistry.kt` applies module, backend and kernel compatibility records before native lifecycle operations.
+Ultra supports the native module ABI documented in the retained SDK. That module ABI differs from the application Binder SDK and from Linux `.ko` modules. `modules/compat/UltraModuleCompatibilityRegistry.kt` applies module, backend and kernel compatibility records before native lifecycle operations.
 
 WebUI routing follows the module path: KSU asset webroots, the Ultra script proxy and SDK-started native-module HTTP callbacks have separate lifecycle and readiness checks. Development instructions are in the [module guide](MODULES.md), the [Ultra native module guide](ULTRA_MODULES.md) and the [compatibility guide](MODULE_COMPATIBILITY.md).
 
@@ -261,7 +263,7 @@ The client AAR, the host libraries and the consumer example build separately. A 
 
 ### Replacing a backend input
 
-The SDK is reached only through `runtime/pro/ProRuntimeClient.kt`, `runtime/pro/bridge/NativeBridge.java` and the runtime JNI, and `native-boundary` keeps it that way. A replacement therefore has a bounded contract: the JNI surface of `NativeBridge.java` and the module ABI in the [Ultra native module guide](ULTRA_MODULES.md). Build the replacement against that contract, record its provenance in its own directory or under `third_party/`, and do not copy code from inputs whose terms are not recorded.
+The SDK is reached only through `runtime/ultra/UltraRuntimeClient.kt`, `runtime/ultra/bridge/NativeBridge.java` and the runtime JNI, and `native-boundary` keeps it that way. A replacement therefore has a bounded contract: the JNI surface of `NativeBridge.java` and the module ABI in the [Ultra native module guide](ULTRA_MODULES.md). Build the replacement against that contract, record its provenance in its own directory or under `third_party/`, and do not copy code from inputs whose terms are not recorded.
 
 ## Changing things safely
 

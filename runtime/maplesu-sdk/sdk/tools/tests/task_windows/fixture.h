@@ -84,6 +84,7 @@ namespace export_symbol {
 inline void get_current(asmjit::a64::Assembler*, asmjit::a64::GpX reg) {
     fixture::state.contract &= reg.id == 10; fixture::event("get-current");
 }
+inline KModErr get_current_checked(asmjit::a64::Assembler* a, asmjit::a64::GpX r) { get_current(a, r); return KModErr::OK; }
 inline void get_task_mm(asmjit::a64::Assembler*, KModErr& error, asmjit::a64::GpX reg) {
     auto& s = fixture::state;
     ++s.mm_get; fixture::event("get-task-mm"); s.contract &= reg.id == 10;

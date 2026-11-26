@@ -40,7 +40,7 @@ Run everything from the repository root. The scripts need Python 3.12 or later; 
 | Directory | Purpose |
 | --- | --- |
 | `patch/` | Builds an unsigned, non-flashable offline boot candidate and verifies it independently; includes the Java kernel codec |
-| `specgen/` | Pro kernel spec generator ([README](specgen/README.md)) |
+| `specgen/` | Ultra kernel spec generator ([README](specgen/README.md)) |
 | `ir-gen/` | Per-release IR specs and release assets from a kernel image and its symbol dump, with the rule engine and AArch64 encoder |
 | `avb/` | `avb_scan.py` detects and classifies the AVB surface of a boot image; it never signs or writes |
 | `ultra-vr-filter/` | Freestanding C and assembly sources of the Ultra module filter, built by `scripts/build-ultra-vr-filter.py` |
@@ -48,13 +48,13 @@ Run everything from the repository root. The scripts need Python 3.12 or later; 
 
 ## Device checks
 
-These talk to a connected device. Run them only on a device you own, and read each header first: `device_acceptance.sh` and `device_hook_evidence.sh` make a provider attempt and tolerate a device that reboots during it, while `verify_ultra_device.sh` and `collect-pro-module-evidence.ps1` only read.
+These talk to a connected device. Run them only on a device you own, and read each header first: `device_acceptance.sh` and `device_hook_evidence.sh` make a provider attempt and tolerate a device that reboots during it, while `verify_ultra_device.sh` and `collect-ultra-module-evidence.ps1` only read.
 
 | File | Purpose |
 | --- | --- |
 | `device_acceptance.sh`, `device_hook_evidence.sh`, `device_l3_acceptance.sh` | Acceptance passes and evidence collection around a provider attempt, and the L3 (ABI v2) acceptance driver |
 | `verify_ultra_device.sh` | Read-only checks of the Ultra build's logs and heartbeats |
-| `collect-pro-module-evidence.ps1` | Read-only host-side collection of a Pro module fault |
+| `collect-ultra-module-evidence.ps1` | Read-only host-side collection of a Ultra module fault |
 
 ## Tests
 

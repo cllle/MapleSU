@@ -63,6 +63,33 @@ data class LiteWebDaemonConfig(val port: Int, val token: String, val workMode: S
         fun load(path: String = RecoveryPaths.WEBUI_CONFIG): LiteWebDaemonConfig? =
             runCatching { File(path).readText(Charsets.UTF_8) }.getOrNull()?.let(::parse)
 
+        /** Only a stopped listener may change config offline; live owners use authenticated HTTP rebind. */
+        internal fun updateStoppedPort(directory: File, expectedIdentity: String, port: Int, pid: String): String? {
+            dev.maplesu.manager.liteweb.LiteWebPortPolicy.validate(port)?.let { return it }
+            if (!expectedIdentity.matches(Regex("[0-9a-f]{64}"))) return "RECOVERY_CONFIG_CHANGED"
+            return try {
+                val lease = DaemonProcessLease.acquire(directory, pid) ?: return "LITEWEB_DAEMON_OWNER_ACTIVE"
+                lease.use {
+                    val path = File(directory, "webui.conf").absolutePath
+                    val current = load(path) ?: return "LITEWEB_DAEMON_CONFIG_MISSING"
+                    if (current.workMode != "LITE") return "LITEWEB_MODE_NOT_LITE"
+                    if (dev.maplesu.manager.liteweb.liteWebPortIdentity(current.port, current.token) != expectedIdentity) {
+                        return "RECOVERY_CONFIG_CHANGED"
+                    }
+                    // Reserve the candidate until save+manifest readback completes; never bind the old port.
+                    java.net.ServerSocket().use { candidate ->
+                        candidate.bind(java.net.InetSocketAddress(InetAddress.getByName(LiteWebConstants.LOOPBACK), port))
+                        updatePort(path, current, port)
+                    }
+                }
+                null
+            } catch (_: java.net.BindException) {
+                dev.maplesu.manager.liteweb.LiteWebPortPolicy.CODE_CONFLICT
+            } catch (error: Exception) {
+                error.message?.takeIf { it.matches(Regex("[A-Z][A-Z0-9_]+")) } ?: "LITEWEB_CONFIG_WRITE_FAILED"
+            }
+        }
+
         internal fun updatePort(path: String, expected: LiteWebDaemonConfig, port: Int): LiteWebDaemonConfig {
             require(dev.maplesu.manager.liteweb.LiteWebPortPolicy.validate(port) == null)
             val file = File(path)
@@ -183,6 +210,7 @@ data class DaemonResponse(
     val contentType: String = "application/json; charset=utf-8",
     val binary: ByteArray? = null,
     val afterResponse: (() -> Unit)? = null,
+    val headers: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -293,10 +321,12 @@ class LiteWebDaemonCore(
         val delegate = handler ?: return json(404, "NOT_FOUND")
         val target = "/${LiteWebConstants.PATH_PREFIX}/$bridgeToken$relative"
         val headers = buildMap {
-            put("Host", "${LiteWebConstants.LOOPBACK}:${currentPort()}")
+            put("Host", originalHeaders.entries.firstOrNull { it.key.equals("Host", true) }?.value
+                ?: "${LiteWebConstants.LOOPBACK}:${currentPort()}")
             // Preserve the body type for JSON write validation, not external auth/Host headers.
-            originalHeaders.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
-                ?.value?.let { put("Content-Type", it) }
+            for (name in listOf("Content-Type", "Origin", "Referer", "Sec-Fetch-Site")) {
+                originalHeaders.entries.firstOrNull { it.key.equals(name, true) }?.value?.let { put(name, it) }
+            }
         }
         val request = LiteWebHttpRequest(
             method = method,
@@ -316,6 +346,8 @@ class LiteWebDaemonCore(
             body = response.body.toString(Charsets.UTF_8),
             contentType = response.contentType,
             binary = response.body,
+            headers = response.headers,
+            afterResponse = response.afterResponse,
         )
     }
 
@@ -403,6 +435,7 @@ class DaemonRequestHandler(private val core: LiteWebDaemonCore) : LiteWebHandler
             contentType = response.contentType,
             body = response.binary ?: response.body.toByteArray(Charsets.UTF_8),
             afterResponse = response.afterResponse,
+            headers = response.headers,
         )
     }
 }
@@ -607,17 +640,22 @@ object LiteWebDaemonMain {
             System.err.println("LITEWEB_ROOT_REQUIRED")
             kotlin.system.exitProcess(4)
         }
+        if (args.firstOrNull() == "--set-port") {
+            val port = args.getOrNull(2)?.toIntOrNull()
+            val error = if (args.size != 3 || port == null) "LITEWEB_PORT_RANGE" else {
+                LiteWebDaemonConfig.updateStoppedPort(File(RecoveryPaths.DIR), args[1], port, android.os.Process.myPid().toString())
+            }
+            println("LITEWEB_PORT_UPDATE ${error ?: "OK"}")
+            if (error != null) kotlin.system.exitProcess(6)
+            return
+        }
         if (File(dev.maplesu.manager.liteweb.RECOVERY_WEBUI_PAUSE_PATH).exists()) {
             if (args.contentEquals(arrayOf("--await-ready"))) kotlin.system.exitProcess(5)
             return
         }
-        val config = LiteWebDaemonConfig.load()
-        if (config == null) {
-            System.err.println("LITEWEB_DAEMON_CONFIG_MISSING")
-            kotlin.system.exitProcess(2)
-        }
         // The start script uses an authenticated HTTP response, never a PID or an open port alone.
         if (args.contentEquals(arrayOf("--await-ready"))) {
+            val config = LiteWebDaemonConfig.load() ?: kotlin.system.exitProcess(2)
             val probe = dev.maplesu.manager.litehidden.HttpHiddenDaemonProbe(connectTimeoutMs = 200, readTimeoutMs = 200)
             repeat(20) {
                 if (probe.ping(config.port, config.token)) return
@@ -626,7 +664,15 @@ object LiteWebDaemonMain {
             kotlin.system.exitProcess(5)
         }
         val lease = DaemonProcessLease.acquire(File(RecoveryPaths.DIR), android.os.Process.myPid().toString()) ?: return
-        lease.use { serve(config, it) }
+        lease.use {
+            // Load after owning the lease: an offline port change may have committed before this launch.
+            val config = LiteWebDaemonConfig.load()
+            if (config == null) {
+                System.err.println("LITEWEB_DAEMON_CONFIG_MISSING")
+                kotlin.system.exitProcess(2)
+            }
+            serve(config, it)
+        }
     }
 
     private fun serve(initialConfig: LiteWebDaemonConfig, lease: DaemonProcessLease) {
@@ -694,11 +740,21 @@ object LiteWebDaemonMain {
                 logger = { line -> System.err.println(line) },
             ) else dev.maplesu.manager.liteweb.UnavailableUnhidePort,
         )
+        backend.attachModuleBridge(com.maplesu.core.ui.webui.ExternalWebUiBridge(
+            files = dev.maplesu.manager.liteweb.LiteWebModuleFiles(),
+            cacheRoot = File(RecoveryPaths.DIR, "module-webui-cache"),
+            apps = { com.maplesu.core.ui.webui.rootWebUiApps() },
+            sourceCurrent = {
+                LiteWebDaemonConfig.load() == currentConfig.get() &&
+                    !File(dev.maplesu.manager.liteweb.RECOVERY_WEBUI_PAUSE_PATH).exists()
+            },
+        ))
         // 转发目标里的 token 形状必须与 core 一致（见 DaemonBridgeToken）。
         val handlerToken = DaemonBridgeToken.derive(config.token)
         val requestHandler = LiteWebRequestHandler(
             tokenProvider = { handlerToken },
             backend = backend,
+            documentTokenProvider = { currentConfig.get().token },
         )
         val core = LiteWebDaemonCore(
             config = config,
@@ -730,6 +786,8 @@ object LiteWebDaemonMain {
         } catch (error: Throwable) {
             System.err.println("LITEWEB_DAEMON_FAILED:${error.javaClass.simpleName}")
             kotlin.system.exitProcess(3)
+        } finally {
+            backend.close()
         }
     }
 }

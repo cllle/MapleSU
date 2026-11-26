@@ -8,7 +8,7 @@ The Android app (`:manager`): UI, mode detection and routing, authorization, ins
 
 | Path | Content |
 | --- | --- |
-| `src/main/` | Kotlin and Java sources (`com.sevenk.core` shell, `dev.maplesu.manager` domain packages), native glue in `cpp/`, resources and assets |
+| `src/main/` | Kotlin and Java sources (`com.maplesu.core` shell, `dev.maplesu.manager` domain packages), native glue in `cpp/`, resources and assets |
 | `src/ksu/java/` | The Normal backend: KernelSU JNI facade, root executor, module operations |
 | `src/debug/` | Debug-build sources: hidden-backend diagnostics and the Binder-admission test brokers |
 | `src/test/` | JVM unit tests |
@@ -29,7 +29,7 @@ A complete Manager build needs the pinned native inputs described in the [build 
 
 ## Rules that are easy to break
 
-- Add a native library loader only at an existing site (`native-boundary`); Ultra reaches its SDK only through `runtime/pro/bridge/NativeBridge.java`.
+- Add a native library loader only at an existing site (`native-boundary`); Ultra reaches its SDK only through `runtime/ultra/bridge/NativeBridge.java`.
 - Keep `src/main/aidl` byte-identical to [`client/src/main/aidl`](../client/) (`aidl-parity`).
 - Add Material and Miuix variants together, with English default strings and Simplified Chinese strings.
 - Files that originate in 7kimisu keep their notices; `python tools/check_architecture.py --report` shows which files are unchanged, modified or MapleSU's own.

@@ -43,6 +43,8 @@ class LiteWebAdminService : RootService() {
     @Volatile
     private var lastError: String = ""
 
+    private var ownerLease: dev.maplesu.manager.liteweb.daemon.DaemonProcessLease? = null
+
     override fun onCreate() {
         super.onCreate()
         check(Process.myUid() == 0) { "LITEWEB_ROOT_REQUIRED" }
@@ -60,19 +62,7 @@ class LiteWebAdminService : RootService() {
 
         override fun status(): Bundle = verifier.withCallingManager { statusBundle() }
 
-        override fun resetToken(): Bundle = verifier.withCallingManager {
-            val wasRunning = server?.isRunning() == true
-            stopServer(persistEnabled = false)
-            val current = loadConfigOrCreate()
-            val rotated = current.copy(
-                token = LiteWebToken.generate(SecureRandom()),
-                enabled = wasRunning,
-                startedAt = 0L,
-            )
-            saveConfig(rotated)
-            config = rotated
-            if (wasRunning) startServer().toBundle() else statusBundle()
-        }
+        override fun resetToken(): Bundle = verifier.withCallingManager { rotateToken() }
     }
 
     override fun onDestroy() {
@@ -87,10 +77,12 @@ class LiteWebAdminService : RootService() {
         server?.let { existing ->
             if (existing.isRunning()) return statusValue(rotatedToken = null)
         }
+        if (!acquireOwnerLease()) return statusValue(null)
         val current = try {
             loadConfigOrCreate()
         } catch (error: Exception) {
             lastError = codeOf(error, "LITEWEB_CONFIG_CORRUPT")
+            releaseOwnerLease()
             return statusValue(null)
         }
         val webBackend = AndroidLiteWebBackend(this, { config?.port ?: current.port }, ::applyPort)
@@ -120,7 +112,10 @@ class LiteWebAdminService : RootService() {
                     config = updated
                 } catch (error: Exception) {
                     candidate.stop()
+                    webBackend.close()
+                    backend = null
                     server = null
+                    releaseOwnerLease()
                     lastError = codeOf(error, "LITEWEB_CONFIG_WRITE_FAILED")
                     Log.w(TAG, lastError, error)
                 }
@@ -128,7 +123,10 @@ class LiteWebAdminService : RootService() {
             }
             is LiteWebStartResult.Failed -> {
                 runCatching { candidate.stop() }
+                webBackend.close()
+                backend = null
                 server = null
+                releaseOwnerLease()
                 lastError = result.code
                 Log.w(TAG, "${result.code}: ${result.detail} attempts=${result.attempts}")
                 return statusValue(null)
@@ -137,15 +135,52 @@ class LiteWebAdminService : RootService() {
     }
 
     @Synchronized
-    private fun stopServer(persistEnabled: Boolean) {
+    private fun stopServer(persistEnabled: Boolean, releaseLease: Boolean = true) {
         server?.let { runCatching { it.stop() } }
         server = null
+        backend?.close()
         backend = null
         config?.let { current ->
             val updated = current.copy(enabled = false)
             config = updated
             if (persistEnabled) runCatching { saveConfig(updated) }
         }
+        if (releaseLease) releaseOwnerLease()
+    }
+
+    @Synchronized
+    private fun rotateToken(): Bundle {
+        if (!acquireOwnerLease()) return statusBundle()
+        val wasRunning = server?.isRunning() == true
+        stopServer(persistEnabled = false, releaseLease = false)
+        return try {
+            val rotated = loadConfigOrCreate().copy(
+                token = LiteWebToken.generate(SecureRandom()), enabled = wasRunning, startedAt = 0L,
+            )
+            saveConfig(rotated)
+            config = rotated
+            if (wasRunning) startServer().toBundle() else statusBundle()
+        } finally {
+            if (server == null) releaseOwnerLease()
+        }
+    }
+
+    private fun acquireOwnerLease(): Boolean {
+        if (ownerLease != null) return true
+        return try {
+            val directory = File(dev.maplesu.manager.recovery.RecoveryPaths.DIR)
+            check(directory.isDirectory || directory.mkdirs()) { "LITEWEB_CONFIG_WRITE_FAILED" }
+            ownerLease = dev.maplesu.manager.liteweb.daemon.DaemonProcessLease.acquire(directory, Process.myPid().toString())
+            if (ownerLease == null) lastError = "LITEWEB_DAEMON_OWNER_ACTIVE"
+            ownerLease != null
+        } catch (error: Exception) {
+            lastError = codeOf(error, "LITEWEB_DAEMON_LEASE_FAILED")
+            false
+        }
+    }
+
+    private fun releaseOwnerLease() {
+        try { ownerLease?.close() } finally { ownerLease = null }
     }
 
     private fun statusBundle(): Bundle = statusValue(null).toBundle()
@@ -265,10 +300,22 @@ class AndroidLiteWebBackend(
     private val service: LiteWebAdminService,
     private val portValue: () -> Int = { LiteWebPortPolicy.DEFAULT_PORT },
     private val changePort: (Int) -> LiteWebRestoreStep = { UnavailableActivatePort.applyPort(it) },
-) : LiteWebBackend {
+) : LiteWebBackend, AutoCloseable {
     override fun configuredPort(): Int = portValue()
 
     override fun applyConfiguredPort(port: Int): LiteWebRestoreStep = changePort(port)
+
+    private val moduleFiles = LiteWebModuleFiles()
+    private val moduleBridge = com.maplesu.core.ui.webui.ExternalWebUiBridge(
+        files = moduleFiles,
+        cacheRoot = File(service.cacheDir, "module-webui"),
+        apps = { com.maplesu.core.ui.webui.rootWebUiApps(service.applicationInfo.uid / 100000) },
+        sourceCurrent = {
+            !File(dev.maplesu.manager.liteweb.RECOVERY_WEBUI_PAUSE_PATH).exists()
+        },
+    )
+    override fun moduleBridgePort(): LiteWebModuleBridgePort = moduleBridge
+    override fun close() = moduleBridge.close()
 
     private val liteModules = LiteScriptModuleBackend.get(service)
     private val nativeClient = dev.maplesu.manager.runtime.ultra.UltraRuntimeClient {
@@ -354,33 +401,8 @@ class AndroidLiteWebBackend(
      * 安全性：`LiteWebModWeb` 已经在字符串层拒绝 `..`/点文件/控制字符，这里再做一次
      * **canonical path** 复核 —— 模块目录里可能有指向外部的符号链接，只靠字符串校验挡不住。
      */
-    override fun moduleWebFile(moduleId: String, relativePath: String): LiteWebModuleWeb {
-        if (!LiteWebModWeb.validModuleId(moduleId)) {
-            return LiteWebModuleWeb.NotFound
-        }
-        val normalized = LiteWebModWeb.normalizeRel(relativePath)
-            ?: return LiteWebModuleWeb.NotFound
-        val root = java.io.File("/data/adb/modules/$moduleId/webroot")
-        val rootPath = runCatching { root.canonicalPath }.getOrNull()
-            ?: return LiteWebModuleWeb.NotFound
-        if (!root.isDirectory) {
-            return LiteWebModuleWeb.Unavailable("MODULE_WEBROOT_ABSENT: $moduleId")
-        }
-        val target = runCatching { java.io.File(root, normalized).canonicalFile }.getOrNull()
-            ?: return LiteWebModuleWeb.NotFound
-        if (!target.path.startsWith(rootPath + java.io.File.separator)) {
-            return LiteWebModuleWeb.NotFound
-        }
-        if (!target.isFile) return LiteWebModuleWeb.NotFound
-        if (target.length() > LiteWebModWeb.MAX_FILE_BYTES) {
-            return LiteWebModuleWeb.Unavailable(
-                "MODULE_WEB_FILE_TOO_LARGE: ${target.length()} > ${LiteWebModWeb.MAX_FILE_BYTES}",
-            )
-        }
-        val bytes = runCatching { target.readBytes() }.getOrNull()
-            ?: return LiteWebModuleWeb.Unavailable("MODULE_WEB_READ_FAILED: $moduleId/$normalized")
-        return LiteWebModuleWeb.Found(LiteWebModWeb.contentType(normalized), bytes)
-    }
+    override fun moduleWebFile(moduleId: String, relativePath: String): LiteWebModuleWeb =
+        moduleFiles.read(moduleId, relativePath)
 
     override fun hiddenPort(): LiteHiddenPort = hidden
 }

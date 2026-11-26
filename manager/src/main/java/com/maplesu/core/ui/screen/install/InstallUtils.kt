@@ -58,8 +58,7 @@ internal sealed class InstallMethod : Parcelable {
  * `dev.maplesu.manager.installer.InstallTargetDispatch.decide` 给出）。
  *
  * [target] 来自步骤 ① 的选择（默认 Ultra），[partition] 是本模式下**生效**的分区
- * （Ultra 固定 / Normal 可选）。同样的函数在点「下一步」时与页面渲染时各调用一次，
- * 因此"按钮可点"与"真的能装"永远是同一个判据。
+ * （按镜像头或用户选择）。它仅供页面提示；执行阶段使用实际源镜像或 PRE 事实重新裁决。
  */
 internal fun installTargetRequestFor(
     method: InstallMethod?,

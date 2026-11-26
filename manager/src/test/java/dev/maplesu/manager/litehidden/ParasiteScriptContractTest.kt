@@ -78,6 +78,19 @@ class ParasiteScriptContractTest {
     }
 
     @Test
+    fun backupInitializesTrustedRecoveryBeforeHostBackup() {
+        val script = ParasiteScripts.backup(facts, targets)
+        assertTrue(script.contains("R='${ParasitePaths.RECOVERY}'"))
+        assertTrue(script.contains("[ ! -L \"\$R\" ]"))
+        assertTrue(script.contains("BACKUP_RECOVERY_UNTRUSTED"))
+        assertTrue(script.contains("stat -c '%u' \"\$R\""))
+        val initialized = script.indexOf("chmod 700 \"\$R\"")
+        assertTrue(initialized >= 0)
+        assertTrue(initialized < script.indexOf("mkdir -p \"\$D\""))
+        assertTrue(script.indexOf("700 0") < script.indexOf("cp -p"))
+    }
+
+    @Test
     fun backupWritesCompletionMarkerOnlyAfterAllFilesAndRestoreRequiresIt() {
         val backup = ParasiteScripts.backup(facts, targets)
         val markerIndex = backup.indexOf(ParasitePaths.BACKUP_MARKER_NAME)
@@ -124,6 +137,68 @@ class ParasiteScriptContractTest {
             "只有完整备份才回 YES",
             probe.indexOf("PARASITE_YES") < probe.indexOf("rm -rf"),
         )
+    }
+
+    @Test
+    fun cleanupCheckpointIsProtectedBoundAndGloballyGuardsActivation() {
+        val receipt = ParasiteScripts.cleanupReceipt(facts.packageName, "LITE", true)
+        assertTrue(receipt == "MAPLESU_CLEANUP_V1 mode=LITE host=${facts.packageName} restored=1")
+        val begin = ParasiteScripts.beginCleanup(facts.packageName, "LITE", true)
+        val read = ParasiteScripts.readCleanupCheckpoint()
+        val finish = ParasiteScripts.finishCleanup(facts.packageName, "LITE", true)
+        listOf(begin, read, finish).forEach {
+            assertTrue(it.contains("700 0"))
+            assertTrue(it.contains("[ ! -L"))
+        }
+        assertTrue(begin.contains("chmod 600"))
+        assertTrue(begin.contains("chown 0:0"))
+        assertTrue(begin.indexOf("mv -f") < begin.indexOf(ParasiteMarkers.CLEANUP_READY))
+        assertTrue(read.contains("600 0"))
+        assertTrue(finish.indexOf(ParasitePaths.IDENTITY_TEMP) < finish.indexOf("rm -f"))
+        assertTrue(ParasiteScripts.backupGuard("com.other.host").contains(ParasitePaths.CLEANUP_CHECKPOINT))
+        assertFalse(ParasitePaths.CLEANUP_CHECKPOINT.startsWith(ParasitePaths.hostBackupDir(facts.packageName)))
+    }
+
+    @Test
+    fun cleanupScriptsReadBackAbsenceBeforeReportingCompletion() {
+        val backup = ParasiteScripts.removeBackup(facts.packageName)
+        assertTrue(backup.indexOf("[ ! -e") < backup.indexOf(ParasiteMarkers.BACKUP_GONE))
+        assertTrue(backup.contains("[ ! -L"))
+        assertTrue(backup.contains("exit 87"))
+        val identity = ParasiteScripts.removeCleanupIdentity()
+        assertTrue(identity.contains("[ ! -e '${ParasitePaths.IDENTITY_TEMP}' ]"))
+        assertTrue(identity.contains("[ ! -L '${ParasitePaths.IDENTITY_TEMP}' ]"))
+    }
+
+    @Test
+    fun rollbackRestorationChecksEveryOriginalBeforeAnyMutationAndVerifiesTailCleanup() {
+        val expected = mapOf("liba.so" to "a".repeat(64), "libb.so" to "b".repeat(64))
+        val script = ParasiteScripts.restore(facts.packageName, facts.nativeLibraryDir, "", expected)
+        assertTrue(script.contains("RESTORE_EXPECTED_SHA"))
+        assertTrue(script.contains("RESTORE_EXPECTED_COUNT"))
+        assertTrue(script.indexOf("RESTORE_EXPECTED_COUNT") < script.indexOf("RESTORED=0"))
+        assertTrue(script.indexOf("RESTORE_CLEANUP") < script.indexOf(ParasiteMarkers.RESTORE_OK))
+        assertTrue(script.contains("[ ! -L \"\$T\" ]"))
+        assertTrue(script.contains("exit 48"))
+    }
+
+    @Test
+    fun rollbackRetirementPreservesWholeBackupInProtectedSameFilesystemQuarantine() {
+        val expected = mapOf("liba.so" to "a".repeat(64))
+        val nonce = "a".repeat(32)
+        val retire = ParasiteScripts.retireRestoredBackup(facts.packageName, expected, nonce)
+        val verify = ParasiteScripts.verifyRetiredBackup(facts.packageName, expected, nonce)
+        assertTrue(retire.contains("host-quarantine-rollback-$nonce"))
+        assertTrue(retire.contains("stat -c '%d'"))
+        assertTrue(retire.contains("stat -c '%s %a %u %g'"))
+        assertTrue(retire.contains("700 0") && retire.contains("600 0"))
+        assertTrue(retire.contains("count="))
+        assertTrue(retire.indexOf("BEFORE=") < retire.indexOf("mv "))
+        assertTrue(retire.indexOf("AFTER=") < retire.indexOf(ParasiteMarkers.BACKUP_RETIRED))
+        assertFalse(retire.contains("rm -"))
+        assertFalse(verify.contains("mv ") || verify.contains("mkdir ") || verify.contains("rm -"))
+        assertTrue(verify.contains("RESTORE_EXPECTED_SHA") && verify.contains("AFTER="))
+        assertFalse(retire.contains(ParasitePaths.IDENTITY_FILE) || retire.contains("PARASITE_CLEANUP_BEGIN"))
     }
 
     @Test

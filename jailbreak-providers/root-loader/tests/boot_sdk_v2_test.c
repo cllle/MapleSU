@@ -17,7 +17,7 @@ typedef unsigned long long u64;
 static unsigned checks, failures;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; fprintf(stderr, "line %d: %s\n", __LINE__, #x); } } while (0)
 static u32 state, stage_busy;
-static char root_key[49];
+static char root_key[49], original_root_key[49];
 static uptr native_execve = 123, kernel_base, arena;
 static maplesu_metadata_v2 sdk_request_metadata;
 static unsigned char packet[85], read_bytes[256], destination[256];

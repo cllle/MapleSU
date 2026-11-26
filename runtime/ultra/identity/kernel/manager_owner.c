@@ -3,6 +3,7 @@
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/user_namespace.h>
 #include "manager_owner.h"
 #include "manager_management.h"
 #include "manager_owner_watch.h"
@@ -152,6 +153,35 @@ bool msu_manager_owner_allowed(const struct msu_manager_owner *owner,
         __kuid_val(msu_dynamic_current_uid()) != actual_uid) return false;
     *out_epoch = epoch;
     return true;
+}
+
+int msu_manager_owner_appid(const struct msu_manager_owner *owner, u32 *appid)
+{
+    const struct cred *cred;
+    struct msu_manager_owner_binding *entry;
+    u64 identity;
+    u32 epoch, selected = ~0U, uid;
+    if (!owner || !appid) return -EINVAL;
+    if (!msu_runtime_layout_ready()) return -EAGAIN;
+    cred = msu_dynamic_current_cred();
+    if (!cred || cred != msu_dynamic_current_real_cred() ||
+        MSU_DYN_FIELD(cred, cred, user_ns) != &init_user_ns ||
+        __kuid_val(MSU_DYN_FIELD(cred, cred, uid)) ||
+        __kuid_val(MSU_DYN_FIELD(cred, cred, euid))) return -EPERM;
+    epoch = msu_manager_owner_epoch(owner);
+    if (!epoch) return -ESTALE;
+    for (entry = __atomic_load_n(&owner->bindings, __ATOMIC_ACQUIRE); entry; entry = entry->next) {
+        identity = __atomic_load_n(&entry->identity, __ATOMIC_ACQUIRE);
+        uid = (u32)identity;
+        if ((u32)(identity >> 32) != epoch) continue;
+        if (!msu_owner_uid_valid(uid) || uid / 100000U != entry->user) return -EUCLEAN;
+        if (selected != ~0U && selected != uid % 100000U) return -EUCLEAN;
+        selected = uid % 100000U;
+    }
+    if (msu_manager_owner_epoch(owner) != epoch || msu_dynamic_current_cred() != cred)
+        return -EAGAIN;
+    *appid = selected;
+    return 0;
 }
 
 u32 msu_manager_owner_invalidate(struct msu_manager_owner *owner)

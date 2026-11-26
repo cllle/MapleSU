@@ -52,6 +52,8 @@ inline bool is_CURRENT_FROM_SP_EL0_THREAD_INFO() { return false; }
 KModErr execute_kernel_asm_func(const std::vector<uint8_t>&, uint64_t&);
 namespace export_symbol {
 inline void get_current(asmjit::a64::Assembler*, asmjit::a64::Reg) {}
+inline KModErr get_current_checked(asmjit::a64::Assembler* a, asmjit::a64::Reg r) { get_current(a, r); return KModErr::OK; }
+inline KModErr get_current_thread_info_checked(asmjit::a64::Assembler*, asmjit::a64::Reg) { return KModErr::OK; }
 inline void emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(
     asmjit::a64::Assembler*, asmjit::a64::Reg) {}
 }

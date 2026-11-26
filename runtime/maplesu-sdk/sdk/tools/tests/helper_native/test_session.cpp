@@ -21,10 +21,13 @@ static std::string read_file(const std::string& path) {
     return {std::istreambuf_iterator<char>(input), {}};
 }
 static int open_path(const char* path, helper_u32 flags, helper_u32 mode) {
-    if (fail_work && std::string(path).ends_with(HELPER_SUFFIX_WORK) && (flags & HELPER_OPEN_WRITE))
+    if (fail_work && std::string(path).ends_with(std::string(HELPER_SUFFIX_WORK) + ".pending") &&
+        (flags & HELPER_OPEN_WRITE))
         return HELPER_E_NOSPC;
     int native = (flags & HELPER_OPEN_WRITE) ? O_WRONLY : O_RDONLY;
     if (flags & HELPER_OPEN_CREATE) native |= O_CREAT;
+    if (flags & HELPER_OPEN_DIRECTORY) native |= O_DIRECTORY;
+    if (flags & HELPER_OPEN_EXCL) native |= O_EXCL;
     if (flags & HELPER_OPEN_NOFOLLOW) native |= O_NOFOLLOW;
     if (flags & HELPER_OPEN_NONBLOCK) native |= O_NONBLOCK;
     const int fd = open(path, native | O_CLOEXEC, mode);
@@ -35,6 +38,7 @@ static int stat_file(int fd, helper_stat_info* out) {
     if (fstat(fd, &info)) return -errno;
     out->size = info.st_size; out->uid = info.st_uid; out->nlink = info.st_nlink;
     out->is_reg = S_ISREG(info.st_mode);
+    out->is_dir = S_ISDIR(info.st_mode);
     return HELPER_OK;
 }
 static long long read_bytes(int fd, void* out, helper_u32 size) {
@@ -45,6 +49,12 @@ static long long write_bytes(int fd, const void* in, helper_u32 size) {
 }
 static int close_file(int fd) { return close(fd) ? -errno : HELPER_OK; }
 static int sync_file(int fd) { return fsync(fd) ? -errno : HELPER_OK; }
+static int rename_file(int olddir, const char* oldname, int newdir, const char* newname) {
+    return renameat(olddir, oldname, newdir, newname) ? -errno : HELPER_OK;
+}
+static int unlink_file(int dir, const char* name, helper_u32 flags) {
+    return unlinkat(dir, name, (flags & HELPER_AT_REMOVEDIR) ? AT_REMOVEDIR : 0) ? -errno : HELPER_OK;
+}
 
 int main() {
     char directory[] = "/tmp/maplesu-session-XXXXXX";
@@ -58,6 +68,7 @@ int main() {
     context.ops.open_path = open_path; context.ops.fstat = stat_file;
     context.ops.read = read_bytes; context.ops.write = write_bytes;
     context.ops.close = close_file; context.ops.fsync = sync_file;
+    context.ops.renameat = rename_file; context.ops.unlinkat = unlink_file;
     const auto flag = self + HELPER_SUFFIX_SAFE_FLAG;
     const auto work = self + HELPER_SUFFIX_WORK;
     const auto completed = self + HELPER_SUFFIX_COMPLETED;

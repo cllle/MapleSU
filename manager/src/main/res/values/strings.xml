@@ -436,4 +436,5 @@
     <string name="install_ultra_switch_carrier">Switch carrier</string>
     <string name="install_ultra_current_carrier">Current carrier / slot</string>
     <string name="install_ultra_carrier_unknown">Unconfirmed</string>
+    <string name="ultra_init_components_unavailable">This build has no init_boot components. Install a build that includes the component for the target KMI, then retry.</string>
 </resources>

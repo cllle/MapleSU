@@ -16,6 +16,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * 生产隐藏后端的事务测试（JVM，fake root/PM/时间/探活）。
@@ -151,6 +154,24 @@ class ParasiteBackendTest {
         var managerPresent: Boolean? = true
         var restorePending = false
         var hostStartupProved = true
+        var cleanupReceipt: String? = null
+        var backupCleanupExitCode = 0
+        var backupCleanupThrows = false
+        var backupCleanupMarker = true
+        var partialBackupCleanup = false
+        var identityCleanupExitCode = 0
+        var checkpointWriteFails = false
+        var checkpointFinishFails = false
+        var checkpointReadExitCode = 0
+        var checkpointFinishLosesAcknowledgement = false
+        var identityCleanupThrows = false
+        var identityCleanupMarker = true
+        var retirementExitCode = 0
+        var retirementThrows = false
+        var retirementMarker = true
+        var retirementCommitted = false
+        var retirementVerify = false
+        var restoreRecords: String? = null
 
         /** 模拟设备上已存在的 webui.conf token（非 null 时 `cat webui.conf` 返回它）。 */
         var reuseToken: String? = null
@@ -175,6 +196,44 @@ class ParasiteBackendTest {
         override fun run(script: String): RecoveryCommandResult {
             scripts += script
             return when {
+                script.contains("# PARASITE_BACKUP_RETIRE_VERIFY") ->
+                    RecoveryCommandResult(if (retirementVerify) 0 else 1,
+                        if (retirementVerify) "PARASITE_BACKUP_RETIRED" else "")
+                script.contains("# PARASITE_BACKUP_RETIRE") -> {
+                    check(!retirementThrows) { "backup_retirement_exception" }
+                    if (retirementCommitted || retirementExitCode == 0 && retirementMarker) {
+                        hasBackupDir = false
+                        staleBackup = false
+                    }
+                    RecoveryCommandResult(retirementExitCode,
+                        if (retirementMarker) "PARASITE_BACKUP_RETIRED" else "")
+                }
+                script.contains("# PARASITE_CLEANUP_READ") ->
+                    RecoveryCommandResult(checkpointReadExitCode, cleanupReceipt ?: "PARASITE_CLEANUP_NONE")
+                script.contains("# PARASITE_CLEANUP_BEGIN") -> if (checkpointWriteFails) {
+                    RecoveryCommandResult(1, "PARASITE_FAIL code=CLEANUP_WRITE_FAILED")
+                } else {
+                    cleanupReceipt = "MAPLESU_CLEANUP_V1 mode=" +
+                        (if (script.contains("mode=KSU")) "KSU" else "LITE") + " host=$host restored=" +
+                        if (script.contains("restored=0")) "0" else "1"
+                    RecoveryCommandResult(0, "PARASITE_CLEANUP_READY")
+                }
+                script.contains("# PARASITE_CLEANUP_FINISH") -> if (checkpointFinishFails) {
+                    RecoveryCommandResult(1, "PARASITE_FAIL code=CLEANUP_DELETE_FAILED")
+                } else {
+                    cleanupReceipt = null
+                    RecoveryCommandResult(if (checkpointFinishLosesAcknowledgement) 1 else 0, "PARASITE_CLEANUP_GONE")
+                }
+                script == ParasiteScripts.removeBackup(host) -> {
+                    check(!backupCleanupThrows) { "backup_cleanup_exception" }
+                    if (partialBackupCleanup) restoreFails = true
+                    if (backupCleanupExitCode == 0 && backupCleanupMarker) {
+                        hasBackupDir = false
+                        staleBackup = false
+                    }
+                    RecoveryCommandResult(backupCleanupExitCode,
+                        if (backupCleanupMarker) "PARASITE_BACKUP_GONE\nLITE_OK" else "")
+                }
                 script.contains("# MAPLESU_HOST_START_CHECK") -> if (hostStartupProved) {
                     RecoveryCommandResult(0, ParasiteMarkers.HOST_STARTED)
                 } else RecoveryCommandResult(1, "PARASITE_FAIL code=HOST_START_UNVERIFIED")
@@ -196,13 +255,16 @@ class ParasiteBackendTest {
                 } else {
                     RecoveryCommandResult(0, ParasiteMarkers.IDENTITY_OK)
                 }
-                script.contains(ParasiteMarkers.IDENTITY_GONE) ->
-                    RecoveryCommandResult(0, ParasiteMarkers.IDENTITY_GONE)
+                script.contains(ParasiteMarkers.IDENTITY_GONE) -> {
+                    check(!identityCleanupThrows) { "identity_cleanup_exception" }
+                    RecoveryCommandResult(identityCleanupExitCode,
+                        if (identityCleanupMarker) ParasiteMarkers.IDENTITY_GONE else "")
+                }
                 // 备份目录探针必须排在 host.manifest 之前：探针脚本里也含清单路径。
                 script.contains("PARASITE_BACKUP_PROBE") ->
                     RecoveryCommandResult(0, if (hasBackupDir) "PARASITE_YES" else "PARASITE_NO")
                 script.contains("PARASITE_STALE_BACKUP") ->
-                    RecoveryCommandResult(0, if (staleBackup) "PARASITE_STALE_BACKUP" else "PARASITE_CLEAN")
+                    RecoveryCommandResult(0, if (staleBackup || cleanupReceipt != null) "PARASITE_STALE_BACKUP" else "PARASITE_CLEAN")
 
                 script.contains("PARASITE_BACKUP_OK") -> if (backupFails) {
                     RecoveryCommandResult(24, "PARASITE_FAIL code=BACKUP_SHA detail=liba.so")
@@ -232,8 +294,9 @@ class ParasiteBackendTest {
                 } else {
                     RecoveryCommandResult(
                         0,
-                        "PARASITE_RESTORED name=liba.so sha=${origSha("liba.so")}\n" +
-                            "PARASITE_RESTORE_OK count=1",
+                        (restoreRecords ?: targets.joinToString("\n") {
+                            "PARASITE_RESTORED name=$it sha=${origSha(it)}"
+                        }) + "\nPARASITE_RESTORE_OK count=${targets.size}",
                     )
                 }
 
@@ -335,6 +398,51 @@ class ParasiteBackendTest {
     private fun activate(b: ProductionHiddenModeBackend) = runBlocking { b.activate(host, port) }
 
     private fun deactivate(b: ProductionHiddenModeBackend) = runBlocking { b.deactivate(host) }
+
+    private fun withPendingActivation(inspect: () -> Unit) {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val worker = Executors.newSingleThreadExecutor()
+        val pending = worker.submit<HiddenActivateResult> {
+            activate(backend(prepareBoot = {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                false
+            }))
+        }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            inspect()
+        } finally {
+            release.countDown()
+            try { assertFalse(pending.get(5, TimeUnit.SECONDS).success) }
+            finally { worker.shutdownNow() }
+        }
+    }
+
+    @Test
+    fun concurrentActivationIsRejectedBeforeTouchingAnotherHostTransaction() {
+        withPendingActivation {
+            val root = FakeRoot()
+            val result = activate(backend(ultraRoot = root))
+            assertFalse(result.success)
+            assertEquals("PARASITE_BUSY", result.code)
+            assertTrue(root.scripts.isEmpty())
+        }
+        assertTrue(activate(backend()).success)
+    }
+
+    @Test
+    fun deactivationCannotRestoreAHostWhileActivationStillOwnsIt() {
+        withPendingActivation {
+            val root = FakeRoot()
+            val result = deactivate(backend(ultraRoot = root))
+            assertFalse(result.success)
+            assertEquals("PARASITE_BUSY", result.code)
+            assertTrue(root.scripts.isEmpty())
+        }
+        assertTrue(deactivate(backend()).success)
+    }
 
     @Test
     fun activationSurvivesPreSubmissionBusyAtWriteReadbackAndFinalVerification() {
@@ -1039,6 +1147,89 @@ class ParasiteBackendTest {
         assertTrue(result.steps.last().detail.contains("incomplete("))
     }
 
+    private fun assertRetirementFailure(result: HiddenActivateResult) {
+        assertFalse(result.success)
+        assertEquals(ParasiteCodes.ROLLBACK_INCOMPLETE, result.code)
+        assertTrue(result.steps.last().detail.contains("rollback=incomplete"))
+        assertFalse(result.steps.last().detail.contains("rollback=ok"))
+    }
+
+    @Test
+    fun rollbackRetirementNonzeroExceptionAndMissingMarkerAreReported() {
+        listOf("nonzero", "exception", "marker").forEach { fault ->
+            val root = FakeRoot().apply {
+                injectFails = true
+                retirementExitCode = if (fault == "nonzero") 71 else 0
+                retirementThrows = fault == "exception"
+                retirementMarker = fault != "marker"
+            }
+            assertRetirementFailure(activate(backend(ultraRoot = root)))
+            assertTrue(root.hasBackupDir)
+            assertFalse(root.scripts.any { it == ParasiteScripts.removeBackup(host) })
+        }
+    }
+
+    @Test
+    fun rollbackRequiresEveryExpectedOriginalShaBeforeRetirement() {
+        val sha = FakeRoot().origSha("liba.so")
+        listOf("", "PARASITE_RESTORED name=liba.so sha=$sha",
+            targets.joinToString("\n") { "PARASITE_RESTORED name=$it sha=${"f".repeat(64)}" },
+            "PARASITE_RESTORE_SKIP name=liba.so sha=$sha\nPARASITE_RESTORE_SKIP name=liba.so sha=$sha").forEach { records ->
+            val root = FakeRoot().apply { injectFails = true; restoreRecords = records }
+            assertRetirementFailure(activate(backend(ultraRoot = root)))
+            assertFalse(root.scripts.any { it.contains("# PARASITE_BACKUP_RETIRE") })
+            assertTrue(root.hasBackupDir)
+        }
+    }
+
+    @Test
+    fun rollbackAcceptsCompleteShaVerifiedSkipRecordsAndAllowsNextActivation() {
+        val root = FakeRoot().apply {
+            injectFails = true
+            restoreRecords = targets.joinToString("\n") { "PARASITE_RESTORE_SKIP name=$it sha=${origSha(it)}" }
+        }
+        val b = backend(ultraRoot = root)
+        val result = activate(b)
+        assertEquals(ParasiteCodes.HOST_SO_PATCH_FAILED, result.code)
+        assertTrue(result.steps.last().detail.contains("rollback=ok"))
+        assertFalse(root.hasBackupDir)
+        assertTrue(root.scripts.any { it.contains("# PARASITE_BACKUP_RETIRE") })
+        assertFalse(root.scripts.any { it == ParasiteScripts.removeBackup(host) })
+        root.injectFails = false
+        assertTrue(activate(b).success)
+    }
+
+    @Test
+    fun rollbackLostMoveAcknowledgementIsResolvedOnlyByReadOnlyMatchingVerification() {
+        val root = FakeRoot().apply {
+            injectFails = true
+            retirementExitCode = 71
+            retirementCommitted = true
+            retirementVerify = true
+        }
+        val result = activate(backend(ultraRoot = root))
+        assertEquals(ParasiteCodes.HOST_SO_PATCH_FAILED, result.code)
+        assertTrue(result.steps.last().detail.contains("rollback=ok"))
+        assertTrue(root.scripts.any { it.contains("# PARASITE_BACKUP_RETIRE_VERIFY") })
+        assertFalse(root.hasBackupDir)
+    }
+
+    @Test
+    fun rollbackKeptRecoveryAndPreexistingGrantAreNotFullDeactivation() {
+        val root = FakeRoot().apply { retirementExitCode = 71 }
+        val auth = FakeSuAuth(grantOutcome = SuAuthOutcome.AlreadyGranted).apply { granted += host }
+        val result = activate(backend(ultraRoot = root, suAuth = auth, managerRemoval = HiddenManagerRemoval { _, _ ->
+            HiddenManagerRemovalResult(false)
+        }))
+        assertRetirementFailure(result)
+        assertTrue(host in auth.granted)
+        assertTrue(auth.revokes.isEmpty())
+        assertTrue(result.recoveryUrl.isNotEmpty())
+        val restoredAt = root.scripts.indexOfLast { it.contains(ParasiteMarkers.RESTORE_OK) }
+        assertFalse(root.scripts.drop(restoredAt + 1).any { it == ParasiteScripts.daemonStop() })
+        assertFalse(root.scripts.any { it.contains("# PARASITE_CLEANUP_BEGIN") || it.contains(ParasiteMarkers.IDENTITY_GONE) })
+    }
+
     // ── 解除寄生 ───────────────────────────────────────────────────────────
 
     @Test
@@ -1084,6 +1275,183 @@ class ParasiteBackendTest {
     }
 
     @Test
+    fun backupCleanupNonzeroIsAnAccurateRetryableFailure() {
+        val root = FakeRoot().apply { backupCleanupExitCode = 1 }
+        val auth = FakeSuAuth().apply { granted += host }
+        val result = deactivate(backend(ultraRoot = root, suAuth = auth, state = FakeState(true)))
+        assertFalse(result.success)
+        assertEquals("HOST_BACKUP_CLEANUP_FAILED", result.code)
+        assertEquals("cleanup_recovery", result.failedStep)
+        assertEquals("cleanup_recovery", result.retryableStep)
+        assertTrue(result.hostSoRestored)
+        assertTrue(result.suAuthRevoked)
+        assertTrue(result.daemonStopped)
+        assertFalse(root.scripts.any { it.contains(ParasiteMarkers.IDENTITY_GONE) })
+    }
+
+    @Test
+    fun backupCleanupExceptionAndMissingMarkerRemainFailures() {
+        listOf(true, false).forEach { throws ->
+            val root = FakeRoot().apply {
+                backupCleanupThrows = throws
+                backupCleanupMarker = false
+            }
+            val result = deactivate(backend(ultraRoot = root))
+            assertFalse("throws=$throws", result.success)
+            assertEquals("HOST_BACKUP_CLEANUP_FAILED", result.code)
+            assertNotNull(root.cleanupReceipt)
+        }
+    }
+
+    @Test
+    fun partialBackupCleanupRetriesAfterBackendRecreationWithoutReplayingCompletedActions() {
+        val root = FakeRoot().apply {
+            backupCleanupExitCode = 1
+            partialBackupCleanup = true
+        }
+        val auth = FakeSuAuth().apply { granted += host }
+        val state = FakeState(true)
+        val first = deactivate(backend(ultraRoot = root, suAuth = auth, state = state))
+        assertFalse(first.success)
+        assertNotNull(root.cleanupReceipt)
+        val restores = root.scripts.count { it.contains(ParasiteMarkers.RESTORE_OK) }
+        val stops = root.scripts.count { it.contains(ParasiteMarkers.STOPPED) }
+        val revokes = auth.revokes.size
+        root.backupCleanupExitCode = 0
+        root.partialBackupCleanup = false
+        val second = deactivate(backend(ultraRoot = root, suAuth = auth, state = state))
+        assertTrue(second.steps.joinToString { it.detail }, second.success)
+        assertTrue(second.hostSoRestored)
+        assertTrue(second.suAuthRevoked)
+        assertTrue(second.daemonStopped)
+        assertNull(root.cleanupReceipt)
+        assertEquals(restores, root.scripts.count { it.contains(ParasiteMarkers.RESTORE_OK) })
+        assertEquals(stops, root.scripts.count { it.contains(ParasiteMarkers.STOPPED) })
+        assertEquals(revokes, auth.revokes.size)
+    }
+
+    @Test
+    fun identityCleanupFailureKeepsCheckpointUntilCleanupOnlyRetryCompletes() {
+        val root = FakeRoot().apply { identityCleanupExitCode = 86 }
+        val auth = FakeSuAuth().apply { granted += host }
+        val state = FakeState(true)
+        val first = deactivate(backend(ultraRoot = root, suAuth = auth, state = state))
+        assertFalse(first.success)
+        assertEquals("RECOVERY_IDENTITY_CLEANUP_FAILED", first.code)
+        assertNotNull(root.cleanupReceipt)
+        assertFalse(root.hasBackupDir)
+        val count = root.scripts.count { it.contains(ParasiteMarkers.RESTORE_OK) }
+        root.identityCleanupExitCode = 0
+        assertTrue(deactivate(backend(ultraRoot = root, suAuth = auth, state = state)).success)
+        assertEquals(count, root.scripts.count { it.contains(ParasiteMarkers.RESTORE_OK) })
+        assertEquals(1, auth.revokes.size)
+        assertNull(root.cleanupReceipt)
+    }
+
+    @Test
+    fun invalidOrOtherModeCleanupReceiptStopsBeforeRestorationAndAuthorization() {
+        listOf("corrupt", "MAPLESU_CLEANUP_V1 mode=KSU host=$host restored=1",
+            "MAPLESU_CLEANUP_V1 mode=LITE host=com.other.host restored=1").forEach { receipt ->
+            val root = FakeRoot().apply { cleanupReceipt = receipt }
+            val auth = FakeSuAuth().apply { granted += host }
+            val result = deactivate(backend(ultraRoot = root, suAuth = auth))
+            assertFalse(receipt, result.success)
+            assertEquals("RECOVERY_CLEANUP_CHECKPOINT_FAILED", result.code)
+            assertTrue(auth.revokes.isEmpty())
+            assertFalse(root.scripts.any { it.contains(ParasiteMarkers.RESTORE_OK) })
+            assertEquals(receipt, root.cleanupReceipt)
+        }
+    }
+
+    @Test
+    fun checkpointFailuresPreserveRetryMaterialAndCompletedFlags() {
+        listOf(true, false).forEach { writeFails ->
+            val root = FakeRoot().apply {
+                checkpointWriteFails = writeFails
+                checkpointFinishFails = !writeFails
+            }
+            val result = deactivate(backend(ultraRoot = root))
+            assertFalse(result.success)
+            assertEquals("RECOVERY_CLEANUP_CHECKPOINT_FAILED", result.code)
+            assertTrue(result.hostSoRestored && result.suAuthRevoked && result.daemonStopped)
+            if (writeFails) assertFalse(root.scripts.any { it == ParasiteScripts.removeBackup(host) })
+            else assertNotNull(root.cleanupReceipt)
+        }
+    }
+
+    @Test
+    fun unreadableCheckpointCannotReplayRestoreOrAuthorization() {
+        val root = FakeRoot().apply { checkpointReadExitCode = 88 }
+        val auth = FakeSuAuth().apply { granted += host }
+        val result = deactivate(backend(ultraRoot = root, suAuth = auth))
+        assertFalse(result.success)
+        assertEquals("RECOVERY_CLEANUP_CHECKPOINT_FAILED", result.code)
+        assertFalse(result.hostSoRestored || result.suAuthRevoked || result.daemonStopped)
+        assertTrue(auth.revokes.isEmpty())
+        assertFalse(root.scripts.any { it.contains(ParasiteMarkers.RESTORE_OK) })
+    }
+
+    @Test
+    fun pendingCleanupBlocksAnotherHostsActivationBeforeAnyInjectionOrIdentityWrite() {
+        val root = FakeRoot().apply {
+            cleanupReceipt = "MAPLESU_CLEANUP_V1 mode=LITE host=$host restored=1"
+        }
+        val other = "com.other.host"
+        var prepareCalls = 0
+        val b = backend(ultraRoot = root, hostFacts = FakeHostFacts(HostFactsLookup.Ok(facts(packageName = other))),
+            prepareBoot = { prepareCalls++; true })
+        val result = runBlocking { b.activate(other, port) }
+        assertEquals("pending cleanup owns shared recovery identity before boot preparation", 0, prepareCalls)
+        assertFalse(result.success)
+        assertEquals(ParasiteCodes.HOST_BACKUP_STALE, result.code)
+        assertFalse(root.scripts.any { it.contains("HostSoPatchMain") || it.contains(ParasiteMarkers.IDENTITY_OK) })
+        assertNotNull(root.cleanupReceipt)
+    }
+
+    @Test
+    fun identityCleanupExceptionAndMissingMarkerRetainCheckpoint() {
+        listOf(true, false).forEach { throws ->
+            val root = FakeRoot().apply { identityCleanupThrows = throws; identityCleanupMarker = false }
+            val result = deactivate(backend(ultraRoot = root))
+            assertFalse(result.success)
+            assertEquals("RECOVERY_IDENTITY_CLEANUP_FAILED", result.code)
+            assertNotNull(root.cleanupReceipt)
+        }
+    }
+
+    @Test
+    fun lostFinalAcknowledgementRechecksAbsentBackupAndGrantWithoutReapplyingThem() {
+        val root = FakeRoot().apply { checkpointFinishLosesAcknowledgement = true }
+        val auth = FakeSuAuth().apply { granted += host }
+        val state = FakeState(true)
+        val first = deactivate(backend(ultraRoot = root, suAuth = auth, state = state))
+        assertFalse(first.success)
+        assertTrue(first.hostSoRestored && first.suAuthRevoked && first.daemonStopped)
+        assertNull(root.cleanupReceipt)
+        val restores = root.scripts.count { it.contains(ParasiteMarkers.RESTORE_OK) }
+        root.checkpointFinishLosesAcknowledgement = false
+        val second = deactivate(backend(ultraRoot = root, suAuth = auth, state = state))
+        assertTrue(second.success)
+        assertFalse(second.hostSoRestored)
+        assertEquals("no_backup", second.steps[0].detail)
+        assertEquals(restores, root.scripts.count { it.contains(ParasiteMarkers.RESTORE_OK) })
+        assertEquals(1, auth.revokes.size)
+    }
+
+    @Test
+    fun successfulDeactivationRemovesGuardMaterialBeforeFreshActivation() {
+        val root = FakeRoot().apply { staleBackup = true }
+        val state = FakeState(true)
+        val auth = FakeSuAuth().apply { granted += host }
+        val b = backend(ultraRoot = root, state = state, suAuth = auth)
+        assertTrue(deactivate(b).success)
+        assertFalse(root.hasBackupDir)
+        assertFalse(root.staleBackup)
+        assertNull(root.cleanupReceipt)
+        assertTrue(activate(b).success)
+    }
+
+    @Test
     fun deactivateWithAlreadyAbsentHostGrantCompletesAfterLibraryRestoration() {
         val root = FakeRoot()
         val state = FakeState(value = true)
@@ -1092,16 +1460,18 @@ class ParasiteBackendTest {
         val port = object : dev.maplesu.manager.runtime.ultra.SuAuthPort {
             override fun snapshot() = listOf("dev.maplesu.manager")
             override fun add(packageName: String) = error("deactivation must not grant")
-            override fun remove(packageName: String): String {
+            override fun remove(packageName: String): dev.maplesu.manager.runtime.ultra.NativeReceipt {
                 removeCalls++
-                return "ERR_MODULE_SU_LIST_NOT_FOUND"
+                return dev.maplesu.manager.runtime.ultra.NativeReceipt.bridgeFailure(
+                    "remove_su_auth", "ERR_MODULE_SU_LIST_NOT_FOUND", null,
+                )
             }
         }
         val auth = object : HiddenSuAuth {
             override fun grant(packageName: String) = error("deactivation must not grant")
             override fun revoke(packageName: String): SuAuthOutcome {
-                val error = authorizations.setGranted(port, packageName, false)
-                return if (error == null) SuAuthOutcome.Revoked else SuAuthOutcome.Failed(error)
+                val attempt = authorizations.setGranted(port, packageName, false)
+                return if (attempt.succeeded) SuAuthOutcome.Revoked else SuAuthOutcome.Failed(attempt.error.orEmpty())
             }
             override fun isGranted(packageName: String) = packageName in authorizations.snapshot.packages
         }

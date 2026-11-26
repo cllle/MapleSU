@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -318,7 +319,7 @@ class ModuleBootRootPreparationTest {
         ("org.jetbrains", "annotations", "13.0"), ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm", "1.11.0"),
         ("org.json", "json", "20240303"), ("junit", "junit", "4.13.2"), ("org.hamcrest", "hamcrest-core", "1.3")]]
     compiler = cached_jar("org.jetbrains.kotlin", "kotlin-compiler-embeddable", "2.4.20")
-    jdk = jdk_tool("java").parent
+    java, javac = jdk_tool(), jdk_tool("javac")
     classes = out / "classes"
     classes.mkdir(exist_ok=True)
     existing_java = ROOT / "manager/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes"
@@ -328,11 +329,11 @@ class ModuleBootRootPreparationTest {
         "BoundedPageReadTest", "UltraRootCommandReceiptTest"]
     if args.module_boot_overlap:
         tests.append("ModuleBootRootPreparationTest")
-    commands = [[jdk / "java.exe", "-Xmx256m", "-cp", os.pathsep.join(map(str, [compiler, *deps])),
+    commands = [[java, "-Xmx256m", "-cp", os.pathsep.join(map(str, [compiler, *deps])),
         "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect", "-nowarn", "-jvm-target", "21",
         "-classpath", cp, "-d", classes, *sources, *generated, java_fixture],
-        [jdk / "javac.exe", "-encoding", "UTF-8", "-cp", cp, "-d", classes, java_fixture],
-        [jdk / "java.exe", "-Dfile.encoding=UTF-8", "-cp", cp, "org.junit.runner.JUnitCore",
+        [javac, "-encoding", "UTF-8", "-cp", cp, "-d", classes, java_fixture],
+        [java, "-Dfile.encoding=UTF-8", "-cp", cp, "org.junit.runner.JUnitCore",
             *["dev.maplesu.manager.runtime." + name for name in tests]]]
     logs = []
     result = None

@@ -45,6 +45,11 @@ data class FlashUiState(
     val directInstall: Boolean = false,
     val showCloseAction: Boolean = false,
     val actionInProgress: Boolean = false,
+    /** Recovery always queries the original task; it does not submit another installation. */
+    val canQuery: Boolean = false,
+    val querying: Boolean = false,
+    val canReturnToPreparation: Boolean = false,
+    val recoveryMessage: String? = null,
 )
 
 @Immutable
@@ -60,6 +65,8 @@ data class FlashScreenActions(
     val onDismissJailbreakWarning: () -> Unit,
     val onRestore: () -> Unit = {},
     val onClose: () -> Unit = {},
+    val onQueryOriginalTask: () -> Unit = {},
+    val onReturnToPreparation: () -> Unit = {},
 )
 
 /**

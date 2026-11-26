@@ -50,6 +50,8 @@ enum class HiddenDeactivateStep(val wire: String) {
     RESTORE_HOST_SO("restore_host_so"),
     REVOKE_SU_AUTH("revoke_su_auth"),
     STOP_DAEMON("stop_daemon"),
+    /** Appended on cleanup failure after the three lifecycle effects have completed. */
+    CLEANUP_RECOVERY("cleanup_recovery"),
 }
 
 /**
@@ -70,7 +72,7 @@ data class HiddenActivateResult(
  * 解除结果：三步各自独立状态位 + 分步结果。
  * 只有后端明确回读成功才置 true（不回读就不算恢复）。
  *
- * [failedStep] / [retryableStep]：失败步的 wire 名。"停 daemon"失败时 [retryableStep] 非空，
+ * [failedStep] / [retryableStep]：失败步的 wire 名。停 daemon 或清理恢复资料失败时 [retryableStep] 非空，
  * 语义是「宿主库/授权这些已经做完的步骤**不回滚**，用户可以只重试停 daemon」，UI 不该把整个
  * 解除流程展示成"什么都没发生"。
  */

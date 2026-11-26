@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal object JailbreakLeaseStore {
     private val claimed = AtomicBoolean(false)
+    private val executorProbeLock = Any()
 
     @Volatile private var lease: RootShellLease? = null
     @Volatile private var transport: JailbreakLeaseTransport? = null
@@ -122,22 +123,25 @@ internal object JailbreakLeaseStore {
      * status read does not hammer the transport.
      */
     private fun executorAnswers(): Boolean {
-        val current: JailbreakLeaseTransport
-        synchronized(this) {
-            current = transport ?: return false
-            if (current.failure != null) return false
-            val now = System.currentTimeMillis()
-            if (now - lastPingAt < 2_000) return lastPingOk
-            lastPingAt = now
-        }
-        val answered = try {
-            current.request("ping", 2).startsWith("OK ")
-        } catch (error: Throwable) {
-            false
-        }
-        return synchronized(this) {
-            if (transport !== current || current.failure != null) false
-            else { lastPingOk = answered; answered }
+        // Share only completed probes. While one ping is in flight, another reader
+        // must not observe lastPingOk's initial false as an executor death.
+        synchronized(executorProbeLock) {
+            val current: JailbreakLeaseTransport
+            synchronized(this) {
+                current = transport ?: return false
+                if (current.failure != null) return false
+                val now = System.currentTimeMillis()
+                if (now - lastPingAt < 2_000) return lastPingOk
+            }
+            val answered = try {
+                current.request("ping", 2).startsWith("OK ")
+            } catch (error: Throwable) {
+                false
+            }
+            return synchronized(this) {
+                if (transport !== current || current.failure != null) false
+                else { lastPingAt = System.currentTimeMillis(); lastPingOk = answered; answered }
+            }
         }
     }
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import zipfile
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import android_jar, jdk_tool
 
@@ -22,7 +23,7 @@ def main():
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     classes = ROOT / "manager/build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes"
-    java = jdk_tool("java")
+    java = jdk_tool()
     dependencies = [cached_jar(*item) for item in [
         ("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20"), ("org.jetbrains", "annotations", "13.0"),
         ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm", "1.11.0"),

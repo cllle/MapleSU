@@ -1020,7 +1020,7 @@ class LiteScriptModuleBackend @JvmOverloads constructor(
                 fun apply(files: List<File>): Int {
                     val arguments = files.joinToString(" ") { "--rules ${quote(it.absolutePath)}" }
                     repeat(3) { attempt ->
-                        val result = shell.newJob().add("${quote(ModuleToolDeployment.policyPath())} apply --require-boot-policy $arguments")
+                        val result = shell.newJob().add("${quote(ModuleToolDeployment.policyPath())} module-apply --require-boot-policy $arguments")
                             .to(ArrayList<String>(), ArrayList<String>()).exec()
                         result.out.forEach(stdout)
                         result.err.forEach(stderr)

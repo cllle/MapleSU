@@ -251,8 +251,8 @@ def matrix(out, cp, args):
         assert binding == [len(raw), descriptor_at, len(descriptor), plan['descriptorCrc'],
                            plan['materializerOffset'], materializer.stat().st_size]
         memory = (max(s['offset'] + s['memory'] for s in sections) + 15) & ~15
-        expected_header = [0x4355534d, 2, len(descriptor), len(raw), memory, entry, len(sections), count,
-                           len(imports), len(relocations), zlib.crc32(b''.join(s['file'] for s in sections)), 0, table_at]
+        expected_header = [0x4355534d, 3, len(descriptor), len(raw), memory, entry, len(sections), count,
+                           len(imports), len(relocations), zlib.crc32(b''.join(s['file'] for s in sections)), len(raw), table_at]
         assert list(struct.unpack_from('<13I', descriptor)) == expected_header
         assert zlib.crc32(table, zlib.crc32(descriptor)) == plan['descriptorCrc']
         expected_descriptor = struct.pack('<13I', *expected_header)
@@ -277,7 +277,7 @@ def matrix(out, cp, args):
         connected = replay_connected(image, plan, folder, bootstrap.stat().st_size) if args.connected else None
         (folder / 'resolver-expected.bin').write_bytes(expected)
         (folder / 'resolver-relocations.tsv').write_text(''.join(f'{a}\t{b}\t{c}\n' for a, b, c, _ in relocations))
-        result = dict(index=index, release=capacity['release'], protocolVersion=2, placementPassed=True,
+        result = dict(index=index, release=capacity['release'], protocolVersion=3, placementPassed=True,
                       patchDataFile='resolver-carrier-patches.bin', patchDataSha256=SHA(patches),
                       sourceSha256=SHA(raw), derivedSha256=SHA(image), binding=binding,
                       loaderEntryOffset=plan['materializerOffset'], loaderBytes=len(materializer.read_bytes()),
@@ -298,7 +298,7 @@ def matrix(out, cp, args):
         results.append(result)
     passed = sum(r['placementPassed'] for r in results)
     (out / 'placement-results.json').write_text(json.dumps(dict(
-        protocolVersion=2, placementPassedCount=passed, inputCount=len(results), results=results,
+        protocolVersion=3, placementPassedCount=passed, inputCount=len(results), results=results,
         productionKotlinCarrierExecuted=True, independentElfReadback=True,
         bootstrapFixture=args.bootstrap is None or args.bootstrap_fixture,
         bootstrapPath=str(bootstrap), bootstrapSha256=SHA(bootstrap.read_bytes()),

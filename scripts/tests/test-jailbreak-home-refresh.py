@@ -50,18 +50,22 @@ class JailbreakHomeRefreshTest(unittest.TestCase):
         self.assertIn("val state = if (detectionChanged)", probe)
         self.assertIn('resolvedFailure(HomeEnvironmentFailure.BUSY, "detection_revision_changed")', probe)
         self.assertLess(probe.index("if (detectionChanged)"), probe.index("when (checked)"))
-        self.assertLess(probe.index("when (checked)"), probe.index("publishState(state)"))
+        self.assertLess(probe.index("when (checked)"), probe.index("publishState(state, owner)"))
+        publish = view_model.split("private suspend fun publishState(", 1)[1].split("private fun HomeUiState.", 1)[0]
+        self.assertLess(publish.index("publishMutex.withLock"), publish.index("if (!owner.isCurrent(environmentOwner))"))
+        self.assertLess(publish.index("if (!owner.isCurrent(environmentOwner))"), publish.index("_uiState.update"))
 
     def test_failed_full_probe_rebuilds_local_activation_facts(self):
         view_model = source("com/maplesu/core/ui/viewmodel/HomeViewModel.kt")
         failure = view_model.split("private fun resolvedFailure(", 1)[1].split("private fun publishState", 1)[0]
         self.assertIn("buildState(probeRoot = false", failure)
-        self.assertIn("afterEnvironmentProbeFailure(local)", failure)
+        self.assertIn("afterEnvironmentProbeFailure(local, failure)", failure)
         state = source("com/maplesu/core/ui/screen/home/HomeUiState.kt")
         self.assertIn("internal fun HomeUiState.afterEnvironmentProbeFailure(", state)
         fallback = state.split("internal fun HomeUiState.afterEnvironmentProbeFailure(", 1)[1].split("/**", 1)[0]
         self.assertIn("environmentMode = local.environmentMode", fallback)
         self.assertIn("hiddenConfirming = local.hiddenConfirming", fallback)
+        self.assertIn("environmentFailure = failure", fallback)
         self.assertNotIn("isRootAvailable = true", fallback)
         self.assertNotIn("isManager = true", fallback)
 

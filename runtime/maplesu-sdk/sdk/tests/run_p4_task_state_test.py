@@ -71,24 +71,28 @@ def main() -> int:
         raise SystemExit("missing llvm-mingw host compiler under repo root")
     compiler = compilers[-1]
     configurations = (
-        ("syscall_work_filter", 1, 1, 1),
-        ("thread_flag_filter", 1, 1, 0),
-        ("syscall_work_strict", 1, 0, 1),
-        ("thread_flag_strict", 1, 0, 0),
-        ("no_seccomp", 0, 0, 0),
+        ("syscall_work_filter", 1, 1, 1, 0),
+        ("thread_flag_filter", 1, 1, 0, 0),
+        ("syscall_work_filter_locking_release", 1, 1, 1, 1),
+        ("thread_flag_filter_locking_release", 1, 1, 0, 1),
+        ("syscall_work_strict", 1, 0, 1, 0),
+        ("thread_flag_strict", 1, 0, 0, 0),
+        ("no_seccomp", 0, 0, 0, 0),
     )
     runs = []
-    for name, seccomp, filters, generic in configurations:
+    for name, seccomp, filters, generic, locks_task in configurations:
         generated = out / f"p4_task_state_{name}.cpp"
         exe = out / f"p4-task-state-{name}.exe"
         generated.write_text(fixture, encoding="utf-8", newline="\n")
         command = [str(compiler), "-std=c++20", "-O1", "-g",
                    f"-DFIXTURE_SECCOMP={seccomp}", f"-DFIXTURE_FILTER={filters}",
-                   f"-DFIXTURE_GENERIC_ENTRY={generic}", str(generated), "-static", "-o", str(exe)]
+                   f"-DFIXTURE_GENERIC_ENTRY={generic}", f"-DMSU_TASK_SECCOMP_RELEASE_LOCKS_TASK={locks_task}",
+                   str(generated), "-static", "-o", str(exe)]
         build = subprocess.run(command, capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=60)
         (out / f"compile-{name}.log").write_text(build.stdout + build.stderr, encoding="utf-8")
-        entry = {"mode": name, "config": {"seccomp": seccomp, "filter": filters, "genericEntry": generic},
+        entry = {"mode": name, "config": {"seccomp": seccomp, "filter": filters, "genericEntry": generic,
+                                         "releaseLocksTask": locks_task},
                  "compiled": build.returncode == 0, "buildExitCode": build.returncode,
                  "command": command, "generatedSha256": sha(generated.read_bytes())}
         if not build.returncode:

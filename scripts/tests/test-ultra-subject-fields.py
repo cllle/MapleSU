@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import android_jar, jdk_tool
 
@@ -21,7 +22,7 @@ def main():
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    java = jdk_tool("java")
+    java = jdk_tool()
     compiler = cached_jar("org.jetbrains.kotlin", "kotlin-compiler-embeddable", "2.4.20")
     stdlib = cached_jar("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20")
     annotations = cached_jar("org.jetbrains", "annotations", "13.0")

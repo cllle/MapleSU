@@ -9,6 +9,7 @@ import dev.maplesu.manager.workmode.service.ModeSwitchSourceRecovery
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.*
@@ -117,6 +118,9 @@ class UltraBootModuleRecoveryTest {
         }
         val installed = File(directory, "installed.img")
         UltraInitBootProducer.produce(source, installed, artifact)
+        // Mode-switch inputs are full partition captures, while the producer exports a compact file.
+        assertTrue(installed.length() <= source.length())
+        RandomAccessFile(installed, "rw").use { it.setLength(source.length()) }
         return Fixture(source, installed, namespace)
     }
 }

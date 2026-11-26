@@ -1,35 +1,35 @@
 {
   "controlAbi": 2,
   "kernelSourceSha256": {
-    "runtime/ultra/policy/kernel/abi_anchors.c": "a1aecd767c169f6441a5f23347bfa5aa8aee8349fe881464fdf03802a35b4180",
-    "runtime/ultra/policy/kernel/KSU-PROVENANCE.json": "07416c414d31310e5809a00778680f95f3d6af095ea9f379904d5f5d122473c8",
-    "runtime/ultra/policy/kernel/ksu_av.c": "23a6025a79c83db7acd6003d0435edebcae5f9f4bff981d9f75015dc5e6e89cf",
-    "runtime/ultra/policy/kernel/ksu_context.c": "43e6c977ac565f73755388abc5faf5ca5d6f0ce89b33b59c7518663e06a1f682",
-    "runtime/ultra/policy/kernel/ksu_queries.c": "7448df8f5948dfea22bf3dbe0d95c00748d7aaac2a323623e72b5a16c6bab81c",
-    "runtime/ultra/policy/kernel/ksu_setprocattr.c": "048ecc0ffc0cc5ace4160b82d9d6c2830c7329a9514b25c940a5fe3dae0ec441",
-    "runtime/ultra/policy/kernel/ksu_sid.c": "386a72249354f3b5fbe541671a6c2e0f884d4ec73ca33e449ad8165ec24e8ee0",
-    "runtime/ultra/policy/kernel/Makefile": "e369c524c9d56e87ba76f2e023ba31d512b2ac0d8e893ff712d7453c112de2b2",
-    "runtime/ultra/policy/kernel/policy_cred_status.c": "1276eaf932d830e6e31bdce00f8cf4e1ffc7b8972da5256c112e0823daba14ec",
-    "runtime/ultra/policy/kernel/policy_dynamic_layout.c": "37cc2945c40ee9ec3b01a7c12fa2729ff3b48fe926e65309a111c2f36bda6118",
-    "runtime/ultra/policy/kernel/policy_dynamic_layout.h": "aed4ba16bdce008926365d2b30eff5bc251feddc321f46c3ffff8adcf27d4e4d",
-    "runtime/ultra/policy/kernel/policy_entry.S": "56008a08847f2eaf1122f119d2c3821154b0b62617a9947008bf5fa2babbd8f2",
-    "runtime/ultra/policy/kernel/policy_notifications.c": "e02a356da9f064d21ca8b7c32b64d5e626958f70fc67c2d2ddd9f519f4512765",
-    "runtime/ultra/policy/kernel/policy_reload.c": "7f299b76d418db437a3f8b521d1d097ce21dec9c074f7894d9bd0762ca5f6269",
-    "runtime/ultra/policy/kernel/policy_status.c": "8cc3f85d9ecfe868f70cf43c30f70bd325b2199207deb6ed81997fec42dddfd7",
-    "runtime/ultra/policy/kernel/policy_view.c": "35f43219f015d5ab7ef5612c31c4b154c4fdd7ac8b1d8070476659c6e36b6513",
-    "runtime/ultra/policy/kernel/policy_view.h": "de23d2bbaaf08eaa706cf0c4bfccf1335283bff1f9545bc263c700737194e539",
-    "runtime/ultra/policy/kernel/policy_view_internal.h": "c92d8993b7e00465f4dcc809ab7cc27c5ea025fa4b85d8e146d13299b7b1cb5b"
+    "runtime/pro/policy/kernel/abi_anchors.c": "a1aecd767c169f6441a5f23347bfa5aa8aee8349fe881464fdf03802a35b4180",
+    "runtime/pro/policy/kernel/KSU-PROVENANCE.json": "07416c414d31310e5809a00778680f95f3d6af095ea9f379904d5f5d122473c8",
+    "runtime/pro/policy/kernel/ksu_av.c": "23a6025a79c83db7acd6003d0435edebcae5f9f4bff981d9f75015dc5e6e89cf",
+    "runtime/pro/policy/kernel/ksu_context.c": "3a0f0ba43dbc7bd486dadd876edc15adc8a1a4c311cf7d51d65421d2d12ac4a7",
+    "runtime/pro/policy/kernel/ksu_queries.c": "60a1576d465951f175c116571f2c62d08437668bccf38382f0ae244dcb2cbefe",
+    "runtime/pro/policy/kernel/ksu_setprocattr.c": "287adf21b7677840ef9a11a1867e9e8c4ecdbd37362ec75931810f04756c5b18",
+    "runtime/pro/policy/kernel/ksu_sid.c": "c57ba0f8d2d0699582cd583f818383f088195c0bf974839387ed13924d3b9c60",
+    "runtime/pro/policy/kernel/Makefile": "e369c524c9d56e87ba76f2e023ba31d512b2ac0d8e893ff712d7453c112de2b2",
+    "runtime/pro/policy/kernel/policy_cred_status.c": "1276eaf932d830e6e31bdce00f8cf4e1ffc7b8972da5256c112e0823daba14ec",
+    "runtime/pro/policy/kernel/policy_dynamic_layout.c": "37cc2945c40ee9ec3b01a7c12fa2729ff3b48fe926e65309a111c2f36bda6118",
+    "runtime/pro/policy/kernel/policy_dynamic_layout.h": "aed4ba16bdce008926365d2b30eff5bc251feddc321f46c3ffff8adcf27d4e4d",
+    "runtime/pro/policy/kernel/policy_entry.S": "56008a08847f2eaf1122f119d2c3821154b0b62617a9947008bf5fa2babbd8f2",
+    "runtime/pro/policy/kernel/policy_notifications.c": "e02a356da9f064d21ca8b7c32b64d5e626958f70fc67c2d2ddd9f519f4512765",
+    "runtime/pro/policy/kernel/policy_reload.c": "7f299b76d418db437a3f8b521d1d097ce21dec9c074f7894d9bd0762ca5f6269",
+    "runtime/pro/policy/kernel/policy_status.c": "8cc3f85d9ecfe868f70cf43c30f70bd325b2199207deb6ed81997fec42dddfd7",
+    "runtime/pro/policy/kernel/policy_view.c": "14cb247ff380489a8a0bd4ae81e8409fe1e2598a4b5005076dc6523e6fd8e05e",
+    "runtime/pro/policy/kernel/policy_view.h": "de23d2bbaaf08eaa706cf0c4bfccf1335283bff1f9545bc263c700737194e539",
+    "runtime/pro/policy/kernel/policy_view_internal.h": "531d92503af8928660206a917c38df32776a44d3f55c9e71308b7f6200a65c7f"
   },
-  "generatedAt": "2026-11-22T14:13:25.677002+00:00",
+  "generatedAt": "2026-11-15T08:29:06.018887+00:00",
   "scope": "Embed verified PIC candidates and their compiler-derived layouts for SDK testing.\n\nInput directories are generated build artifacts, not an allowlist of supported\ndevice models. Cross-image candidates additionally carry a compiler-derived\nconfig contract, BTF function ABIs and native cache entry bytes.\n",
   "bundles": [
     {
-      "directory": "native-inputs/policy/android12-5.10",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p1-source-r9-build\\kernel\\android12-5.10",
       "identity": "cacb80a04f0868249580229a64636aa3c3e75630",
       "payload": {
         "passed": true,
-        "sha256": "22242b414bddbacc27d8a51a4988ae347eed80830c663ed22cb6911fb2a3bef0",
-        "bytes": 41136,
+        "sha256": "189f767c9299419d6db720c4048ef58d0056a7abc6bc08e0991adedec223f867",
+        "bytes": 39544,
         "imports": [
           "___ratelimit",
           "__alloc_pages_nodemask",
@@ -132,190 +132,176 @@
         "jumpLabelSites": false,
         "alternatives": [
           {
-            "original": 76912,
-            "replacement": 79344,
+            "original": 76664,
+            "replacement": 79036,
             "capability": 59,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 76924,
-            "replacement": 79348,
+            "original": 76676,
+            "replacement": 79040,
             "capability": 42,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 76928,
-            "replacement": 79352,
+            "original": 76680,
+            "replacement": 79044,
             "capability": 42,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 76940,
-            "replacement": 79356,
+            "original": 76692,
+            "replacement": 79048,
             "capability": 59,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 77076,
-            "replacement": 79360,
+            "original": 76828,
+            "replacement": 79052,
             "capability": 59,
             "originalHex": "08fddf88",
             "replacementHex": "08c1bfb8"
           },
           {
-            "original": 77136,
-            "replacement": 79364,
+            "original": 76888,
+            "replacement": 79056,
             "capability": 59,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 77148,
-            "replacement": 79368,
+            "original": 76900,
+            "replacement": 79060,
             "capability": 42,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 77152,
-            "replacement": 79372,
+            "original": 76904,
+            "replacement": 79064,
             "capability": 42,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 77164,
-            "replacement": 79376,
+            "original": 76916,
+            "replacement": 79068,
             "capability": 59,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 81216,
-            "replacement": 82508,
+            "original": 80420,
+            "replacement": 81092,
             "capability": 59,
             "originalHex": "29fddfc8",
             "replacementHex": "29c1bff8"
           },
           {
-            "original": 81636,
-            "replacement": 82512,
+            "original": 80840,
+            "replacement": 81096,
             "capability": 59,
             "originalHex": "29fddfc8",
             "replacementHex": "29c1bff8"
           },
           {
-            "original": 82016,
-            "replacement": 82516,
-            "capability": 59,
-            "originalHex": "15fddfc8",
-            "replacementHex": "15c1bff8"
-          },
-          {
-            "original": 82256,
-            "replacement": 82520,
-            "capability": 59,
-            "originalHex": "15fddfc8",
-            "replacementHex": "15c1bff8"
-          },
-          {
-            "original": 84876,
-            "replacement": 85156,
+            "original": 83576,
+            "replacement": 83768,
             "capability": 59,
             "originalHex": "08fddf88",
             "replacementHex": "08c1bfb8"
           },
           {
-            "original": 84892,
-            "replacement": 85160,
+            "original": 83592,
+            "replacement": 83772,
             "capability": 59,
             "originalHex": "15fddfc8",
             "replacementHex": "15c1bff8"
           },
           {
-            "original": 84912,
-            "replacement": 85164,
+            "original": 83612,
+            "replacement": 83776,
             "capability": 59,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
           },
           {
-            "original": 88312,
-            "replacement": 88820,
+            "original": 86924,
+            "replacement": 87432,
             "capability": 59,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 88980,
-            "replacement": 89508,
+            "original": 87592,
+            "replacement": 88120,
             "capability": 59,
             "originalHex": "4afddfc8",
             "replacementHex": "4ac1bff8"
           },
           {
-            "original": 89152,
-            "replacement": 89512,
+            "original": 87764,
+            "replacement": 88124,
             "capability": 59,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
           },
           {
-            "original": 89388,
-            "replacement": 89516,
+            "original": 88000,
+            "replacement": 88128,
             "capability": 59,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
           },
           {
-            "original": 89880,
-            "replacement": 91412,
+            "original": 88492,
+            "replacement": 90024,
             "capability": 59,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 89892,
-            "replacement": 91416,
+            "original": 88504,
+            "replacement": 90028,
             "capability": 42,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 89896,
-            "replacement": 91420,
+            "original": 88508,
+            "replacement": 90032,
             "capability": 42,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 89908,
-            "replacement": 91424,
+            "original": 88520,
+            "replacement": 90036,
             "capability": 59,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 90092,
-            "replacement": 91428,
+            "original": 88704,
+            "replacement": 90040,
             "capability": 59,
             "originalHex": "c8fedfc8",
             "replacementHex": "c8c2bff8"
           },
           {
-            "original": 90140,
-            "replacement": 91432,
+            "original": 88752,
+            "replacement": 90044,
             "capability": 59,
             "originalHex": "e8fedfc8",
             "replacementHex": "e8c2bff8"
           },
           {
-            "original": 90620,
-            "replacement": 91436,
+            "original": 89232,
+            "replacement": 90048,
             "capability": 59,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
@@ -325,20 +311,20 @@
         "kernelExecution": false
       },
       "sourceSha256": {
-        "policy-view.so": "22242b414bddbacc27d8a51a4988ae347eed80830c663ed22cb6911fb2a3bef0",
+        "policy-view.so": "189f767c9299419d6db720c4048ef58d0056a7abc6bc08e0991adedec223f867",
         "compiled-layout.json": "bb22fb8b87ab06017e28d53d34534a19048729b756f80dd901ec32e6bf5f16cb",
-        "target-identity.json": "7923036d6d61037d0b60931df5e54a31b2f388741a87b98130e83fe0c2f3f388",
+        "target-identity.json": "ba4458e47726d6b95c2c3315f49faba9f1561bd285738a267b7d73860334374c",
         "System.map": "fbf3b889272a04232f9c0591b7b57e87b7be8c5547c317a3ba475f68ddf7b347",
         "target.config": "0eafd90ae5602d150e5248b7ca4f941becd4a66737896eeadf68d4d7b9c66e12"
       }
     },
     {
-      "directory": "native-inputs/policy/android13-5.15",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p1-source-r9-build\\kernel\\android13-5.15",
       "identity": "2e7820bef1e83d455a5cc8bb9d41d5dbfe5b538e",
       "payload": {
         "passed": true,
-        "sha256": "e78e55395a2ffba591df3a887f15c60dbeaa9eaf91b34649d665159bcc0c75d4",
-        "bytes": 42304,
+        "sha256": "30b252cef50915c87cebe6ca1235781fb307083d5fc319888eae8addc26f0c1a",
+        "bytes": 40664,
         "imports": [
           "___ratelimit",
           "__alloc_pages",
@@ -441,218 +427,204 @@
         "jumpLabelSites": false,
         "alternatives": [
           {
-            "original": 77208,
-            "replacement": 79508,
+            "original": 76944,
+            "replacement": 79180,
             "capability": 20,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 77220,
-            "replacement": 79512,
+            "original": 76956,
+            "replacement": 79184,
             "capability": 19,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 77224,
-            "replacement": 79516,
+            "original": 76960,
+            "replacement": 79188,
             "capability": 19,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 77236,
-            "replacement": 79520,
+            "original": 76972,
+            "replacement": 79192,
             "capability": 20,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 77248,
-            "replacement": 79524,
+            "original": 76984,
+            "replacement": 79196,
             "capability": 20,
             "originalHex": "08fddf88",
             "replacementHex": "08c1bfb8"
           },
           {
-            "original": 77376,
-            "replacement": 79528,
+            "original": 77112,
+            "replacement": 79200,
             "capability": 20,
             "originalHex": "08fddf88",
             "replacementHex": "08c1bfb8"
           },
           {
-            "original": 77436,
-            "replacement": 79532,
+            "original": 77172,
+            "replacement": 79204,
             "capability": 20,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 77448,
-            "replacement": 79536,
+            "original": 77184,
+            "replacement": 79208,
             "capability": 19,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 77452,
-            "replacement": 79540,
+            "original": 77188,
+            "replacement": 79212,
             "capability": 19,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 77464,
-            "replacement": 79544,
+            "original": 77200,
+            "replacement": 79216,
             "capability": 20,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 77476,
-            "replacement": 79548,
+            "original": 77212,
+            "replacement": 79220,
             "capability": 20,
             "originalHex": "08fddf88",
             "replacementHex": "08c1bfb8"
           },
           {
-            "original": 77780,
-            "replacement": 79552,
+            "original": 77544,
+            "replacement": 79224,
             "capability": 31,
             "originalHex": "88d038d5",
             "replacementHex": "48d03cd5"
           },
           {
-            "original": 81376,
-            "replacement": 82668,
+            "original": 80520,
+            "replacement": 81200,
             "capability": 20,
             "originalHex": "49fddfc8",
             "replacementHex": "49c1bff8"
           },
           {
-            "original": 81820,
-            "replacement": 82672,
+            "original": 80964,
+            "replacement": 81204,
             "capability": 20,
             "originalHex": "49fddfc8",
             "replacementHex": "49c1bff8"
           },
           {
-            "original": 82208,
-            "replacement": 82676,
-            "capability": 20,
-            "originalHex": "15fddfc8",
-            "replacementHex": "15c1bff8"
-          },
-          {
-            "original": 82448,
-            "replacement": 82680,
-            "capability": 20,
-            "originalHex": "15fddfc8",
-            "replacementHex": "15c1bff8"
-          },
-          {
-            "original": 84940,
-            "replacement": 85188,
+            "original": 83584,
+            "replacement": 83748,
             "capability": 20,
             "originalHex": "08fddf88",
             "replacementHex": "08c1bfb8"
           },
           {
-            "original": 84956,
-            "replacement": 85192,
+            "original": 83600,
+            "replacement": 83752,
             "capability": 20,
             "originalHex": "15fddfc8",
             "replacementHex": "15c1bff8"
           },
           {
-            "original": 84976,
-            "replacement": 85196,
+            "original": 83620,
+            "replacement": 83756,
             "capability": 20,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
           },
           {
-            "original": 88260,
-            "replacement": 88740,
+            "original": 86820,
+            "replacement": 87300,
             "capability": 20,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 88900,
-            "replacement": 89392,
+            "original": 87460,
+            "replacement": 87952,
             "capability": 20,
             "originalHex": "4afddfc8",
             "replacementHex": "4ac1bff8"
           },
           {
-            "original": 89064,
-            "replacement": 89396,
+            "original": 87624,
+            "replacement": 87956,
             "capability": 20,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
           },
           {
-            "original": 89300,
-            "replacement": 89400,
+            "original": 87860,
+            "replacement": 87960,
             "capability": 20,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
           },
           {
-            "original": 89752,
-            "replacement": 91260,
+            "original": 88312,
+            "replacement": 89820,
             "capability": 20,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 89764,
-            "replacement": 91264,
+            "original": 88324,
+            "replacement": 89824,
             "capability": 19,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 89768,
-            "replacement": 91268,
+            "original": 88328,
+            "replacement": 89828,
             "capability": 19,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 89780,
-            "replacement": 91272,
+            "original": 88340,
+            "replacement": 89832,
             "capability": 20,
             "originalHex": "29fddf88",
             "replacementHex": "29c1bfb8"
           },
           {
-            "original": 89792,
-            "replacement": 91276,
+            "original": 88352,
+            "replacement": 89836,
             "capability": 20,
             "originalHex": "08fddf88",
             "replacementHex": "08c1bfb8"
           },
           {
-            "original": 89968,
-            "replacement": 91280,
+            "original": 88528,
+            "replacement": 89840,
             "capability": 20,
             "originalHex": "c8fedfc8",
             "replacementHex": "c8c2bff8"
           },
           {
-            "original": 90024,
-            "replacement": 91284,
+            "original": 88584,
+            "replacement": 89844,
             "capability": 20,
             "originalHex": "e8fedfc8",
             "replacementHex": "e8c2bff8"
           },
           {
-            "original": 90504,
-            "replacement": 91288,
+            "original": 89064,
+            "replacement": 89848,
             "capability": 20,
             "originalHex": "08fddfc8",
             "replacementHex": "08c1bff8"
@@ -662,20 +634,20 @@
         "kernelExecution": false
       },
       "sourceSha256": {
-        "policy-view.so": "e78e55395a2ffba591df3a887f15c60dbeaa9eaf91b34649d665159bcc0c75d4",
+        "policy-view.so": "30b252cef50915c87cebe6ca1235781fb307083d5fc319888eae8addc26f0c1a",
         "compiled-layout.json": "52179434413df62366e6a06d0fefba386000eb6b196a6f3cbd98572f0419c0fc",
-        "target-identity.json": "70528d776dba53754d951505868ae1b7cdfc36a3b0c2ea22e979d917bd950798",
+        "target-identity.json": "243d248c38f8afea04d47fd6b383e307cfc05219c71fcd17ad80a43fd5864bd7",
         "System.map": "8e6fb408dcbf6050c718fbf957650edd01d5dbcebe9551894d21cc8b9564a894",
         "target.config": "8f3becf5d860fa01d1fa2248ed3a2a7c9952eeb6267bb3aa97fd6b8811af0516"
       }
     },
     {
-      "directory": "native-inputs/policy/android14-6.1",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p1-source-r9-build\\kernel\\android14-6.1",
       "identity": "3b7b3d3feb7960925780064141f53d599a51f4ec",
       "payload": {
         "passed": true,
-        "sha256": "5345f27889af6f5835494b8527013842792beac49ac4d6d0849dc6823ea148c7",
-        "bytes": 43096,
+        "sha256": "8477676b4cd0d257addb24be8df9f7e1a25185488bd8c8154b6085b1caead670",
+        "bytes": 41448,
         "imports": [
           "___ratelimit",
           "__alloc_pages",
@@ -778,50 +750,50 @@
         "jumpLabelSites": false,
         "alternatives": [
           {
-            "original": 76716,
-            "replacement": 78928,
+            "original": 76436,
+            "replacement": 78584,
             "capability": 24,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 76720,
-            "replacement": 78932,
+            "original": 76440,
+            "replacement": 78588,
             "capability": 24,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 76920,
-            "replacement": 78936,
+            "original": 76640,
+            "replacement": 78592,
             "capability": 24,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 76924,
-            "replacement": 78940,
+            "original": 76644,
+            "replacement": 78596,
             "capability": 24,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
           },
           {
-            "original": 77228,
-            "replacement": 78944,
+            "original": 76976,
+            "replacement": 78600,
             "capability": 37,
             "originalHex": "88d038d5",
             "replacementHex": "48d03cd5"
           },
           {
-            "original": 88892,
-            "replacement": 90376,
+            "original": 87460,
+            "replacement": 88944,
             "capability": 24,
             "originalHex": "29423bd5",
             "replacementHex": "094638d5"
           },
           {
-            "original": 88896,
-            "replacement": 90380,
+            "original": 87464,
+            "replacement": 88948,
             "capability": 24,
             "originalHex": "2a011912",
             "replacementHex": "2a091b52"
@@ -831,20 +803,20 @@
         "kernelExecution": false
       },
       "sourceSha256": {
-        "policy-view.so": "5345f27889af6f5835494b8527013842792beac49ac4d6d0849dc6823ea148c7",
+        "policy-view.so": "8477676b4cd0d257addb24be8df9f7e1a25185488bd8c8154b6085b1caead670",
         "compiled-layout.json": "65d34aa9a54329bc348661dcb3d8a91aad2fd1ff37f55d400bdc9a739370264c",
-        "target-identity.json": "372427312c9c45484a8bb2237c805d5f784666959b4041490585b9233aa9b917",
+        "target-identity.json": "0175808db28ec5c025823fc52e5ec3ffcd1f42b90270cfe23eed22d7460f9d38",
         "System.map": "6ac6a6fd7e3ea3cb5867385c11429e467bdc2c782f3e77978b5d2f2e78dea5d6",
         "target.config": "d6b02e172bb9a672c6b7fb80a698e016ebbe51a2f3900253bd0ef16e78570316"
       }
     },
     {
-      "directory": "native-inputs/policy/android15-6.6",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p1-source-r9-build\\kernel\\android15-6.6",
       "identity": "68902e1192de0d51aadde71eb3a3c8389748d113",
       "payload": {
         "passed": true,
-        "sha256": "8684f3f98a4855431af51f711938bf8bb18b3357a4f95e563eec7dd39a80e018",
-        "bytes": 44224,
+        "sha256": "c4bc0e6ab08367fd3b2f9a81c520a6b8219124c7d360c4b0ecdd30a618a348e3",
+        "bytes": 42560,
         "imports": [
           "___ratelimit",
           "__alloc_pages",
@@ -949,8 +921,8 @@
         "jumpLabelSites": false,
         "alternatives": [
           {
-            "original": 77320,
-            "replacement": 79212,
+            "original": 77068,
+            "replacement": 78868,
             "capability": 47,
             "originalHex": "88d038d5",
             "replacementHex": "48d03cd5"
@@ -960,20 +932,20 @@
         "kernelExecution": false
       },
       "sourceSha256": {
-        "policy-view.so": "8684f3f98a4855431af51f711938bf8bb18b3357a4f95e563eec7dd39a80e018",
+        "policy-view.so": "c4bc0e6ab08367fd3b2f9a81c520a6b8219124c7d360c4b0ecdd30a618a348e3",
         "compiled-layout.json": "765515c9157184dd0642b0b3cdd72c92b8eaa842b0770f804f5f25369a597c94",
-        "target-identity.json": "2e5a15f937852da49c4ac9408f582cf0d6836238f80aea164265c784b200dd37",
+        "target-identity.json": "1b780db83b61b2a4b1eb08c819448ef9e307184dd146895ab729a72722b34be4",
         "System.map": "b5f1da7bb6260cceaffd8bf3df9067fccfac25b784055c926c205abea660f14e",
         "target.config": "58549c0e27821f20f74ac02b24d2011cfa80dc741745773c18c3aaf00381d64b"
       }
     },
     {
-      "directory": "native-inputs/policy/android16-6.12",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p1-source-r9-build\\kernel\\android16-6.12",
       "identity": "2b70dd0ba73ce34f58ccc7bac3f6a6443fb08c01",
       "payload": {
         "passed": true,
-        "sha256": "8cb9b6fe7c8836061fb9987097affc9f997679262b48d8a50f7fb4d7f4affebf",
-        "bytes": 91856,
+        "sha256": "83fdc95a4af864f1610abf20c6d2a486a8b05e68442486ebc7e07117971c0d23",
+        "bytes": 90224,
         "imports": [
           "___ratelimit",
           "__alloc_pages_noprof",
@@ -1079,43 +1051,43 @@
         "jumpLabelSites": false,
         "alternatives": [
           {
-            "original": 118436,
-            "replacement": 121464,
+            "original": 118156,
+            "replacement": 121124,
             "capability": 31,
             "originalHex": "1f2003d5",
-            "replacementHex": "23fdff17"
+            "replacementHex": "32fdff17"
           },
           {
-            "original": 118444,
-            "replacement": 121468,
+            "original": 118164,
+            "replacement": 121128,
             "capability": 31,
             "originalHex": "1f2003d5",
-            "replacementHex": "25fdff17"
+            "replacementHex": "34fdff17"
           },
           {
-            "original": 118672,
-            "replacement": 121472,
+            "original": 118392,
+            "replacement": 121132,
             "capability": 31,
             "originalHex": "1f2003d5",
             "replacementHex": "f6fdff17"
           },
           {
-            "original": 118680,
-            "replacement": 121476,
+            "original": 118400,
+            "replacement": 121136,
             "capability": 31,
             "originalHex": "1f2003d5",
             "replacementHex": "f8fdff17"
           },
           {
-            "original": 131680,
-            "replacement": 133540,
+            "original": 130264,
+            "replacement": 132124,
             "capability": 31,
             "originalHex": "1f2003d5",
             "replacementHex": "c6feff17"
           },
           {
-            "original": 131688,
-            "replacement": 133544,
+            "original": 130272,
+            "replacement": 132128,
             "capability": 31,
             "originalHex": "1f2003d5",
             "replacementHex": "c8feff17"
@@ -1125,20 +1097,20 @@
         "kernelExecution": false
       },
       "sourceSha256": {
-        "policy-view.so": "8cb9b6fe7c8836061fb9987097affc9f997679262b48d8a50f7fb4d7f4affebf",
+        "policy-view.so": "83fdc95a4af864f1610abf20c6d2a486a8b05e68442486ebc7e07117971c0d23",
         "compiled-layout.json": "732b5fa5b3869585d0e031bff55c479f66e6aa633cf8f861bf642d1b9542f697",
-        "target-identity.json": "83f2a08fee4914c1c0d8b293a95db854bc31de73fbc3ac3cd516c8954e049356",
+        "target-identity.json": "47a0616b42efe7b41bbd9680680734e45857058e2d9408af8227f1771e86105c",
         "System.map": "149761495df6b7279ea1187f0f3750ca518157f1cfe1ca389feee8003544f4ac",
         "target.config": "1fad580a5ac5d115fa2a7aeb6731f0d3324d32929a5f8b976eea91a5d207bae3"
       }
     },
     {
-      "directory": "native-inputs/policy/android17-6.18",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p1-source-r9-build\\kernel\\android17-6.18",
       "identity": "b9dbf6abd06cd8832bc48a4ce5ac7a5caab58356",
       "payload": {
         "passed": true,
-        "sha256": "fb027fc61ea6f470fa7dddbab0d7bbc539512642538596d7fb682037751c6258",
-        "bytes": 47600,
+        "sha256": "6dfb502dc0432946b457012acab6f581f0f52acec2c677bf7a8a9b626c36e996",
+        "bytes": 45968,
         "imports": [
           "___ratelimit",
           "__alloc_pages_noprof",
@@ -1244,43 +1216,43 @@
         "jumpLabelSites": false,
         "alternatives": [
           {
-            "original": 78184,
-            "replacement": 80700,
+            "original": 77904,
+            "replacement": 80348,
             "capability": 35,
             "originalHex": "1f2003d5",
-            "replacementHex": "a3fdff17"
+            "replacementHex": "b5fdff17"
           },
           {
-            "original": 78192,
-            "replacement": 80704,
+            "original": 77912,
+            "replacement": 80352,
             "capability": 35,
             "originalHex": "1f2003d5",
-            "replacementHex": "a4fdff17"
+            "replacementHex": "b6fdff17"
           },
           {
-            "original": 78408,
-            "replacement": 80708,
+            "original": 78128,
+            "replacement": 80356,
             "capability": 35,
             "originalHex": "1f2003d5",
             "replacementHex": "7dfeff17"
           },
           {
-            "original": 78416,
-            "replacement": 80712,
+            "original": 78136,
+            "replacement": 80360,
             "capability": 35,
             "originalHex": "1f2003d5",
             "replacementHex": "7efeff17"
           },
           {
-            "original": 90832,
-            "replacement": 92672,
+            "original": 89412,
+            "replacement": 91252,
             "capability": 35,
             "originalHex": "1f2003d5",
             "replacementHex": "cbfeff17"
           },
           {
-            "original": 90840,
-            "replacement": 92676,
+            "original": 89420,
+            "replacement": 91256,
             "capability": 35,
             "originalHex": "1f2003d5",
             "replacementHex": "ccfeff17"
@@ -1290,17 +1262,27 @@
         "kernelExecution": false
       },
       "sourceSha256": {
-        "policy-view.so": "fb027fc61ea6f470fa7dddbab0d7bbc539512642538596d7fb682037751c6258",
+        "policy-view.so": "6dfb502dc0432946b457012acab6f581f0f52acec2c677bf7a8a9b626c36e996",
         "compiled-layout.json": "04ebfbad5033260404f4ae74b5baca85312d5bf39f7c511d2bdf2d134c9f510d",
-        "target-identity.json": "89378bf45c2e8a69718d0c64de76bf92d792532fe9a1f00582681d0c60247279",
+        "target-identity.json": "caafbeb57722ad6145a340807fc50af2db40d148b545a2f9a3799d9d018c90db",
         "System.map": "ebeacbc3738accf2ca794f48ac3f82f75f787cb7f9561c521a51761d983a3698",
-        "target.config": "bd0488610530ac721df8cd6efa4d9199bb1ddcc7f3eb6df59005f01db1d561ce"
+        "target.config": "ab3963438929b31f86c5a621d3cc2a00adc28fd8c2954c896033cea668db40ed"
       }
     }
   ],
   "profilePolicySha256": "38406fba0a5f6fb8e2d150e3e0d17f819bb195ac8d1ff513e8bd2f39e7c928f4",
-  "generatedSourceSha256": "6e36c28fd4705e9ee9719b26c28b52c78e2fdd8f63c5c8a4bc4560a725f5ebf1",
-  "generatorSha256": "45af988bdc28d8e9970d71b56d9adc81a77c248d88e233ab251fa9156bcc15df",
+  "generatedSourceSha256": "302b910377e24a7766deda98082f2fe682c33d97e026f595b3e2e587c0e95e4a",
+  "generatorSha256": "8f30547c2b0caf908d7fc2a3d14af5bb54494d6bc9b929c942a9900452560185",
   "productionSdkChanged": false,
-  "deviceAccess": false
+  "deviceAccess": false,
+  "kernelBuildReceipt": {
+    "path": ".tmp/p1-source-r9-build/kernel/kernel-build.json",
+    "size": 132723,
+    "sha256": "f82fc1ab22d8bef760f275dd5b9d29ce6156020a8b8e7bbf7f76941bc0be5602"
+  },
+  "kernelContractReceipt": {
+    "path": ".tmp/p1-source-r9-build/kernel/kernel-contracts.json",
+    "size": 336214,
+    "sha256": "84c03d7d7fee1063df89cfbf8f80abf56e297c7b287e03522d6c1edce244cd1a"
+  }
 }

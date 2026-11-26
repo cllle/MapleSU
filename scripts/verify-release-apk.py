@@ -10,6 +10,8 @@ import re
 import subprocess
 import sys
 import zipfile
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from policy_claim_routes import verify_manifest_routes
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE_INPUTS = {'target-boot', 'kernel-image', 'target-config', 'symvers', 'bridge',
@@ -82,6 +84,12 @@ def certificate(output, expected):
     return values[0].lower()
 
 
+def verify_claim_release_version(manifest, sdk):
+    require(manifest.get('appVersion') == sdk.get('appVersion') and
+            type(manifest.get('versionCode')) is int and
+            manifest['versionCode'] == sdk.get('versionCode'), 'CLAIM_RELEASE_VERSION_MISMATCH')
+
+
 def verify_claim_assets(archive, names, execution, receipt):
     prefix = 'assets/ultra-manager-claim/'
     actual_names = {name[len(prefix):] for name in names
@@ -96,10 +104,10 @@ def verify_claim_assets(archive, names, execution, receipt):
     require(len(data) == source['size'] and digest(data) == source['sha256'], 'CLAIM_MANIFEST_APK_DRIFT')
     manifest = json.loads(data.decode('utf-8-sig'))
     require(manifest.get('schemaVersion') in (1, 2), 'CLAIM_MANIFEST_SCHEMA')
+    verify_claim_release_version(manifest, load(Path(execution['sdkRelease']['path'])))
     payloads = manifest.get('payloads')
-    families = {'android12-5.10', 'android13-5.15', 'android14-6.1',
-                'android15-6.6', 'android16-6.12', 'android17-6.18'}
-    require(isinstance(payloads, dict) and families <= set(payloads) and
+    verify_manifest_routes(manifest, lambda name: archive.read('assets/ultra-init-bridge/' + name))
+    require(isinstance(payloads, dict) and
             all(re.fullmatch(r'android[0-9]+-[0-9]+\.[0-9]+', family) for family in payloads),
             'CLAIM_FAMILY_CLOSURE')
     support = manifest.get('support')

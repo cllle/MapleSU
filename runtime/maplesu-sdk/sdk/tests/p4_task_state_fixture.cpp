@@ -10,6 +10,9 @@
 #ifndef ESTALE
 #define ESTALE 116
 #endif
+#ifndef MSU_TASK_SECCOMP_RELEASE_LOCKS_TASK
+#define MSU_TASK_SECCOMP_RELEASE_LOCKS_TASK 0
+#endif
 
 using u32 = uint32_t;
 using u64 = uint64_t;
@@ -67,6 +70,7 @@ unsigned checks = 0, scenarios = 0;
 unsigned gets = 0, puts = 0, grabs = 0, drops = 0;
 unsigned locks = 0, unlocks = 0, releases = 0, validations = 0, barriers = 0;
 bool task_context = true, atomic_context = false, interrupts_disabled = false;
+bool layout_ready = true;
 int first_error = 0, second_error = 0;
 const char* scenario = "initial";
 enum class mutation { none, task, mm, exec, exiting, cred, real_cred, sighand, filter };
@@ -165,6 +169,17 @@ void seccomp_filter_release(seccomp_filter* value) {
     ++releases;
     mutate(release_hook);
 }
+void seccomp_task_release(task_struct* value) {
+    check(value != task && value->flags == PF_EXITING,
+          "native helper consumes the private exiting task carrier");
+#if MSU_TASK_SECCOMP_RELEASE_LOCKS_TASK
+    check(value->sighand == &original_signal,
+          "locking helper receives the original live sighand");
+#endif
+#ifdef CONFIG_SECCOMP
+    seccomp_filter_release(value->seccomp.filter);
+#endif
+}
 int validate(void*) {
     ++validations;
     check(!original_signal.siglock.locked && !alternate_signal.siglock.locked,
@@ -207,6 +222,7 @@ void setup(const char* name, int mode = SECCOMP_MODE_DISABLED) {
     alternate_task = subject;
     gets = puts = grabs = drops = locks = unlocks = releases = validations = barriers = 0;
     task_context = true;
+    layout_ready = true;
     atomic_context = interrupts_disabled = false;
     first_error = second_error = 0;
     first_validate = second_validate = first_lock = final_lock = release_hook = mutation::none;
@@ -244,6 +260,25 @@ void balanced() {
 #define clear_task_syscall_work(task, work) fixture::clear_work(task, work)
 #define test_tsk_thread_flag(task, flag) fixture::test_flag(task, flag)
 #define clear_tsk_thread_flag(task, flag) fixture::clear_flag(task, flag)
+#define MSU_DYN_FIELD(object, type, member) ((object)->member)
+#define msu_dynamic_task_thread_info(task) (&(task)->ti)
+#define msu_dynamic_current_cred() (fixture::current_cred)()
+#define msu_dynamic_current_real_cred() (fixture::current_real_cred)()
+#define msu_dynamic_get_current_cred() (fixture::get_current_cred)()
+#define msu_dynamic_put_cred(value) (fixture::put_cred)(value)
+#define msu_dynamic_mmgrab(value) (fixture::mmgrab)(value)
+#define msu_dynamic_mmdrop(value) (fixture::mmdrop)(value)
+#define msu_runtime_layout_ready() fixture::layout_ready
+#define MSU_DYN_task_struct_flags 0
+static const struct { struct { unsigned owner_bytes; } values[1]; }
+    msu_runtime_layout = {{{sizeof(task_struct)}}};
+#define GFP_KERNEL 0
+#define kvzalloc(bytes, flags) static_cast<task_struct*>(std::calloc(1, bytes))
+#define kvfree(value) std::free(value)
+#define seccomp_filter_release(task) fixture::seccomp_task_release(task)
+#define SYSCALL_WORK_BIT_SECCOMP 1
+#define test_bit(bit, value) ((*(value) & (1UL << (bit))) != 0)
+#define clear_bit(bit, value) (*(value) &= ~(1UL << (bit)))
 
 // EXACT_TASK_STATE_MACROS
 // EXACT_TASK_STATE_FUNCTION
@@ -290,6 +325,10 @@ int main() {
     check(msu_task_state_release_current(nullptr, nullptr, &effects, &previous) == -EINVAL && effects == 0,
           "null validator rejected before identity acquisition");
     balanced();
+    setup("runtime layout not published");
+    layout_ready = false;
+    expect(-EPROTO, 0, 99, false);
+    check(validations == 0 && locks == 0, "missing private facts reject before callbacks or mutation");
     for (int context = 0; context != 3; ++context) {
         setup("non-sleepable context");
         if (context == 0) task_context = false;

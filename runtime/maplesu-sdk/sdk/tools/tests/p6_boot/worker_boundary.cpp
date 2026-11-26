@@ -4,6 +4,8 @@
 #include <fstream>
 #include <unistd.h>
 
+extern "C" const char maplesu_helper_root_key_token[4096];
+
 // Authenticated kernel/storage operations are boundary seams; bootstrap entry
 // points are recording stubs in test_boot.cpp. WorkerScope and boot/session
 // state machines are production code; files, flock, fork, exec and wait are real.
@@ -113,6 +115,13 @@ KModErr StorageScope::select_module(const char* module_id) {
     return KModErr::OK;
 }
 KModErr current_context(StorageContext& out) {
+    if (kernel_module::maplesu_request_auth_legacy(auth_state)) {
+        out = {};
+        std::memcpy(out.locator.kernel_component, maplesu_helper_root_key_token, 16);
+        std::memcpy(out.locator.system_component, maplesu_helper_root_key_token, 16);
+        out.locator.system_component[16] = out.locator.kernel_component[0];
+        return KModErr::OK;
+    }
     if (!current_scope || session_process != getpid()) return KModErr::ERR_MODULE_ROOT_KEY;
     out = current_scope->context_;
     return KModErr::OK;

@@ -79,9 +79,9 @@ def fixture(bootstrap, materializer, page_shift=12, allocator=0, data_offset=0x1
     section_rows.append((data_offset, len(data), 32, 3))
     sections = b"".join(struct.pack("<4I", *row) for row in section_rows)
     descriptor_bytes = 52 + len(sections)
-    descriptor = struct.pack("<13I", 0x4355534D, 2, descriptor_bytes, IMAGE_BYTES,
+    descriptor = struct.pack("<13I", 0x4355534D, 3, descriptor_bytes, IMAGE_BYTES,
                              data_offset + 32, 0, len(section_rows), 2, 0, 0,
-                             zlib.crc32(text + data), 0, TABLE) + sections
+                             zlib.crc32(text + data), IMAGE_BYTES, TABLE) + sections
     table = struct.pack("<4I", 0x4000, len(text), 0x5000, len(data))
     image[DESCRIPTOR:DESCRIPTOR + len(descriptor)] = descriptor
     image[TABLE:TABLE + len(table)] = table

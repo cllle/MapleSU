@@ -40,7 +40,7 @@ std::string fact_abi(const std::vector<KernelFunctionAbi>& primary, const std::s
 }
 
 BootSdkLayoutFacts describe_boot_sdk_layout(const std::vector<uint8_t>& btf,
-    bool allow_inner_allocator, bool allow_user_sampler, bool allow_segmented_allocator) {
+    bool allow_inner_allocator, bool allow_user_sampler, unsigned segmented_capabilities) {
     BootSdkLayoutFacts facts;
     const std::vector<std::string> common = {"copy_from_kernel_nofault", "copy_to_kernel_nofault",
         "copy_from_user_nofault", "copy_to_user_nofault", "set_memory_ro", "set_memory_rw", "set_memory_x",
@@ -71,9 +71,14 @@ BootSdkLayoutFacts describe_boot_sdk_layout(const std::vector<uint8_t>& btf,
         suffix = "_noprof";
         if (!capture("vmalloc_noprof")) return facts;
     }
-    if (!capture("__vmalloc_node_range" + suffix)) return facts;
-    if (allow_inner_allocator || allow_segmented_allocator) capture("___vmalloc_node_range" + suffix);
-    if (allow_segmented_allocator) {
+    const auto outer = "__vmalloc_node_range" + suffix;
+    const bool segmented_callable = (segmented_capabilities &
+        (MSU_BOOT_SDK_SEGMENTED_OBSERVER | MSU_BOOT_SDK_SEGMENTED_CALLABLE)) ==
+        (MSU_BOOT_SDK_SEGMENTED_OBSERVER | MSU_BOOT_SDK_SEGMENTED_CALLABLE);
+    if (!capture(outer) && (!segmented_callable ||
+        facts.function_errors.back().second != "MODULE_POLICY_LAYOUT_ABI_MISSING:" + outer)) return facts;
+    if (allow_inner_allocator || segmented_capabilities) capture("___vmalloc_node_range" + suffix);
+    if (segmented_capabilities & MSU_BOOT_SDK_SEGMENTED_OBSERVER) {
         try { facts.stack = describe_kernel_layout(btf, {{"pt_regs", {"sp"}}}); }
         catch (const std::runtime_error&) { /* This optional capability remains absent. */ }
     }
@@ -89,7 +94,7 @@ BootSdkLayoutFacts describe_boot_sdk_layout(const std::vector<uint8_t>& btf,
 }
 
 msu_boot_sdk_layout consume_boot_sdk_layout(const BootSdkLayoutFacts& facts, uint32_t page_bytes,
-    bool allow_inner_allocator, bool allow_user_sampler, bool allow_segmented_allocator) {
+    bool allow_inner_allocator, bool allow_user_sampler, unsigned segmented_capabilities) {
     const auto& description = facts.layout;
     auto field = [&](const char* type, const char* name, uint32_t bytes) {
         const auto& value = fact_field(fact_owner(description, type), name);
@@ -137,16 +142,26 @@ msu_boot_sdk_layout consume_boot_sdk_layout(const BootSdkLayoutFacts& facts, uin
     check(allocator.c_str(), "f*v(i8:64;)");
     const auto range_abi = "f*v(i8:64;i8:64;i8:64;i8:64;i4:32;s:8{0=i8:64;};i8:64;i4:16777248;*v;)";
     const std::string suffix = result.allocator_noprof ? "_noprof" : "";
-    check(("__vmalloc_node_range" + suffix).c_str(), range_abi);
+    const auto outer = "__vmalloc_node_range" + suffix;
+    const bool segmented_callable = (segmented_capabilities &
+        (MSU_BOOT_SDK_SEGMENTED_OBSERVER | MSU_BOOT_SDK_SEGMENTED_CALLABLE)) ==
+        (MSU_BOOT_SDK_SEGMENTED_OBSERVER | MSU_BOOT_SDK_SEGMENTED_CALLABLE);
+    bool outer_missing = false;
+    try { check(outer.c_str(), range_abi); }
+    catch (const std::runtime_error& error) {
+        if (!segmented_callable || std::string(error.what()) != "MODULE_POLICY_LAYOUT_ABI_MISSING:" + outer) throw;
+        outer_missing = true;
+    }
     // Vendor wrappers may inline into vmalloc and call a distinct inner range.
     // Only select that implementation when its complete native ABI is known.
-    if (allow_inner_allocator) {
+    if (allow_inner_allocator && !outer_missing) {
         try {
             check(("___vmalloc_node_range" + suffix).c_str(), range_abi);
             result.allocator_noprof |= MSU_BOOT_SDK_ALLOCATOR_INNER;
         } catch (const std::runtime_error&) { /* Keep the qualified outer ABI. */ }
     }
-    if (allow_segmented_allocator && !(result.allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_INNER)) {
+    if ((segmented_capabilities & MSU_BOOT_SDK_SEGMENTED_OBSERVER) &&
+        !(result.allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_INNER)) {
         try {
             check(("___vmalloc_node_range" + suffix).c_str(),
                 "f*v(i8:64;i8:64;i4:32;i4:32;i4:32;i4:32;i8:64;i8:64;i4:32;s:8{0=i8:64;};i8:64;i4:16777248;*v;)");
@@ -156,7 +171,11 @@ msu_boot_sdk_layout consume_boot_sdk_layout(const BootSdkLayoutFacts& facts, uin
                 sp.bit_size != 64 || result.regs_pc != 32 * 8)
                 throw std::runtime_error("BOOT_SDK_ALLOCATOR_STACK_ABI");
             result.allocator_noprof |= MSU_BOOT_SDK_ALLOCATOR_SEGMENTED;
-        } catch (const std::runtime_error&) { /* Keep the qualified outer ABI. */ }
+            if (outer_missing) result.allocator_noprof |= MSU_BOOT_SDK_ALLOCATOR_INNER;
+        } catch (const std::runtime_error&) {
+            if (outer_missing) throw;
+            /* Keep the qualified outer ABI. */
+        }
     }
     // User-page allocation bypasses the vendor fast return in __vmalloc_node.
     // A missing or changed ABI keeps old listeners and kernels on their existing path.
@@ -203,8 +222,8 @@ msu_boot_sdk_layout consume_boot_sdk_layout(const BootSdkLayoutFacts& facts, uin
 }
 
 msu_boot_sdk_layout resolve_boot_sdk_layout(const std::vector<uint8_t>& btf, uint32_t page_bytes,
-    bool allow_inner_allocator, bool allow_user_sampler, bool allow_segmented_allocator) {
+    bool allow_inner_allocator, bool allow_user_sampler, unsigned segmented_capabilities) {
     return consume_boot_sdk_layout(describe_boot_sdk_layout(btf, allow_inner_allocator,
-        allow_user_sampler, allow_segmented_allocator), page_bytes,
-        allow_inner_allocator, allow_user_sampler, allow_segmented_allocator);
+        allow_user_sampler, segmented_capabilities), page_bytes,
+        allow_inner_allocator, allow_user_sampler, segmented_capabilities);
 }

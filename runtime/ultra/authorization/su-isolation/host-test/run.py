@@ -1,11 +1,17 @@
+import argparse
 import hashlib
 import json
 from pathlib import Path
 import subprocess
 
 HERE = Path(__file__).resolve().parent
-BASE = HERE.parent
-REPO = Path(__file__).resolve().parents[5]
+parser = argparse.ArgumentParser(description='Replay the isolated historical SU host transaction cases.')
+parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[5])
+parser.add_argument('--inputs', type=Path, default=HERE.parent)
+args = parser.parse_args()
+BASE = args.inputs.resolve()
+HERE = BASE / 'host-test'
+REPO = args.root.resolve()
 command = ['docker', 'run', '--rm', '--pull=never', '--network', 'none',
            '--tmpfs', '/data:exec', '--tmpfs', '/tmp:exec',
            '-v', f'{BASE.as_posix()}:/work:ro',
@@ -18,7 +24,7 @@ result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8
 (HERE / 'execution.log').write_text(result.stdout + result.stderr)
 cases = [line.removeprefix('PASS ') for line in result.stdout.splitlines() if line.startswith('PASS ')]
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-inputs = list((BASE / 'source').glob('*')) + [HERE / 'test.cpp', HERE / 'run.py',
+inputs = list((BASE / 'source').glob('*')) + [BASE / 'host-test/test.cpp', Path(__file__).resolve(),
     BASE / 'header/module_err_def.h']
 report = {'schema': 'maplesu-su-isolation-host-v1', 'executed': True,
           'passed': result.returncode == 0 and len(cases) == 20,

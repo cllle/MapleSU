@@ -11,6 +11,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
 import java.io.RandomAccessFile
+import java.security.MessageDigest
 
 /**
  * On-device Ultra boot-image generation, built from the same image-core primitives the product
@@ -87,19 +88,32 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
         val expectedPinned: Boolean = true,
         /** The container actually produced; the external target boot is read-only. */
         val partition: String = "boot",
+        val componentKmi: String = "",
     )
 
+    /** [base] is the recovery baseline; the installation input keeps its own pre-normalization digest. */
     fun generateInitBoot(base: File, artifact: UltraInitBootProducer.Artifact,
-                         credential: UltraKernelCredential): Candidate = synchronized(lock) {
+                         credential: UltraKernelCredential, installationInput: File = base,
+                         installationInputSha256: String = UltraKernelSpec.sha256(installationInput),
+                         normalizationSource: UltraKernelOriginalRecovery.Source? = null): Candidate = synchronized(lock) {
         val source = BootImageInspector.inspect(base)
+        val input = if (installationInput == base) source else BootImageInspector.inspect(installationInput)
+        check(input.sha256 == installationInputSha256) { "ULTRA_KERNEL_INIT_BOOT_INPUT_CHANGED" }
         check(source.headerVersion in 0..4 && source.ramdiskSize > 0L &&
             (source.kernelSize > 0L || source.headerVersion == 4)) {
             "ULTRA_KERNEL_INIT_BOOT_CONTAINER"
         }
-        val target = UltraKernelPlan.readKernel(artifact.targetBoot)
-        check(UltraKernelSpec.sha256(target) == artifact.kernelSha256 &&
-            UltraKernelSpec.releaseOf(target) == artifact.kernelRelease) {
-            "ULTRA_KERNEL_INIT_BOOT_TARGET_CHANGED"
+        val sourceKernel = if (source.kernelSize > 0L) UltraKernelPlan.readKernel(base) else null
+        if (!artifact.isKmiComponent) {
+            val target = UltraKernelPlan.readKernel(artifact.targetBoot)
+            check(UltraKernelSpec.sha256(target) == artifact.kernelSha256 &&
+                UltraKernelSpec.releaseOf(target) == artifact.kernelRelease) {
+                "ULTRA_KERNEL_INIT_BOOT_TARGET_CHANGED"
+            }
+        } else if (sourceKernel != null) {
+            check(dev.maplesu.image.KernelIdentity.kmiOf(sourceKernel) == artifact.componentKmi) {
+                "ULTRA_KERNEL_MODULE_CARRIER_COMPONENT_KMI"
+            }
         }
         if (artifact.credentialMode == "module-parameter") {
             check(credential.sdkMetadataValid && credential.metadataDisplacement == artifact.metadataDisplacement) {
@@ -112,11 +126,13 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                 "ULTRA_KERNEL_INIT_BOOT_CREDENTIAL_MISMATCH"
             }
         } finally { secret.fill(0) }
-        if (source.kernelSize > 0L) check(UltraKernelSpec.sha256(UltraKernelPlan.readKernel(base)) == artifact.kernelSha256) {
+        if (!artifact.isKmiComponent && sourceKernel != null) check(UltraKernelSpec.sha256(sourceKernel) == artifact.kernelSha256) {
             "ULTRA_KERNEL_MODULE_CARRIER_TARGET_CHANGED"
         }
         val carrierPartition = if (source.kernelSize > 0L) "boot" else "init_boot"
-        val targetBootSha = UltraKernelSpec.sha256(artifact.targetBoot)
+        val targetBootSha = if (artifact.isKmiComponent) null else UltraKernelSpec.sha256(artifact.targetBoot)
+        val kernelSha = if (artifact.isKmiComponent) sourceKernel?.let { UltraKernelSpec.sha256(it) }.orEmpty() else artifact.kernelSha256
+        val kernelRelease = if (artifact.isKmiComponent) sourceKernel?.let { UltraKernelSpec.releaseOf(it) }.orEmpty() else artifact.kernelRelease
         check(workspace.isDirectory || workspace.mkdirs()) { "ULTRA_KERNEL_WORKSPACE" }
         val output = File(workspace, "candidate-init-boot-${java.util.UUID.randomUUID()}.img")
         val receipt = File(workspace, output.nameWithoutExtension + ".json")
@@ -128,10 +144,11 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
             outputOwned = true
             val after = BootImageInspector.inspect(output)
             check(after.kernelSize == source.kernelSize && after.headerVersion == source.headerVersion &&
-                (source.kernelSize == 0L || UltraKernelSpec.sha256(UltraKernelPlan.readKernel(output)) == artifact.kernelSha256) &&
+                (source.kernelSize == 0L || UltraKernelSpec.sha256(UltraKernelPlan.readKernel(output)) == kernelSha) &&
                 after.sha256 == produced.imageSha256 && produced.sourceSha256 == source.sha256 &&
                 UltraKernelSpec.sha256(base) == source.sha256 &&
-                UltraKernelSpec.sha256(artifact.targetBoot) == targetBootSha) {
+                UltraKernelSpec.sha256(installationInput) == input.sha256 &&
+                (artifact.isKmiComponent || UltraKernelSpec.sha256(artifact.targetBoot) == targetBootSha)) {
                 "ULTRA_KERNEL_INIT_BOOT_READBACK_MISMATCH"
             }
             if (artifact.credentialMode == "module-parameter") {
@@ -148,23 +165,43 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                 put("operation", "ULTRA_INIT_BOOT_GENERATE")
                 put("source", "init-boot-bridge")
                 put("partition", carrierPartition)
-                put("sourceSha256", source.sha256)
+                put("sourceSha256", input.sha256)
                 put("candidateSha256", after.sha256)
-                put("targetBootSha256", targetBootSha)
-                put("kernelSha256", artifact.kernelSha256)
-                put("kernelRelease", artifact.kernelRelease)
+                if (normalizationSource != null) {
+                    put("recoveryBaseSha256", source.sha256)
+                    put("recoveryBaseImageBytes", source.fileSize)
+                    put("normalizationSource", normalizationSource.name)
+                }
+                if (artifact.isKmiComponent) {
+                    put("componentKmi", artifact.componentKmi)
+                    put("componentBuildRelease", artifact.kernelRelease)
+                    put("componentPageSize", artifact.component.pageSize)
+                    put("componentCfiMode", artifact.component.cfiMode)
+                    put("sourceGenerationSha256", artifact.component.sourceGenerationSha256)
+                    put("runtimeFactsAbi", artifact.component.runtimeFactsAbi)
+                } else put("targetBootSha256", requireNotNull(targetBootSha))
+                if (kernelSha.isNotEmpty()) put("kernelSha256", kernelSha)
+                if (kernelRelease.isNotEmpty()) put("kernelRelease", kernelRelease)
                 put("handoffSha256", artifact.handoffSha256)
                 put("bridgeSha256", artifact.bridgeSha256)
                 put("targetInputSha256", buildJsonObject {
                     artifact.targetInputSha256.toSortedMap().forEach { (name, digest) -> put(name, digest) }
                 })
                 put("readbackVerified", true)
+                put("sourceImageBytes", input.fileSize)
+                put("candidateImageBytes", after.fileSize)
+                put("originalRamdiskBytes", produced.originalRamdiskBytes)
+                put("installedRamdiskBytes", produced.installedRamdiskBytes)
+                put("recoveryRecordBytes", produced.recoveryRecordBytes)
+                put("recoveryCoverage", if (normalizationSource == null) "FIRST_INPUT_EXACT" else "NORMALIZED_INPUT_EXACT")
                 put("runtimeVerified", false)
             }.toString().toByteArray(Charsets.UTF_8)
             val pending = File.createTempFile("init-boot-receipt-", ".pending", workspace)
             pendingReceipt = pending
             initBootReceiptWriter(pending, receiptBytes)
             check(pending.readBytes().contentEquals(receiptBytes)) { "ULTRA_KERNEL_INIT_BOOT_RECEIPT_READBACK" }
+            check(UltraKernelSpec.sha256(base) == source.sha256 &&
+                UltraKernelSpec.sha256(installationInput) == input.sha256) { "ULTRA_KERNEL_INIT_BOOT_INPUT_CHANGED" }
             if (Thread.currentThread().isInterrupted) {
                 throw java.io.InterruptedIOException("ULTRA_KERNEL_INIT_BOOT_CANCELLED")
             }
@@ -173,9 +210,11 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
             if (Thread.currentThread().isInterrupted) {
                 throw java.io.InterruptedIOException("ULTRA_KERNEL_INIT_BOOT_CANCELLED")
             }
-            Candidate(output, after.sha256, source.sha256, artifact.kernelSha256, artifact.kernelRelease,
-                0, produced.changedBytes, false, "experimental", "init-boot-bridge", false,
-                expectedPinned = false, partition = carrierPartition)
+            val changedBytes = if (installationInput == base) produced.changedBytes else
+                Math.toIntExact(dev.maplesu.image.BootImageEquivalence.diff(installationInput, output).changedBytes)
+            Candidate(output, after.sha256, input.sha256, kernelSha, kernelRelease,
+                0, changedBytes, false, "experimental", "init-boot-bridge", false,
+                expectedPinned = false, partition = carrierPartition, componentKmi = artifact.componentKmi)
         } catch (error: Throwable) {
             UltraKernelRecoveryEnvelope.cleanup(null, pendingReceipt, receipt.takeIf { receiptOwned },
                 output.takeIf { outputOwned }, primary = error)
@@ -231,7 +270,7 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                 "ULTRA_KERNEL_BASE_NO_KERNEL"
             }
             val originalComponent = readKernelComponent(base, source)
-            val raw = KernelCompression.decode(originalComponent, source.compression, KernelCompression.MAX_KERNEL_BYTES)
+            val raw = decodeKernelComponent(originalComponent, source.compression)
             val release = UltraKernelSpec.releaseOf(raw)
             // Series, not release: `6.6.50` may be patched with the `6.6.89` asset ("6.6.89 匹配 6.6").
             check(KernelSeries.same(release, asset.kernelRelease)) {
@@ -295,7 +334,12 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                 if (recoveryRecord != null) check(
                     UltraKernelRecoveryRecord.decode(recoveryRecord).restore(result.kernel).contentEquals(raw)
                 ) { "ULTRA_KERNEL_RECOVERY_PREIMAGE_MISMATCH" }
-                val containerBytes = KernelCompression.encodeKernelComponent(result.kernel, originalComponent, source.compression)
+                // RAW bytes are already a private, independently patched result. Encoding them
+                // again would only duplicate the whole kernel while both input arrays are live.
+                val containerBytes = if (source.compression == "RAW_ARM64") {
+                    if (Thread.currentThread().isInterrupted) throw java.io.IOException("CANCELLED")
+                    result.kernel
+                } else KernelCompression.encodeKernelComponent(result.kernel, originalComponent, source.compression)
                 container.writeBytes(containerBytes)
                 val output = File(workspace, "candidate-${asset.id}-${kernelSha.take(12)}.img")
                 output.delete()
@@ -360,14 +404,15 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                     "ULTRA_KERNEL_OUTPUT_HEADER"
                 }
                 check(after.kernelSize == containerBytes.size.toLong()) { "ULTRA_KERNEL_OUTPUT_KERNEL_SIZE" }
-                val readbackComponent = readKernelComponent(output, after)
-                check(readbackComponent.contentEquals(containerBytes)) { "ULTRA_KERNEL_COMPONENT_READBACK_MISMATCH" }
-                val readback = KernelCompression.decode(readbackComponent, after.compression, KernelCompression.MAX_KERNEL_BYTES)
+                check(after.compression == source.compression) { "ULTRA_KERNEL_OUTPUT_COMPRESSION" }
+                val componentSha = verifyKernelComponent(output, after, containerBytes)
+                val readbackKernelSha = if (after.compression == "RAW_ARM64") componentSha
+                    else UltraKernelSpec.sha256(decodeKernel(output, after))
                 // The image must read back as exactly the kernel that was just built. In pinned mode
                 // that is the asset's digest (checked above); in the derived modes it is the digest
                 // computed here - either way the bytes on disk are proven to be the bytes that were
                 // verified, which is the gate the user asked to keep.
-                check(UltraKernelSpec.sha256(readback) == kernelSha) {
+                check(readbackKernelSha == kernelSha) {
                     "ULTRA_KERNEL_READBACK_MISMATCH"
                 }
                 val bootSha = UltraKernelSpec.sha256(output)
@@ -449,7 +494,37 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
     }
 
     private fun decodeKernel(file: File, report: BootImageInspector.Report): ByteArray =
-        KernelCompression.decode(readKernelComponent(file, report), report.compression, KernelCompression.MAX_KERNEL_BYTES)
+        decodeKernelComponent(readKernelComponent(file, report), report.compression)
+
+    private fun decodeKernelComponent(component: ByteArray, compression: String): ByteArray {
+        if (Thread.currentThread().isInterrupted) throw java.io.IOException("CANCELLED")
+        // Only this builder owns the component; the public codec still returns independent arrays.
+        return if (compression == "RAW_ARM64") component
+            else KernelCompression.decode(component, compression, KernelCompression.MAX_KERNEL_BYTES)
+    }
+
+    private fun verifyKernelComponent(
+        file: File, report: BootImageInspector.Report, expected: ByteArray,
+    ): String {
+        check(report.kernelSize == expected.size.toLong()) { "ULTRA_KERNEL_OUTPUT_KERNEL_SIZE" }
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(64 * 1024)
+        RandomAccessFile(file, "r").use { input ->
+            input.seek(report.kernelOffset)
+            var offset = 0
+            while (offset < expected.size) {
+                if (Thread.currentThread().isInterrupted) throw java.io.IOException("CANCELLED")
+                val count = minOf(buffer.size, expected.size - offset)
+                input.readFully(buffer, 0, count)
+                for (index in 0 until count) check(buffer[index] == expected[offset + index]) {
+                    "ULTRA_KERNEL_COMPONENT_READBACK_MISMATCH"
+                }
+                digest.update(buffer, 0, count)
+                offset += count
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private fun readKernelComponent(file: File, report: BootImageInspector.Report): ByteArray {
         check(report.kernelSize in 1L..KernelCompression.MAX_KERNEL_BYTES.toLong()) {

@@ -104,7 +104,11 @@ class UltraKernelShellcodeTest {
                 UltraKernelSymbolResolver(symbols()), fields.copy(pageShift = shift)).bytes
             assertEquals(188, generated.size)
             // Independent encodings from assembled AArch64, including zero-count CBZ.
-            val expected = hex("ec3740a98cdd4cd39f3a03d5ad0000b46c8308d5" +
+            // The publish page is `tlbi vmalle1is` (0xd508831f): a by-VA `tlbi vaae1is`
+            // alone was measured insufficient for a just-reprotected executable page on
+            // the 6.6.89 device, so the full inner-shareable stage-1 invalidation is the
+            // published contract. 0x6c8308d5 (vaae1is, x12) is the rejected form.
+            val expected = hex("ec3740a98cdd4cd39f3a03d5ad0000b41f8308d5" +
                 when (stride) { 1 -> "8c050091"; 4 -> "8c110091"; else -> "8c410091" } +
                 "ad0500f1a1ffff549f3b03d5df3f03d5eb4741a9")
             assertArrayEquals(expected, generated.copyOfRange(140, 140 + expected.size))

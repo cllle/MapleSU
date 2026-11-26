@@ -32,18 +32,24 @@ import kotlinx.coroutines.launch
 import java.io.ByteArrayInputStream
 import kotlin.coroutines.coroutineContext
 
-class WebUIDownloadInterface(private val state: WebUIState) {
+class WebUIDownloadInterface private constructor(
+    private val state: WebUIState?,
+    private val session: WebUiDownloadSession?,
+) {
+    constructor(state: WebUIState) : this(state, null)
+    internal constructor(session: WebUiDownloadSession) : this(null, session)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val blobs = BlobDownloadHandler()
     private val destroyed = AtomicBoolean(false)
-    private val webView get() = state.webView
-    private var pageView = state.webView
+    private val webView get() = state?.webView
+    private var pageView = state?.webView
     private val pageActivation = ModeRuntime.activation
 
     @Synchronized
     private fun pageOpen(): Boolean {
-        if (destroyed.get() || !state.isModuleSessionCurrent || state.uiEvent == WebUIEvent.Close ||
-            pageActivation != ModeRuntime.activation) return false
+        if (destroyed.get() || pageActivation !== ModeRuntime.activation) return false
+        if (session != null) return session.isCurrent()
+        if (state?.isModuleSessionCurrent != true || state.uiEvent == WebUIEvent.Close) return false
         if (pageView == null) pageView = webView
         return pageView != null && pageView === webView
     }
@@ -61,9 +67,10 @@ class WebUIDownloadInterface(private val state: WebUIState) {
     @JavascriptInterface
     fun openExternal(url: String) {
         if (!pageOpen()) return
-        val currentWebView = webView ?: return
         val uri = url.toUri()
         if (uri.scheme != "http" && uri.scheme != "https") return
+        if (session != null) { session.openExternal(url); return }
+        val currentWebView = webView ?: return
 
         runCatching {
             currentWebView.context.startActivity(Intent(Intent.ACTION_VIEW, uri))
@@ -80,6 +87,7 @@ class WebUIDownloadInterface(private val state: WebUIState) {
     @Synchronized
     private fun saveFile(fileName: String?, requestedMimeType: String?, onFinished: () -> Unit = {}, source: () -> InputStream): Boolean {
         if (!pageOpen()) return false
+        if (session != null) return session.save(fileName, requestedMimeType, onFinished, source)
         val currentWebView = webView ?: return false
         val context = currentWebView.context.applicationContext
         val displayName = sanitizeWebUIDownloadFileName(fileName)
@@ -160,13 +168,13 @@ class WebUIDownloadInterface(private val state: WebUIState) {
     @JavascriptInterface
     fun startChunkedDownload(fileName: String?, mimeType: String?): String {
         if (!pageOpen()) { destroy(); return "" }
-        val currentWebView = webView ?: return ""
+        val cacheDir = session?.cacheDir ?: webView?.context?.cacheDir ?: return ""
         val sanitizedFileName = sanitizeWebUIDownloadFileName(fileName)
         return runCatching {
             val id = blobs.registerBlobDownload(
                 sanitizedFileName,
                 mimeType,
-                currentWebView.context.cacheDir,
+                cacheDir,
             )
             if (pageOpen()) id else { blobs.cancelDownload(id); "" }
         }.getOrElse {

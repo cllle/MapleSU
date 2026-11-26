@@ -29,6 +29,16 @@ internal object UltraKernelTaskProfileTarget {
             "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_IDENTITY"
         }
     }
+    private fun dependencyIdentity(value: JsonElement): JsonObject = value.jsonObject.also {
+        if (it["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(it) else {
+            val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
+                it["sha256"]?.jsonPrimitive?.content == empty &&
+                it["archivePath"]?.jsonPrimitive?.content == "build-dependencies/files/$empty.bin") {
+                "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_DEPENDENCY_IDENTITY"
+            }
+        }
+    }
     private fun same(a: JsonObject, b: JsonObject) = a["bytes"] == b["bytes"] && a["sha256"] == b["sha256"]
     private fun words(values: JsonElement?) = values!!.jsonArray.map {
         val word = it.jsonPrimitive.long
@@ -169,7 +179,7 @@ internal object UltraKernelTaskProfileTarget {
                 "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_OBJECT_SOURCE:$name"
             }
             for (key in listOf("objectIdentity", "commandIdentity", "dependencyReceiptIdentity")) identity(item[key])
-            val dependencies = item.getValue("dependencies").jsonArray.map { identity(it) }
+            val dependencies = item.getValue("dependencies").jsonArray.map(::dependencyIdentity)
             require(listOf(item["sourceIdentity"], parent["headerIdentity"], parent["configIdentity"]).all { dep ->
                 dependencies.any { same(it, identity(dep)) } }) { "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_DEPENDENCIES:$name" }
             val policy = item.getValue("cfiPolicy").jsonObject

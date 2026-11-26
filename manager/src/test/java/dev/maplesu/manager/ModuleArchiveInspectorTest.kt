@@ -32,11 +32,10 @@ class ModuleArchiveInspectorTest {
         Triple("b33dcddd88c07d079a8e0e9ec6ab976f15f2edba46cab91a61234cfbb982111c", "0123456789abcdef0123456789abcdef", "3020d9a6c07a30e2649dd29a72d7e57121f0c0ca457b6d21dca5a69acbe6c2c4"),
     )
 
-    private fun mapleSuElf(id: String = "0123456789abcdef0123456789abcdef", sdkMarkers: Boolean = false): ByteArray {
-        val constants = if (sdkMarkers) mapleSuTags.joinToString("\u0000") { it.first + "\u0000" + it.third } + "\u0000" else ""
-        val metadata = (constants + mapleSuTags.mapIndexed { index, field ->
+    private fun mapleSuElf(id: String = "0123456789abcdef0123456789abcdef"): ByteArray {
+        val metadata = mapleSuTags.mapIndexed { index, field ->
             if (index == 4) Triple(field.first, id, field.third) else field
-        }.joinToString("\u0000") { it.first + it.second + it.third } + "\u0000" + constants).toByteArray()
+        }.joinToString("\u0000") { it.first + it.second + it.third }.toByteArray()
         val strings = ("\u0000" + mapleSuEntry + "\u0000").toByteArray()
         val strOffset = 512 + metadata.size
         val symOffset = (strOffset + strings.size + 7) and -8
@@ -59,13 +58,6 @@ class ModuleArchiveInspectorTest {
         b.putInt(shOffset + 132, 11); b.putLong(shOffset + 152, symOffset.toLong())
         b.putLong(shOffset + 160, 48); b.putInt(shOffset + 168, 1); b.putLong(shOffset + 184, 24)
         return b.array()
-    }
-
-    @Test fun standaloneSdkParserTagsDoNotDuplicateModuleMetadata() {
-        val report = ModuleArchiveInspector.inspect(zip("libmodule_example.so" to mapleSuElf(sdkMarkers = true)))
-        assertEquals(ModuleArchiveInspector.ModuleType.MAPLESU, report.type)
-        assertEquals("0123456789abcdef0123456789abcdef", report.id)
-        assertEquals("枫栖测试", report.properties["name"])
     }
 
     private fun sha256(bytes: ByteArray) =

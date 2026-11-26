@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+
+import shutil
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -156,15 +158,15 @@ public final class NativeBridge {
         ("org.jetbrains", "annotations", "13.0"), ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm", "1.11.0"),
         ("org.json", "json", "20240303"), ("junit", "junit", "4.13.2"), ("org.hamcrest", "hamcrest-core", "1.3")]]
     compiler = cached_jar("org.jetbrains.kotlin", "kotlin-compiler-embeddable", "2.4.20")
-    jdk = jdk_tool("java").parent
+    java, javac = jdk_tool(), jdk_tool("javac")
     classes = out / "classes"
     classes.mkdir(exist_ok=True)
     cp = os.pathsep.join(map(str, [classes, *deps]))
-    return [[jdk / "java.exe", "-Xmx256m", "-cp", os.pathsep.join(map(str, [compiler, *deps])),
+    return [[java, "-Xmx256m", "-cp", os.pathsep.join(map(str, [compiler, *deps])),
         "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect", "-nowarn", "-jvm-target", "21",
         "-classpath", cp, "-d", classes, *sources, bridge],
-        [jdk / "javac.exe", "-encoding", "UTF-8", "-cp", cp, "-d", classes, bridge],
-        [jdk / "java.exe", "-cp", cp, "org.junit.runner.JUnitCore", "dev.maplesu.manager.runtime.ultra.RootCommandIdentityTest"]]
+        [javac, "-encoding", "UTF-8", "-cp", cp, "-d", classes, bridge],
+        [java, "-cp", cp, "org.junit.runner.JUnitCore", "dev.maplesu.manager.runtime.ultra.RootCommandIdentityTest"]]
 
 
 def native(out, source):
@@ -180,7 +182,7 @@ def native(out, source):
     method = block(source, 'extern "C" JNIEXPORT jstring JNICALL\nJava_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_runRootCmd(')
     write(out, "root_command_production.inc", "\n\n".join(helpers) + "\n\n" + method)
     binary = out / "native-root-identity.exe"
-    return [["C:/msys64/ucrt64/bin/g++.exe", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
+    return [[(os.environ.get("CXX") or shutil.which("g++") or "g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
         "-I" + str(out), "-I" + str(ROOT / "runtime/ultra/bridge"),
         "-I" + str(ROOT / "runtime/maplesu-sdk/include"), "-I" + str(ROOT / "runtime/maplesu-sdk/sdk/include"),
         "-I" + str(ROOT / "runtime/ultra/third_party/cJSON"), "-I" + str(ROOT / "runtime/ultra/third_party/include"),
@@ -209,7 +211,7 @@ def main():
         codes = []
         for command in commands:
             env = os.environ.copy()
-            env["PATH"] = "C:/msys64/ucrt64/bin" + os.pathsep + env["PATH"]
+            env["PATH"] = str(Path(shutil.which(os.environ.get("CXX") or "g++") or os.environ.get("CXX") or "g++").resolve().parent) + os.pathsep + env["PATH"]
             result = subprocess.run(list(map(str, command)), cwd=ROOT, env=env, capture_output=True,
                 text=True, encoding="utf-8", errors="replace", timeout=55)
             codes.append(result.returncode)

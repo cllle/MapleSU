@@ -160,13 +160,13 @@ public final class RamdiskComponentWriterTest {
             byte[][] parts = components(version, 71, 53, true);
             byte[] original = avb(fixture(version, page, parts), 131072);
             Files.write(source, original);
-            for (byte[] value : new byte[][]{content(16385, 9), content(16385, 9), content(1, 7), parts[1]}) {
+            for (byte[] value : new byte[][]{content(16385, 9), content(16385, 9), new byte[0], new byte[0], content(1, 7), parts[1]}) {
                 byte[] before = Files.readAllBytes(source);
                 Files.write(ramdisk, value);
                 BootImageRebuilder.Report report = rebuild(source, ramdisk, output);
                 byte[][] expectedParts = parts.clone(); expectedParts[1] = value;
                 byte[] expected = avb(fixture(version, page, expectedParts), original.length);
-                check(Arrays.equals(expected, Files.readAllBytes(output)), "AVB grow/repeat/shrink/restore v" + version);
+                check(Arrays.equals(expected, Files.readAllBytes(output)), "AVB grow/repeat/empty/no-op/shrink/restore v" + version);
                 check(report.avbFooterPresent && report.image.fileSize == original.length, "Partition capacity preserved");
                 check(report.equivalence.ok() && !report.kernelChanged, "AVB kernel and diff verified");
                 check(report.toJson().contains("\"originalSignaturesReverified\":false"), "No old authentication claim");
@@ -197,7 +197,14 @@ public final class RamdiskComponentWriterTest {
             if (version == 4) { check(Arrays.equals(original, Files.readAllBytes(output)), "Old V4 no-op"); Files.delete(output); }
             else check(!Files.exists(output), "Legacy rejected by old CLI without output");
             Files.write(ramdisk, new byte[0]);
-            rejected(source, ramdisk, output, "REPLACEMENT_RAMDISK_SIZE_LIMIT");
+            try {
+                BootImageRebuilder.rebuild(source.toFile(), ramdisk.toFile(), output.toFile());
+                throw new AssertionError("Kernel API accepted an empty replacement");
+            } catch (IOException error) {
+                check("REPLACEMENT_KERNEL_SIZE_LIMIT".equals(error.getMessage()), "Kernel replacement remains nonempty");
+                check(!Files.exists(output) && Arrays.equals(original, Files.readAllBytes(source)),
+                        "Empty kernel replacement preserves source and exposes no output");
+            }
             Files.write(ramdisk, content(53, 71));
             Files.write(output, new byte[]{4, 5});
             try { rebuild(source, ramdisk, output); throw new AssertionError("Existing output overwritten"); }
@@ -244,7 +251,7 @@ public final class RamdiskComponentWriterTest {
                     for (boolean extras : new boolean[]{false, true}) {
                         for (int kernel : new int[]{0, 71}) {
                             byte[][] parts = components(version, kernel, extras ? 5000 : 0, extras);
-                            for (byte[] value : new byte[][]{content(1, 7), content(53, 71), content(page * 2 + 1, 9)})
+                            for (byte[] value : new byte[][]{new byte[0], content(1, 7), content(53, 71), content(page * 2 + 1, 9)})
                                 one(source, ramdisk, output, version, page, parts, value);
                             if (parts[1].length > 0) one(source, ramdisk, output, version, page, parts, parts[1]);
                         }

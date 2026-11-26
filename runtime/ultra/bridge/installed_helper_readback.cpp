@@ -32,6 +32,9 @@ namespace {
 using namespace kernel_module;
 using Result = InstalledHelperReadbackResult;
 using Clock = std::chrono::steady_clock;
+uint64_t elapsed_us(Clock::time_point start) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count());
+}
 struct LayoutForkGuard {
     bool acquired = false;
     LayoutForkGuard() {
@@ -301,6 +304,7 @@ bool same_authentication(const Result& left, const Result& right) {
         same_command(left.deployment, right.deployment) && same_command(left.root, right.root) &&
         same_command(left.task_state, right.task_state) && left.transition_observed == right.transition_observed &&
         left.root_committed == right.root_committed && left.root_verified == right.root_verified &&
+        left.credentials_managed == right.credentials_managed &&
         left.credentials_error == right.credentials_error && left.root_system_error == right.root_system_error &&
         left.legacy_environment_completed == right.legacy_environment_completed &&
         !std::memcmp(left.root_phase, right.root_phase, sizeof(left.root_phase)) &&
@@ -324,6 +328,7 @@ void authenticate(Result& out, const char* key, const char* path, int output, co
     out.mode_selected = !out.mode_error;
     if (!out.mode_selected) { out.sdk_error = out.mode_error; return; }
     if (out.owner_mode) {
+        out.credentials_managed = true;
         maplesu_metadata_owner_v3 metadata{};
         uint64_t descriptor = 0;
         RequestOwnerBinding binding{};
@@ -374,28 +379,51 @@ void authenticate(Result& out, const char* key, const char* path, int output, co
     } else {
         if (!progress(out, "legacy-key", output, deadline)) return;
         __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
-        out.root.attempted = true;
+        uint64_t capabilities = 0;
+        if (!progress(out, "credential-channel", output, deadline)) return;
+        out.channel_error = static_cast<int64_t>(maplesu_request_credential_channel(out.credentials_managed, capabilities));
+        if (out.channel_error) { out.sdk_error = out.channel_error; return; }
         if (!progress(out, "root-transition", output, deadline)) return;
-        out.root.error = static_cast<int64_t>(default_modules::module_root::set_current_root(false));
-        const auto transition = default_modules::module_root::current_root_transition();
-        out.credentials_error = static_cast<int64_t>(transition.credentials_error);
-        out.root_system_error = transition.system_error;
-        out.legacy_environment_completed = transition.environment_completed;
-        out.transition_observed = transition.phase != nullptr;
-        out.task_state.attempted = transition.task_state_attempted;
-        out.task_state.error = static_cast<int64_t>(transition.task_state_error);
-        copy_reply(out.task_state, transition.task_state);
-        if (transition.phase) std::strncpy(out.root_phase, transition.phase, sizeof(out.root_phase) - 1);
+        if (out.credentials_managed) {
+            // Key remains LegacyKey. Use the same authenticated credential command
+            // as the composite SDK Root path, without preparing an su environment.
+            if (!(capabilities & MAPLESU_CAP_CREDENTIAL)) {
+                out.root.error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
+            } else {
+                out.root.attempted = true;
+                errno = 0;
+                out.root.error = static_cast<int64_t>(maplesu_request_owner_root());
+                out.root_system_error = errno;
+                copy_reply(out.root, maplesu_request_management_reply());
+            }
+            out.credentials_error = out.root.error;
+            std::memcpy(out.root_phase, "credentials", sizeof("credentials"));
+            out.root_committed = out.root.completed && out.root.command == MAPLESU_REQUEST_CRED_ROOT &&
+                (out.root.effects & MAPLESU_EFFECT_COMMITTED);
+        } else {
+            out.root.attempted = true;
+            out.root.error = static_cast<int64_t>(default_modules::module_root::set_current_root(false));
+            const auto transition = default_modules::module_root::current_root_transition();
+            out.credentials_error = static_cast<int64_t>(transition.credentials_error);
+            out.root_system_error = transition.system_error;
+            out.legacy_environment_completed = transition.environment_completed;
+            out.transition_observed = transition.phase != nullptr;
+            out.task_state.attempted = transition.task_state_attempted;
+            out.task_state.error = static_cast<int64_t>(transition.task_state_error);
+            copy_reply(out.task_state, transition.task_state);
+            if (transition.phase) std::strncpy(out.root_phase, transition.phase, sizeof(out.root_phase) - 1);
+        }
     }
     out.sdk_error = out.root.error;
     uid_t ruid, euid, suid;
     if (getresuid(&ruid, &euid, &suid)) out.uid_error = errno;
     else { out.ruid = ruid; out.euid = euid; out.uid_observed = true; }
     out.root_verified = !out.root.error && out.uid_observed && !out.ruid && !out.euid &&
-        (!out.owner_mode || (out.owner_bound && command_ok(out.root, MAPLESU_REQUEST_CRED_ROOT, MAPLESU_EFFECT_COMMITTED)));
+        (!out.owner_mode || out.owner_bound) &&
+        (!out.credentials_managed || command_ok(out.root, MAPLESU_REQUEST_CRED_ROOT, MAPLESU_EFFECT_COMMITTED));
 }
 void close_owner(Result& out) {
-    if (!out.owner_mode || !out.mode_selected) return;
+    if (!out.credentials_managed || !out.mode_selected) return;
     out.close.attempted = true;
     try { out.close.error = static_cast<int64_t>(maplesu_request_owner_close()); }
     catch (...) { out.child_exception = true; out.close.error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL); }
@@ -474,6 +502,7 @@ int produce(int output, const char* path, Result& out, const timespec& deadline)
     out.watchdog_armed = !out.watchdog_error;
     if (close(input)) out.child_io_error = errno;
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR && !out.child_io_error) out.child_io_error = errno;
+    const auto authentication_started = Clock::now();
     if (out.watchdog_armed && !out.child_io_error) try { authenticate(out, key, path, output, deadline); }
     catch (...) {
         out.child_exception = true;
@@ -491,11 +520,14 @@ int produce(int output, const char* path, Result& out, const timespec& deadline)
         }
         out.sdk_error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
     }
+    out.authentication_us = elapsed_us(authentication_started);
     out.root_checkpoint_received = true;
     int delivered = write_frame(output, kRoot, &out, sizeof(out), deadline);
     if (!delivered && out.root_verified) {
+        const auto source_started = Clock::now();
         try { out.producer_error = produce(output, out.helper_path, out, deadline); }
         catch (...) { out.child_exception = true; out.producer_error = EIO; }
+        out.source_us = elapsed_us(source_started);
     }
     const End end{out.actual_size, out.normalized_offset, out.source_bytes, out.stream_bytes,
         out.producer_error, uint8_t(out.read_attempted), uint8_t(out.metadata_stable),
@@ -584,13 +616,25 @@ int receive(int input, pid_t child, bool owner, const char* path, uint64_t offse
         } else return EPROTO;
     }
 }
-void finish_wait(pid_t child, Result& out, const timespec& deadline, uint64_t lease) {
+int finish_wait(pid_t child, Result& out, const timespec& deadline, uint64_t lease, const timespec& began) {
     int error = 0;
     pid_t waited;
     for (;;) {
         waited = wait_once(child, out.child_status, deadline, error);
         if (waited || (error = expired_error(deadline))) break;
         poll(nullptr, 0, 1);
+    }
+    // Freeze the deadline at the final required observation, before releasing
+    // the slot. Cleanup or a later scheduling delay cannot undo an observed exit.
+    timespec completed{};
+    int deadline_error = clock_gettime(CLOCK_MONOTONIC, &completed) ? errno : 0;
+    if (!deadline_error) {
+        const int64_t elapsed_ns = int64_t(completed.tv_sec - began.tv_sec) * INT64_C(1000000000) +
+            completed.tv_nsec - began.tv_nsec;
+        out.completion_us = elapsed_ns > 0 ? static_cast<uint64_t>(elapsed_ns / 1000) : 0;
+        if (completed.tv_sec > deadline.tv_sec ||
+            (completed.tv_sec == deadline.tv_sec && completed.tv_nsec >= deadline.tv_nsec))
+            deadline_error = ETIMEDOUT;
     }
     if (waited == child) out.child_status_valid = true;
     else if (error) out.wait_error = error;
@@ -606,24 +650,29 @@ void finish_wait(pid_t child, Result& out, const timespec& deadline, uint64_t le
     else defer_cleanup(child, out);
     if (out.child_status_valid && (!WIFEXITED(out.child_status) || WEXITSTATUS(out.child_status)) && !out.wait_error)
         out.wait_error = EPROTO;
+    return deadline_error;
 }
 } // namespace
 
 InstalledHelperReadbackResult read_installed_helper(const char* key, const char* path,
-    int64_t slot_offset, InstalledHelperChunkConsumer consume, void* context) {
+    int64_t slot_offset, InstalledHelperChunkConsumer consume, void* context, uint32_t timeout_ms) {
     Result out;
     out.owner_mode = key == nullptr;
     out.namespace_requested = out.owner_mode && path == nullptr;
     const auto start = Clock::now();
     out.normalized_offset = slot_offset > 0 ? static_cast<uint64_t>(slot_offset) : 0;
     timespec deadline{};
-    if ((path ? !valid_path(path) : !out.owner_mode) || (key && !valid_key(key)) || !consume) out.system_error = EINVAL;
+    if ((path ? !valid_path(path) : !out.owner_mode) || (key && !valid_key(key)) || !consume ||
+        !timeout_ms || timeout_ms > 5000) out.system_error = EINVAL;
     else if (clock_gettime(CLOCK_MONOTONIC, &deadline)) out.system_error = errno;
     else {
-        deadline.tv_nsec += 300000000;
+        const timespec began = deadline;
+        deadline.tv_sec += timeout_ms / 1000;
+        deadline.tv_nsec += (timeout_ms % 1000) * 1000000;
         if (deadline.tv_nsec >= 1000000000) { ++deadline.tv_sec; deadline.tv_nsec -= 1000000000; }
         uint64_t lease = 0;
         if (admit(out, deadline, lease)) {
+            const auto admission_us = elapsed_us(start);
             int fds[2];
             if (pipe2(fds, O_CLOEXEC)) {
                 out.transport_error = errno;
@@ -631,15 +680,23 @@ InstalledHelperReadbackResult read_installed_helper(const char* key, const char*
             } else {
                 pid_t child = -1;
                 int fork_error = 0;
+                const auto fork_started = Clock::now();
                 {
                     LayoutForkGuard layout;
                     if (!layout.acquired) out.admission_error = EAGAIN;
+                    else if (const int expired = expired_error(deadline)) {
+                        out.admission_error = expired;
+                        out.timed_out = expired == ETIMEDOUT;
+                    }
                     else {
                         maplesu_request_fork_prepare();
                         child = fork();
                         if (child < 0) fork_error = errno;
                     }
                 }
+                const auto fork_us = elapsed_us(fork_started);
+                out.admission_us = admission_us;
+                out.fork_us = fork_us;
                 if (!child) child_run(fds[0], fds[1], key, path, out.normalized_offset, deadline);
                 if (child < 0) {
                     if (!out.admission_error) out.transport_error = fork_error;
@@ -648,6 +705,7 @@ InstalledHelperReadbackResult read_installed_helper(const char* key, const char*
                 } else {
                     const int prior_cleanup_error = out.cleanup_error;
                     int error = close(fds[1]) ? errno : 0;
+                    const auto receive_started = Clock::now();
                     const int received = receive(fds[0], child, out.owner_mode, path, out.normalized_offset,
                         out, consume, context, deadline);
                     if (!error) error = received;
@@ -665,8 +723,12 @@ InstalledHelperReadbackResult read_installed_helper(const char* key, const char*
                         out.termination_requested = true;
                         if (kill(child, SIGKILL) && errno != ESRCH) out.termination_error = errno;
                     }
-                    finish_wait(child, out, deadline, lease);
-                    const int deadline_error = expired_error(deadline);
+                    out.receive_us = elapsed_us(receive_started);
+                    const auto wait_started = Clock::now();
+                    const int deadline_error = finish_wait(child, out, deadline, lease, began);
+                    out.wait_us = elapsed_us(wait_started);
+                    out.admission_us = admission_us;
+                    out.fork_us = fork_us;
                     if (deadline_error == ETIMEDOUT) out.timed_out = true;
                     else if (deadline_error && !out.transport_error) out.transport_error = deadline_error;
                     out.complete = valid_snapshot_path(out, path) && out.root_verified && !out.sdk_error && !out.watchdog_error &&
@@ -679,7 +741,7 @@ InstalledHelperReadbackResult read_installed_helper(const char* key, const char*
                         out.child_status_valid && WIFEXITED(out.child_status) && !WEXITSTATUS(out.child_status) &&
                         !out.timed_out && !out.termination_requested && !out.termination_error &&
                         !out.cleanup_pending && !out.cleanup_scheduled && !out.cleanup_error &&
-                        (!out.owner_mode || command_ok(out.close, MAPLESU_REQUEST_SESSION_CLOSE, MAPLESU_EFFECT_SESSION_CLOSED));
+                        (!out.credentials_managed || command_ok(out.close, MAPLESU_REQUEST_SESSION_CLOSE, MAPLESU_EFFECT_SESSION_CLOSED));
                 }
             }
         }

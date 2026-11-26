@@ -1,3 +1,3 @@
 package dev.maplesu.manager.workmode.superuser
-
-object LiteImplantQuiesceGate { fun isBlocked() = false }
+import dev.maplesu.manager.runtime.ultra.Fixture
+object LiteImplantQuiesceGate { fun isBlocked() = Fixture.quiescing }

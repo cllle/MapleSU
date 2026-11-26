@@ -199,8 +199,12 @@ class ModuleWebUIActivity : ComponentActivity() {
             return
         }
         val origin = requireNotNull(ModuleWebOrigin.from(url))
-        val moduleDir = intent.getStringExtra(EXTRA_MODULE_DIR)?.takeIf {
-            it.startsWith('/') && it.none { c -> c.code < 0x20 }
+        val moduleDir = dev.maplesu.manager.modules.webui.ModuleWebUiPlan.moduleDirectoryOrNull(
+            intent.getStringExtra(EXTRA_MODULE_DIR))
+        if (dev.maplesu.manager.modules.webui.ModuleWebUiPlan.isUltraModuleId(moduleId) && moduleDir == null) {
+            android.util.Log.w("MapleSUWebUi", "Native module request without a verified module directory")
+            finish()
+            return
         }
         if (moduleDir != null) {
             pageState.modDir = moduleDir

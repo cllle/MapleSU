@@ -51,6 +51,7 @@ KModErr read_kernel_mem(uint64_t address, void* out, uint32_t count) {
 }
 namespace export_symbol {
 template<class... Args> void get_current(Args...) {}
+template<class... Args> KModErr get_current_checked(Args... args) { get_current(args...); return KModErr::OK; }
 template<class T> void get_task_mm(asmjit::a64::Assembler*, KModErr& error, T) { error = KModErr::OK; }
 template<class T> void mmput(asmjit::a64::Assembler*, KModErr& error, T) { error = KModErr::OK; }
 }

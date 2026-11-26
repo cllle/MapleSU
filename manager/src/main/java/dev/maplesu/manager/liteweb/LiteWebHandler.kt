@@ -6,7 +6,7 @@ import dev.maplesu.manager.modules.compat.validUltraModuleControlId
  * H2：Lite WebUI 路由（纯 Kotlin，JVM 可测）。
  *
  * 静态：`GET {prefix}/{token}/` → `assets/liteweb/index.html`，其余静态资源同前缀；
- * `/modweb` 固定 501（未实现模块 WebUI 代理）。
+ * `/modweb/<id>/...` 提供模块资源；`POST /api/module/bridge` 分派文档会话。
  *
  * API：
  * - `GET  /api/ping` / `status` / `modules` / `superusers` / `sulog`
@@ -27,6 +27,7 @@ class LiteWebRequestHandler(
     private val tokenProvider: () -> String?,
     private val backend: LiteWebBackend,
     private val prefix: String = LiteWebConstants.PATH_PREFIX,
+    private val documentTokenProvider: () -> String? = tokenProvider,
 ) : LiteWebHandler {
 
     override fun handle(request: LiteWebHttpRequest): LiteWebHttpResponse {
@@ -40,6 +41,10 @@ class LiteWebRequestHandler(
         if (route.isEmpty() || route == "/") return serveStatic("index.html")
         if (route == "/modweb" || route.startsWith("/modweb/")) {
             return serveModWeb(request, route, token)
+        }
+        if (route == "/api/module/bridge") {
+            if (request.method != "POST") return LiteWebHttpResponse.error(405, "METHOD_NOT_ALLOWED", "use POST")
+            return backend.moduleBridgePort().handle(request, token)
         }
         if (route.startsWith("/api/")) return handleApi(request, route.removePrefix("/api"))
         if (route.startsWith("/api")) return LiteWebHttpResponse.empty(404)
@@ -672,7 +677,7 @@ class LiteWebRequestHandler(
             )
             is LiteWebModuleWeb.Found -> {
                 val bytes = if (LiteWebModWeb.isHtml(file.rel)) {
-                    val base = "/$prefix/$token"
+                    val base = "/$prefix/${documentTokenProvider() ?: token}"
                     val tag = LiteWebModWeb.bridgeTag(base, file.moduleId)
                     LiteWebModWeb.injectBridge(
                         result.bytes.toString(Charsets.UTF_8),
@@ -685,7 +690,10 @@ class LiteWebRequestHandler(
                     status = 200,
                     contentType = result.mime.ifBlank { LiteWebModWeb.contentType(file.rel) },
                     body = bytes,
-                    headers = mapOf("Content-Security-Policy" to LiteWebModWeb.CSP_MODWEB),
+                    headers = mapOf(
+                        "Content-Security-Policy" to LiteWebModWeb.CSP_MODWEB,
+                        "Referrer-Policy" to "same-origin",
+                    ),
                 )
             }
         }

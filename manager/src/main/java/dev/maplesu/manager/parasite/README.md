@@ -1,23 +1,23 @@
 # 寄生模式接口与恢复契约
 
-寄生能力属于 Ultra 侧增强。生产端口通过 Pro root 通道调用原生扩展，Lite 与 Pro
+寄生能力属于 Ultra 侧增强。生产端口通过 Ultra root 通道调用原生扩展，Lite 与 Ultra
 归档分别链接。App loader 复用隐藏模式的恢复脚本与宿主授权；su-env 使用独立 PATH
 loader。两种载荷均不嵌入 root key。
 
 ## 调用链
 
 `NativeBridge` 的 `parasitePrecheckApp`、`parasiteImplantApp`、`parasiteImplantSuEnv`
-由 `runtime/pro/bridge/native_lib_pro.cpp` 实现，返回统一 JSON 回执。
-`ProRuntimeClient` → `ParasiteProApiAdapter` → `ProLinkedParasiteSdkPort` 负责解析、
+由 `runtime/ultra/bridge/native_lib_ultra.cpp` 实现，返回统一 JSON 回执。
+`UltraRuntimeClient` → `ParasiteUltraApiAdapter` → `UltraLinkedParasiteSdkPort` 负责解析、
 错误映射和前置检查，`productionParasiteSdkPort(context)` 装配生产端口。
 
-当前集成使用 Pro 5.1.0 扩展提供三项原生接口；旧库缺符号时继续返回
-`MAPLESU_BRIDGE_SDK_SYMBOL_MISSING`，端口映射为 `PRO_API_UNLINKED`。接口存在、
+当前集成使用 Ultra 5.1.0 扩展提供三项原生接口；旧库缺符号时继续返回
+`MAPLESU_BRIDGE_SDK_SYMBOL_MISSING`，端口映射为 `ULTRA_API_UNLINKED`。接口存在、
 环境 Running 与宿主能力的实际就绪分别验证。
 
 ## 运行前置条件
 
-- Pro 环境为 Running，配对凭据可用，所需原生符号已链接。
+- Ultra 环境为 Running，配对凭据可用，所需原生符号已链接。
 - 用户选择的宿主包、签名集合和安装实例通过系统查询核对。
 - 临时模式的运行端引用属于当前 boot 与 attempt；重启后重新建立。
 - 模式切换写者静默期停止接收新的寄生动作。
@@ -26,8 +26,8 @@ loader。两种载荷均不嵌入 root key。
 
 | 组件 | 职责 |
 | --- | --- |
-| `ParasiteSdkPort` / `ProLinkedParasiteSdkPort` | 参数、可用性、静默期和原生调用边界 |
-| `UnavailableParasiteSdkPort` | 区分 `PRO_UNAVAILABLE`、`PRO_NOT_RUNNING`、`PRO_API_UNLINKED`、`PRO_ROOT_KEY_UNAVAILABLE` |
+| `ParasiteSdkPort` / `UltraLinkedParasiteSdkPort` | 参数、可用性、静默期和原生调用边界 |
+| `UnavailableParasiteSdkPort` | 区分 `ULTRA_UNAVAILABLE`、`ULTRA_NOT_RUNNING`、`ULTRA_API_UNLINKED`、`ULTRA_ROOT_KEY_UNAVAILABLE` |
 | `ParasiteHostRecord` | 宿主注册身份、进程名、库路径与独立结果位 |
 | `ParasiteStateMachine` | N0–N6 状态跃迁及 reset；证据不足时保留失败 |
 | `ParasiteJournal` | 追加并同步日志，容忍末尾半行并支持重建 |

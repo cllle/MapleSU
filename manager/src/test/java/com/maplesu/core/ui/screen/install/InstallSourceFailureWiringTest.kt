@@ -1,7 +1,6 @@
 package com.maplesu.core.ui.screen.install
 
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -16,24 +15,19 @@ class InstallSourceFailureWiringTest {
         assertTrue(status.contains("InstallSourceAccessFailure.CHANNEL_UNAVAILABLE"))
     }
 
-    @Test fun onlyDirectPreflightRetainsAccessFailureClassification() {
+    @Test fun directFailuresAreClassifiedByTheSubmittedTransaction() {
         val source = File("src/main/java/com/maplesu/core/ui/screen/install/InstallScreen.kt").readText()
-        val direct = source.substringAfter("LaunchedEffect(sourceRequest,")
-            .substringBefore("val selectFileTip")
-        val guard = direct.indexOf("installMethod != InstallMethod.DirectInstall || !existingRootConflictAccepted")
-        val discover = direct.indexOf("StockInstallPreflight.discoverTarget(context, targetMode)")
-        assertTrue("Only an explicitly accepted direct install may request access", guard in 0 until discover)
-        assertFalse(direct.contains("StockInstallPreflight.inspect("))
-        val classification = "sourceAccessFailure = installSourceAccessFailure(error, rootWasRunning || UltraEnvironmentProbe.isRunning())"
-        assertTrue(direct.contains(classification))
-        assertEquals(1, Regex(Regex.escape(classification)).findAll(source).count())
-        val selected = source.substringAfter("val selectImageLauncher =")
-            .substringBefore("val normalDecision =")
+        val page = source.substringBefore("private fun probeInstallBoot(")
+        assertFalse(page.contains("StockInstallPreflight"))
+        assertFalse(page.contains("sourceAccessFailure ="))
+        val flow = File("src/main/java/dev/maplesu/manager/installer/StockInstallFlow.kt").readText()
+        assertTrue(flow.contains("failureAt = { phase, error ->"))
+        assertTrue(flow.contains("installerFailureDiagnostic(error)"))
+        assertTrue(flow.contains("shouldCancel = { prepareAttempted }"))
+        val selected = source.substringAfter("val selectImageLauncher =").substringBefore("val normalDecision =")
         assertTrue(selected.contains("installMethod = InstallMethod.SelectFile(uri, summary = selectFileTip)"))
         assertFalse(selected.contains("StockInstallPreflight"))
         assertFalse(selected.contains("UltraEnvironmentProbe"))
-        assertFalse(selected.contains("showConflict = true"))
         assertFalse(source.contains("filePreflightRequested"))
-        assertFalse(source.contains("sourceAccessFailed = true"))
     }
 }

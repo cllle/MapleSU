@@ -58,7 +58,14 @@ private class Case(private val shell: DockerShell, name: String, initialLive: Bo
             cat > '$base/maplesu/bin/maplesu-tools' <<'TOOL'
             #!/bin/sh
             set -eu
-            [ "${'$'}1" = module-sync ]; shift
+            case "${'$'}{1:-}" in
+                module-initrc)
+                    [ "${'$'}#" = 1 ] || exit 64
+                    printf 'module-initrc\n' >> '$base/tool-calls'
+                    exit 0 ;;
+                module-sync) shift ;;
+                *) exit 64 ;;
+            esac
             if [ "${'$'}{1:-}" = --tree ]; then shift; fi
             for target do
                 if [ -f '$base/fail-after-rename' ] && [ "${'$'}target" = '$root' ] &&
@@ -69,7 +76,14 @@ private class Case(private val shell: DockerShell, name: String, initialLive: Bo
                 sync -f "${'$'}target"
             done
             TOOL
-            chmod 0755 '$base/maplesu/bin/maplesu-tools'
+            cat > '$base/maplesu/bin/busybox' <<'BUSYBOX'
+            #!/bin/sh
+            set -eu
+            [ "${'$'}{1:-}" = flock ] || exit 64
+            shift
+            exec flock "${'$'}@"
+            BUSYBOX
+            chmod 0755 '$base/maplesu/bin/maplesu-tools' '$base/maplesu/bin/busybox'
         """.trimIndent() + "\n" + if (initialLive) """
             mkdir '$root/$ID'
             printf 'id=$ID\nversionCode=1\n' > '$root/$ID/module.prop'

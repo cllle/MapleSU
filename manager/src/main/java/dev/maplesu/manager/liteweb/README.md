@@ -1,7 +1,7 @@
 # Ultra 网页管理器（H2）服务端
 
 Ultra 模式（A）的网页管理器：由 libsu `RootService` 长驻 root 进程托管 HTTP 服务，
-App 进程退出不影响；不依赖 ksud/Pro。
+App 进程退出不影响；不依赖 ksud/Ultra。
 
 ## 入口与鉴权
 

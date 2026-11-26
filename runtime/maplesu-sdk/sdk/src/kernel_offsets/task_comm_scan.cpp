@@ -115,7 +115,7 @@ KModErr get_task_struct_comm_offset(uint32_t& offset) {
     auto context = init_aarch64_asm();
     auto a = context.assembler();
     arm64_module_asm_func_start(a);
-    export_symbol::get_current(a, asmjit::a64::x0);
+    RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::x0));
     arm64_module_asm_func_end(a, asmjit::a64::x0);
     const auto bytes = aarch64_asm_to_bytes(a);
     if (context.has_error() || bytes.empty()) {

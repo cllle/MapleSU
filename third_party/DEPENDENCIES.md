@@ -7,7 +7,7 @@
 | 7kimisu | [源清单](7kimisu/source-manifest.json)，`dafd0a96ab1ad37cb4aa692b4081bf68e231d6a7` | Manager 直接派生基础；[GPL-3.0-or-later](7kimisu/LICENSE)，保留[原说明](7kimisu/UPSTREAM-SOURCE-NOTICE.md) |
 | KernelSU | [清单与补丁](kernelsu/manifest.json)，`528bafc5696196f3a9500cee2e7e18497421cd32` | Normal 主要实现；[用户态/管理器 GPLv3](kernelsu/upstream/LICENSE)、[内核 GPLv2](kernelsu/upstream/kernel/LICENSE)，具体版本选择见文件头 |
 | FinaSU | [官方仓库](https://github.com/LyraVoid/FinaSU) | UI/交互主要参考，主题格式兼容；直接代码来源按对应文件和管理器派生清单记录 |
-| Shark | [源码与逐文件摘要](../jailbreak-providers/shark/manifest.json)，`2af72cb8959fae5f1c7f929a649db5e546334cef`（v2.2.2） | 98260 逐内核提权 runner 与对应 exploit 源码；[GPL-3.0](../jailbreak-providers/shark/LICENSE)，保留[上游 NOTICE](../jailbreak-providers/shark/NOTICE.upstream.md)。runner 按原字节复用，摘要不一致时打包失败 |
+| Shark | [源码与逐文件摘要](../jailbreak-providers/shark/manifest.json)，`2af72cb8959fae5f1c7f929a649db5e546334cef`（v2.2.2） | 98260 逐内核偏移表的来源；[GPL-3.0](../jailbreak-providers/shark/LICENSE)，保留[上游 NOTICE](../jailbreak-providers/shark/NOTICE.upstream.md)。**不分发上游 runner 二进制**：plant 由 [build_plants.py](../jailbreak-providers/shark/build_plants.py) 用 NDK 从保留源码编译，产物与源码摘要不一致时打包失败 |
 | libsu service | [SOURCE.json](libsu-service/SOURCE.json)，6.0.0，`8c3e80ffe466b89ff875471e542d77e6a1b480c5` | [Apache-2.0](libsu-service/LICENSE)；源码调整和官方 trampoline 摘要见相邻 README |
 | Apache Commons Compress | [固定工件清单](commons-compress/license-source-manifest.json)，1.28.0 | 模块 ZIP 静态检查；[LICENSE](commons-compress/LICENSE.txt) / [NOTICE](commons-compress/NOTICE.txt) |
 | Magisk / libsepol | [固定来源](../module-policy/upstream/sources.json) | 策略处理；GPL-3.0 与 LGPL-2.1-or-later，保留各文件声明和对应源码 |

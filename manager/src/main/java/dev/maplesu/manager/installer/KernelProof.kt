@@ -6,8 +6,8 @@ package dev.maplesu.manager.installer
  * <p>Only the service process may decide whether the KSU native channel is usable; the App's
  * `isManager` flag is never accepted as authority. W11 injects the JNI supercall implementation;
  * until then the proof is unavailable (version=0), so the KSU native channel cannot be *proven*
- * as a root transport. It is not a partition-write gate: [InstallerModeGate] refuses only a
- * jailbreak origin, [RootSourcePolicy] always selects the KSU source, and [InstallerRootSession]
+ * as a root transport. Partition authority uses the actual service UID and verified Manager;
+ * [RootSourcePolicy] selects the KSU source, and [InstallerRootSession]
  * degrades to another transport instead of refusing — an unavailable proof never blocks a
  * user-initiated flash.
  */

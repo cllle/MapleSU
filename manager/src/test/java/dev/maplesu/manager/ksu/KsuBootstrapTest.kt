@@ -178,8 +178,12 @@ class KsuBootstrapTest {
         assertTrue(result is KsuBootstrap.Result.Failed)
         val failed = result as KsuBootstrap.Result.Failed
         assertEquals(KsuBootstrap.FAILURE_CODE, failed.code)
-        assertEquals("ksud install code=7 err=deploy error\n", failed.detail)
-        assertEquals(listOf("- ${plan.commandLine}") + receipt.out, stdout)
+        assertEquals(
+            "command=${plan.commandLine}\nksud install code=7\n" +
+                "stdout:\n${receipt.outText}\nstderr:\n${receipt.errText}",
+            failed.detail,
+        )
+        assertEquals(listOf("- ${plan.commandLine}") + receipt.out + "- ksud install exitCode=${receipt.code}", stdout)
         assertEquals(receipt.err, stderr)
         assertEquals(listOf(plan.commandLine to KsuBootstrap.INSTALL_TIMEOUT_MS), commands)
     }
@@ -203,7 +207,7 @@ class KsuBootstrapTest {
 
         assertTrue(result is KsuBootstrap.Result.Completed)
         assertTrue((result as KsuBootstrap.Result.Completed).verification!!.complete)
-        assertEquals(listOf("- ${plan.commandLine}") + receipt.out, stdout)
+        assertEquals(listOf("- ${plan.commandLine}") + receipt.out + "- ksud install exitCode=${receipt.code}", stdout)
         assertEquals(receipt.err, stderr)
         assertEquals(listOf(plan.commandLine to KsuBootstrap.INSTALL_TIMEOUT_MS), commands)
     }

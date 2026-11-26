@@ -5,19 +5,20 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-import os
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from native_toolchain import ndk_bin, sdk_dir
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from native_toolchain import jdk_tool, ndk_bin, ndk_home
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--image", type=Path, action="append", default=[])
     parser.add_argument("--empty-image", type=Path, action="append", default=[])
-    parser.add_argument("--ndk", type=Path, default=((sdk_dir() or Path("ANDROID_SDK_ROOT")) / 'ndk/26.1.10909125'))
+    parser.add_argument("--ndk", type=Path, default=None)
     args = parser.parse_args()
+    args.ndk = ndk_home(args.ndk)
     root = Path(__file__).resolve().parents[2]
     build = args.build.resolve()
     build.mkdir(parents=True, exist_ok=True)
@@ -32,7 +33,7 @@ def main():
         encoding="utf-8")
     decode_sources = sorted((root / "image-core/src/main/java").rglob("*.java"))
     decode_sources.append(root / "scripts/fixtures/ImageCredentialDecode.java")
-    subprocess.run([shutil.which("javac"), "--release", "17", "-encoding", "UTF-8", "-d", str(classes),
+    subprocess.run([str(jdk_tool("javac")), "--release", "17", "-encoding", "UTF-8", "-d", str(classes),
                     *map(str, decode_sources)], check=True, timeout=60)
     images = []
     supplied = [(path, 1) for path in args.image] + [(path, 0) for path in args.empty_image]
@@ -42,7 +43,7 @@ def main():
         if image.suffix == ".raw":
             shutil.copyfile(image, destination)
         else:
-            subprocess.run([shutil.which("java"), "-Xmx512m", "-cp", str(classes), "ImageCredentialDecode",
+            subprocess.run([str(jdk_tool()), "-Xmx512m", "-cp", str(classes), "ImageCredentialDecode",
                             str(image), str(destination)], check=True, timeout=60)
         raw = destination.read_bytes()
         images.append({"image": str(image), "kernel": destination.name,
@@ -80,7 +81,7 @@ timeout 90s ./image-credentials-jni.test """ + kernel_args
     sources = ["runtime/ultra/bridge/image_credentials.h", "runtime/tests/pro_image_credentials_test.cpp",
                "runtime/tests/pro_image_credentials_jni_test.cpp", "runtime/ultra/bridge/native_lib_ultra.cpp",
                "runtime/ultra/bridge/sdk_call_scope.cpp", "runtime/ultra/bridge/sdk_call_scope.h",
-               "runtime/ultra/third_party/cJSON/cJSON.cpp", "scripts/test-ultra-image-credentials.py"]
+               "runtime/ultra/third_party/cJSON/cJSON.cpp", "scripts/tests/test-ultra-image-credentials.py"]
     (build / "image-credentials.json").write_text(json.dumps({
         "passed": result.returncode == 0, "exitCode": result.returncode,
         "sourceHashes": {source: hashlib.sha256((root / source).read_bytes()).hexdigest()

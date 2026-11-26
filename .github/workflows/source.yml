@@ -32,9 +32,17 @@ jobs:
         run: python -m unittest discover -s tools/tests -p "test_ksu_source.py" -v
       - run: python tools/check_host.py
       - run: python -m pip install -r requirements-native.txt
+      - name: Prepare pinned host JVM dependencies
+        shell: bash
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/host-jvm-dependencies
+        run: |
+          python tools/prepare_host_dependencies.py
+          printf 'GRADLE_USER_HOME=%s\n' "$GRADLE_USER_HOME" >> "$GITHUB_ENV"
       - name: Verify native module archive compatibility
         run: python scripts/tests/test-normal-module-archive.py --out "${{ runner.temp }}/module-archive-tests"
-      - run: python scripts/sync-ultra-sdk-identity.py --check
+      - name: Verify WIP SDK source checkpoint contract
+        run: python tools/check_sdk_source_contract.py
       - run: python -m unittest discover -s tools/tests -p "test_sdk_distribution.py" -v
       - run: python tools/check_architecture.py
       - run: python -m unittest discover -s tools/tests -p "test_check_architecture.py" -v

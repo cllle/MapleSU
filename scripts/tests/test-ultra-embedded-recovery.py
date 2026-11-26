@@ -5,7 +5,10 @@ import hashlib
 import json
 import os
 import subprocess
+
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/specgen"))
+from specgen.product import cached_jar
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,10 +30,10 @@ def main():
     for record in dependencies:
         assert identity(record['path']) == record, 'runtime dependency changed: ' + record['path']
     java = Path(runtime['java']['path'])
-    javac = java.with_name('javac.exe')
+    javac = java.with_name('javac' + ('.exe' if os.name == 'nt' else ''))
     host = Path(runtime['jar']['path'])
-    junit = list((Path(os.environ.get("GRADLE_USER_HOME", str(Path.home() / ".gradle"))) / "caches/modules-2/files-2.1").glob('junit/junit/4.13.2/*/*.jar'))
-    hamcrest = list((Path(os.environ.get("GRADLE_USER_HOME", str(Path.home() / ".gradle"))) / "caches/modules-2/files-2.1").glob('org.hamcrest/hamcrest-core/1.3/*/*.jar'))
+    junit = list(cached_jar('junit', 'junit', '4.13.2').parent.parent.glob("*/*.jar"))
+    hamcrest = list(cached_jar('org.hamcrest', 'hamcrest-core', '1.3').parent.parent.glob("*/*.jar"))
     assert len(junit) == len(hamcrest) == 1
     dependencies.extend([identity(junit[0]), identity(hamcrest[0])])
     compiler = next(Path(rec['path']) for rec in runtime['buildDependencies'] if 'kotlin-compiler-embeddable' in rec['path'])

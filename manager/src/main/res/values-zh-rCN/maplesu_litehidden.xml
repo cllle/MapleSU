@@ -53,6 +53,13 @@
     <string name="host_picker_confirm_host">宿主应用</string>
     <string name="host_picker_confirm_port">WebUI 端口</string>
     <string name="host_picker_running">正在开启</string>
+    <string name="host_picker_search_hint">搜索应用名称或包名</string>
+    <string name="host_picker_search_clear">清空搜索</string>
+    <string name="host_picker_search_empty">没有匹配的应用</string>
+    <string name="host_picker_selected">已选择：%1$s</string>
+    <string name="hidden_operation_elapsed">已用 %1$d 秒</string>
+    <string name="hidden_operation_estimated">预计约 %1$d 秒，以实际耗时为准</string>
+    <string name="hidden_operation_first_run">首次操作可能稍久</string>
 
     <!-- 解除寄生 -->
     <string name="lite_hidden_deactivate">解除寄生</string>
@@ -64,6 +71,7 @@
     <string name="lite_hidden_deactivate_step_so">恢复原生库</string>
     <string name="lite_hidden_deactivate_step_su">撤销授权</string>
     <string name="lite_hidden_deactivate_step_daemon">停止服务</string>
+    <string name="lite_hidden_deactivate_step_cleanup">清理恢复资料</string>
 
     <!-- 激活事务步骤 -->
     <string name="lite_hidden_step_precheck">预检宿主</string>

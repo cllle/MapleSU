@@ -54,6 +54,8 @@ import com.maplesu.core.ui.screen.host.HostStepList
 import com.maplesu.core.ui.screen.host.HiddenFlowText
 import com.maplesu.core.ui.screen.host.HiddenFlowButton
 import com.maplesu.core.ui.screen.host.HiddenFlowDialog
+import com.maplesu.core.ui.screen.host.HiddenFlowProgress
+import com.maplesu.core.ui.screen.host.HiddenOperationProgress
 import com.maplesu.core.ui.screen.host.hiddenFlowColors
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -116,6 +118,8 @@ data class LiteHiddenPageUi(
     val hostPicker: HostPickerUiState = HostPickerUiState(),
     /** 解除寄生状态。 */
     val deactivate: DeactivateUiState = DeactivateUiState(),
+    val recoveryProgress: HiddenOperationProgress? = null,
+    val webUiStopProgress: HiddenOperationProgress? = null,
 ) {
     val canActivate: Boolean
         get() = LiteHiddenRecoveryLinkPolicy.canActivate(hostPicker.canConfirm, webUiLinkAvailable, recoveryLinkSaved, preparingLink)
@@ -149,6 +153,7 @@ fun LiteHiddenScreen(onBack: () -> Unit) {
         ui = ui.hostPicker,
         actions = HostPickerActions(
             onSelect = viewModel::onSelectHost,
+            onSearchQueryChange = viewModel::onHostSearchQueryChange,
             onNext = viewModel::onHostNext,
             onBackToList = viewModel::onHostBackToList,
             onDismiss = viewModel::onDismissHostPicker,
@@ -315,7 +320,7 @@ private fun WebUiLinkRow(ui: LiteHiddenPageUi, onCopy: () -> Unit) {
 private fun RecoveryLinkActions(ui: LiteHiddenPageUi, viewModel: LiteHiddenViewModel) {
     val colors = hiddenFlowColors()
     if (ui.preparingLink) {
-        HiddenFlowText(stringResource(R.string.ui_polish_link_preparing), secondary = true)
+        HiddenFlowProgress(ui.recoveryProgress, R.string.ui_polish_link_preparing)
     } else if (!ui.webUiLinkAvailable) {
         HiddenFlowButton(stringResource(R.string.ui_polish_link_prepare), viewModel::prepareRecoveryLink, Modifier.fillMaxWidth(), enabled = !ui.stoppingWebUi)
     } else {
@@ -372,7 +377,7 @@ private fun HiddenDeactivateDialog(ui: LiteHiddenPageUi, viewModel: LiteHiddenVi
     ) {
         HiddenFlowText(stringResource(R.string.lite_hidden_deactivate_body), secondary = true)
         if (state.hostPackage.isNotBlank()) HiddenFlowText(state.hostPackage, secondary = true)
-        if (state.running) HiddenFlowText(stringResource(R.string.lite_hidden_deactivate_running), secondary = true)
+        if (state.running) HiddenFlowProgress(state.progress, R.string.lite_hidden_deactivate_running)
         if (state.showSteps) HostStepList(state.steps)
         state.failureRes?.let { HiddenFlowText(stringResource(it), color = colors.error, secondary = true) }
         state.doneRes?.let { HiddenFlowText(stringResource(it), color = colors.primary, secondary = true) }
@@ -422,5 +427,6 @@ internal fun WebUiStopDialog(ui: LiteHiddenPageUi, onDismiss: () -> Unit, onConf
         dismissEnabled = !ui.stoppingWebUi,
     ) {
         HiddenFlowText(stringResource(R.string.webui_control_confirm_body), secondary = true)
+        if (ui.stoppingWebUi) HiddenFlowProgress(ui.webUiStopProgress, R.string.webui_control_stopping)
     }
 }

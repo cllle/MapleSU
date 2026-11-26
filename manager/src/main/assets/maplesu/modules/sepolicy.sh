@@ -3,8 +3,8 @@
 set -u
 loader=/data/adb/maplesu/bin/maplesu-policy
 case "${1:-}" in
-  check) mode=check; shift ;;
-  apply|patch|--live) mode=apply; shift ;;
+  check) mode=module-check; shift ;;
+  apply|patch|--live) mode=module-apply; shift ;;
   -h|--help)
     printf 'usage: sepolicy check|apply|patch <rules-file|statement>...\n'
     exit 0 ;;
@@ -35,8 +35,8 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-if [ "$mode" = apply ]; then
-  "$loader" apply --require-boot-policy --rules "$rules"
+if [ "$mode" = module-apply ]; then
+  "$loader" module-apply --require-boot-policy --rules "$rules"
 else
   "$loader" "$mode" --rules "$rules"
 fi

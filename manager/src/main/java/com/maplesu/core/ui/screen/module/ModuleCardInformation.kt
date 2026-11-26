@@ -4,12 +4,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -40,7 +43,14 @@ internal fun ModuleCardInformation(module: Module, isPending: Boolean) {
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (isPending) {
-            ModuleCardInformationText(stringResource(R.string.module_card_processing), accent = true)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (LocalUiMode.current) {
+                    UiMode.Miuix -> top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator(size = 18.dp)
+                    UiMode.Material -> androidx.compose.material3.CircularProgressIndicator(
+                        Modifier.size(18.dp), strokeWidth = 2.dp)
+                }
+                ModuleCardInformationText(stringResource(R.string.module_card_processing), accent = true)
+            }
         }
         if (status.needsAttention && statusRes != null) {
             val message = if (status == ModuleCardStatus.FAILED && module.runtimeExitCode != null) {

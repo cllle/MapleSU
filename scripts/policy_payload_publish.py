@@ -29,7 +29,9 @@ def publish_existing(builder, out, assets, inputs):
         require(identity(binary)["bytes"] == row["bytes"] and sha(binary) == row["sha256"] and
                 row["sourceInputsIdentity"] == source_identity, "Existing support bytes/source differ: " + name)
     results, evidence = [], []
-    for kernel in builder["KERNELS"]:
+    kernels = sorted(builder["RAW_FAMILIES"]) if builder.get("MODULE_ROUTE_BINDING") else builder["KERNELS"]
+    require({row["kernel"] for row in report["results"]} == set(kernels), "Existing raw family set differs")
+    for kernel in kernels:
         target = out / kernel
         result_path = target / "build-result.json"
         row = read(result_path)
@@ -75,6 +77,10 @@ def publish_existing(builder, out, assets, inputs):
                              reference=identity(target / "reference-abi.json"), runtime=identity(target / "claim.so")))
     require(all(sha(builder["ROOT"] / path) == digest for path, digest in inputs.items()),
             "Selected input changed during existing-generation verification")
+    if builder.get("MODULE_ROUTE_BINDING") is not None:
+        require(builder["inspect_selected_catalog"](*builder["MODULE_ROUTE_INPUTS"],
+                builder["RUNTIME_LAYOUT_SELECTION"]) == builder["MODULE_ROUTE_BINDING"],
+                "Existing generation module route inputs changed")
     assets.mkdir(parents=True, exist_ok=False)
     for name in support:
         shutil.copyfile(out / "support" / (name + ".bin"), assets / (name + ".bin"))
@@ -84,11 +90,15 @@ def publish_existing(builder, out, assets, inputs):
         shutil.copyfile(out / row["kernel"] / "claim.so", family / "claim.so")
         if "retirementSupport" in row:
             shutil.copyfile(out / row["kernel"] / "support/bootstrap.bin", family / "bootstrap.bin")
-    builder["write_runtime_manifest"](assets, out, inputs, support, results)
+    builder["write_runtime_manifest"](assets, out, inputs, support, results, builder.get("MODULE_ROUTE_BINDING"))
     require(all(sha(builder["ROOT"] / path) == digest for path, digest in inputs.items()),
             "Selected input changed during existing-generation packaging")
-    receipt = dict(schema="maplesu-existing-claim-publication/1", status="PACKAGED_NOT_DEVICE_ACCEPTED",
+    receipt = dict(schema="maplesu-existing-claim-publication/1", status="PACKAGED_UNQUALIFIED_NOT_DEVICE_ACCEPTED",
         inputs=inputs, support=support, families=evidence, manifest=identity(assets / "manifest.json"),
-        buildExecuted=False, deviceExecuted=False, deviceQualified=False)
+        buildExecuted=False, deviceExecuted=False, deviceQualified=False, formalRelease=False)
+    if builder.get("MODULE_ROUTE_BINDING") is not None:
+        receipt["moduleRoutes"] = builder["MODULE_ROUTE_BINDING"]
+        receipt["moduleRouteCatalog"], receipt["moduleRoutePlan"] = [identity(Path(path))
+            for path in builder["MODULE_ROUTE_INPUTS"]]
     (out / "publish-existing.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
     return 0

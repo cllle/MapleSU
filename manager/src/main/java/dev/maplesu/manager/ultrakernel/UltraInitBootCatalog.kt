@@ -11,12 +11,92 @@ import java.io.InputStream
 import java.io.InterruptedIOException
 import java.nio.file.Files
 
-/** Catalog identity only orders real templates; TargetResolver still proves every target ABI. */
+/** Target templates and reusable runtime components retain separate selection contracts. */
 internal object UltraInitBootCatalog {
     private const val ROOT = "ultra-init-bridge"
     private val hash = Regex("[0-9a-f]{64}")
     private data class Entry(val manifest: String, val prefix: String, val target: String,
         val kernel: String, val proof: String, val proofHash: String)
+    private data class ComponentEntry(val kmi: String, val architecture: String, val page: Int,
+        val cfi: String, val manifest: String, val prefix: String, val generation: String)
+
+    @Suppress("UNUSED_PARAMETER")
+    fun availableKmis(filesDir: File, open: (String) -> InputStream): List<String> =
+        componentEntries(open).map { it.kmi }.distinct().sorted()
+
+    fun resolveKmi(filesDir: File, open: (String) -> InputStream, kmi: String): UltraInitBootProducer.Artifact? {
+        check(kmi.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+"))) { "ULTRA_INIT_KMI_INVALID:$kmi" }
+        val matches = componentEntries(open).filter { it.kmi == kmi }
+        check(matches.size <= 1) { "ULTRA_INIT_KMI_COMPONENT_AMBIGUOUS:$kmi" }
+        return matches.singleOrNull()?.let { loadComponent(filesDir, open, it) }
+    }
+
+    private fun componentEntries(open: (String) -> InputStream): List<ComponentEntry> {
+        var legacyFallback = false
+        val encoded = try { open("$ROOT/catalog-kmi.json").use { bounded(it, 262144) } }
+            catch (_: FileNotFoundException) {
+                legacyFallback = true
+                try { open("$ROOT/catalog.json").use { bounded(it, 262144) } }
+                catch (_: FileNotFoundException) { return emptyList() }
+            }
+        val catalog = json(encoded)
+        if (legacyFallback && string(catalog, "schema") == "maplesu-init-bridge-catalog/1") return emptyList()
+        check(catalog.keys == setOf("schema", "sourceGenerationSha256", "components") &&
+            string(catalog, "schema") == "maplesu-init-bridge-catalog/2") { "ULTRA_INIT_KMI_CATALOG_SCHEMA" }
+        val generation = digest(catalog, "sourceGenerationSha256")
+        val rows = catalog["components"] as? JsonArray ?: error("ULTRA_INIT_KMI_CATALOG_COMPONENTS")
+        check(rows.size <= 64) { "ULTRA_INIT_KMI_CATALOG_COMPONENTS" }
+        val identities = mutableSetOf<String>()
+        val manifests = mutableSetOf<String>()
+        return rows.map { value ->
+            val row = value as? JsonObject ?: error("ULTRA_INIT_KMI_CATALOG_ENTRY")
+            check(row.keys == setOf("kmi", "architecture", "pageSize", "cfiMode", "manifestSha256", "prefix")) {
+                "ULTRA_INIT_KMI_CATALOG_FIELDS"
+            }
+            val kmi = string(row, "kmi")
+            val architecture = string(row, "architecture")
+            val cfi = string(row, "cfiMode")
+            val page = (row["pageSize"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+                ?: error("ULTRA_INIT_KMI_CATALOG_PAGE")
+            check(kmi.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+")) && architecture == "arm64" &&
+                page in setOf(4096, 16384, 65536) && cfi in setOf("none", "kcfi", "legacy-lto-cfi")) {
+                "ULTRA_INIT_KMI_CATALOG_IDENTITY"
+            }
+            val manifest = digest(row, "manifestSha256")
+            val prefix = string(row, "prefix")
+            check(prefix == "components/$manifest/") { "ULTRA_INIT_KMI_CATALOG_PREFIX" }
+            check(identities.add("$kmi:$architecture:$page:$cfi") && manifests.add(manifest)) {
+                "ULTRA_INIT_KMI_CATALOG_DUPLICATE"
+            }
+            ComponentEntry(kmi, architecture, page, cfi, manifest, prefix, generation)
+        }
+    }
+
+    private fun loadComponent(filesDir: File, open: (String) -> InputStream,
+        entry: ComponentEntry): UltraInitBootProducer.Artifact {
+        val directory = File(filesDir, "ultra-init-component-${entry.manifest}")
+        check(!Files.isSymbolicLink(directory.toPath())) { "ULTRA_INIT_CATALOG_PRIVATE_SYMLINK" }
+        Files.createDirectories(directory.toPath())
+        val mapped: (String) -> InputStream = { path ->
+            check(path.startsWith("$ROOT/")) { "ULTRA_INIT_CATALOG_ASSET_PATH" }
+            val relative = path.removePrefix("$ROOT/")
+            val source = try { open("$ROOT/${entry.prefix}$relative") }
+                catch (error: FileNotFoundException) {
+                    throw IOException("ULTRA_INIT_KMI_COMPONENT_ASSET_MISSING:${entry.prefix}$relative", error)
+                }
+            if (relative == "manifest.json") {
+                val bytes = source.use { bounded(it, 16384) }
+                check(UltraKernelSpec.sha256(bytes) == entry.manifest) { "ULTRA_INIT_CATALOG_MANIFEST_HASH" }
+                ByteArrayInputStream(bytes)
+            } else source
+        }
+        val artifact = requireNotNull(UltraInitBootAssets.load(directory, mapped)) { "ULTRA_INIT_KMI_COMPONENT_MISSING" }
+        val component = artifact.component
+        check(artifact.isKmiComponent && component != null && component.kmi == entry.kmi &&
+            component.architecture == entry.architecture && component.pageSize == entry.page && component.cfiMode == entry.cfi &&
+            component.sourceGenerationSha256 == entry.generation) { "ULTRA_INIT_KMI_COMPONENT_IDENTITY" }
+        return artifact
+    }
 
     fun resolve(filesDir: File, open: (String) -> InputStream, pairedBoot: File,
         claimAssets: UltraKernelAssetSource? = null,

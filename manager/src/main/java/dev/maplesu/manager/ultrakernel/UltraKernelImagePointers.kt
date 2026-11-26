@@ -49,11 +49,15 @@ internal class UltraKernelImagePointers(private val kernel: ByteArray, private v
             }
         }
     }
-    fun pointer(at: Int): Int? {
+    private fun value(at: Int): Long {
         val raw = u64(at)
         val relocated = relocations[at]
         if (raw != 0L && relocated != null && raw != relocated) fail("RAW_RELA_CONFLICT")
-        val value = relocated ?: raw
+        return relocated ?: raw
+    }
+    fun isNull(at: Int): Boolean = value(at) == 0L
+    fun pointer(at: Int): Int? {
+        val value = value(at)
         if (value == 0L) return null
         val offset = value - base
         return offset.takeIf { it >= 0 && it < kernel.size }?.toInt()

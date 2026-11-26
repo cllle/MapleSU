@@ -28,7 +28,10 @@ class RootServiceBootstrapTest {
         val candidate = RootServiceBootstrap.Candidate("empty") {
             calls++; RootServiceBootstrap.Result(0, "")
         }
-        assertFalse(RootServiceBootstrap.launch("start-service", listOf(candidate)).ok)
+        val failure = assertThrows(RootServiceBootstrap.Failure::class.java) {
+            RootServiceBootstrap.launch("start-service", listOf(candidate))
+        }
+        assertEquals(0, failure.result.code)
         assertEquals(1, calls)
     }
 
@@ -49,7 +52,11 @@ class RootServiceBootstrapTest {
             if (calls == 1) ready else RootServiceBootstrap.Result(19, "", "lost reply")
         }
         val other = RootServiceBootstrap.Candidate("other") { error("must not replay a submitted launch") }
-        assertEquals(19, RootServiceBootstrap.launch("start-service", listOf(first, other)).code)
+        val failure = assertThrows(RootServiceBootstrap.Failure::class.java) {
+            RootServiceBootstrap.launch("start-service", listOf(first, other))
+        }
+        assertEquals(19, failure.result.code)
+        assertEquals("launch", failure.phase)
         assertEquals(2, calls)
     }
 
@@ -58,9 +65,10 @@ class RootServiceBootstrapTest {
         val sources = (1..12).map { index -> RootServiceBootstrap.Candidate("source-$index") {
             tried += index; RootServiceBootstrap.Result(-1, "")
         } }
-        val result = RootServiceBootstrap.launch("start-service", sources)
-        assertFalse(result.ok)
-        assertEquals("INSTALLER_ROOT_SOURCES_EXHAUSTED", result.detail)
+        val failure = assertThrows(RootServiceBootstrap.Failure::class.java) {
+            RootServiceBootstrap.launch("start-service", sources)
+        }
+        assertEquals("INSTALLER_ROOT_SOURCES_EXHAUSTED", failure.message)
         assertEquals((1..12).toList(), tried)
     }
 
@@ -69,8 +77,13 @@ class RootServiceBootstrapTest {
             RootServiceBootstrap.Candidate("root") { RootServiceBootstrap.Result(14, "") },
             RootServiceBootstrap.Candidate("missing") { RootServiceBootstrap.Result(13, "") },
         )
-        assertEquals("INSTALLER_SERVICE_FRAMEWORK_UNAVAILABLE",
-            RootServiceBootstrap.launch("start-service", sources).detail)
+        val failure = assertThrows(RootServiceBootstrap.Failure::class.java) {
+            RootServiceBootstrap.launch("start-service", sources)
+        }
+        assertEquals("INSTALLER_SERVICE_FRAMEWORK_UNAVAILABLE", failure.message)
+        assertEquals(14, failure.result.code)
+        assertEquals("root", failure.source)
+        assertEquals("probe", failure.phase)
     }
 
     @Test fun cancellationStopsBeforeDispatchWithoutBecomingAnotherProbe() {
@@ -79,8 +92,44 @@ class RootServiceBootstrapTest {
                 Thread.currentThread().interrupt(); ready
             }
             val other = RootServiceBootstrap.Candidate("other") { error("cancelled") }
-            assertEquals("ROOT_EXECUTION_INTERRUPTED",
-                RootServiceBootstrap.launch("start-service", listOf(candidate, other)).detail)
+            assertEquals("ROOT_EXECUTION_INTERRUPTED", assertThrows(InterruptedException::class.java) {
+                RootServiceBootstrap.launch("start-service", listOf(candidate, other))
+            }.message)
+            assertTrue(Thread.currentThread().isInterrupted)
         } finally { Thread.interrupted() }
+    }
+
+    @Test fun cancellationExceptionIsNeverConvertedIntoAnotherSourceAttempt() {
+        val cancelled = java.util.concurrent.CancellationException("cancelled")
+        val source = RootServiceBootstrap.Candidate("cancelled") { throw cancelled }
+        assertSame(cancelled, assertThrows(java.util.concurrent.CancellationException::class.java) {
+            RootServiceBootstrap.launch("start-service", listOf(source,
+                RootServiceBootstrap.Candidate("other") { error("must not continue") }))
+        })
+    }
+
+    @Test fun wrappedCancellationIsUnwrappedBeforeTryingAnotherSource() {
+        val cancelled = java.util.concurrent.CancellationException("cancelled")
+        assertSame(cancelled, assertThrows(java.util.concurrent.CancellationException::class.java) {
+            RootServiceBootstrap.launch("start-service", listOf(
+                RootServiceBootstrap.Candidate("wrapped") { throw java.util.concurrent.ExecutionException(cancelled) },
+                RootServiceBootstrap.Candidate("other") { error("must not continue") }))
+        })
+    }
+
+    @Test fun launchFailureRetainsTheOriginalStreamsDetailAndCause() {
+        val cause = java.io.IOException("launch failed")
+        val original = RootServiceBootstrap.Result(37, "stdout", "original detail", "stderr", cause)
+        var calls = 0
+        val failure = assertThrows(RootServiceBootstrap.Failure::class.java) {
+            RootServiceBootstrap.launch("start-service", listOf(RootServiceBootstrap.Candidate("root") {
+                if (++calls == 1) ready else original
+            }))
+        }
+        assertSame(original, failure.result)
+        assertSame(cause, failure.cause)
+        assertEquals("INSTALLER_SERVICE_LAUNCH_FAILED", failure.message)
+        assertEquals("launch", failure.phase)
+        assertEquals("root", failure.source)
     }
 }

@@ -7,6 +7,10 @@ import android.content.Context
 import android.os.Looper
 import android.os.SystemClock
 import java.security.MessageDigest
+import java.util.concurrent.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.json.JSONObject
 import android.util.Log
 import dev.maplesu.manager.runtime.ultra.bridge.NativeBridge
@@ -61,6 +65,7 @@ data class IdentityVerification(
 data class IdentityObservation(
     val identity: InstalledIdentity,
     val verification: IdentityVerification,
+    val readbackFailure: String? = null,
 )
 
 object UltraInstalledIdentityProbe {
@@ -69,6 +74,7 @@ object UltraInstalledIdentityProbe {
 
     const val PREFS = "ultra-env-identity"
     const val CACHE_TTL_MS = 60_000L
+    internal const val MAINTENANCE_READBACK_TIMEOUT_MS = 5_000
 
     private const val KEY_SHA = "helperSha256"
     private const val KEY_PATH = "helperPath"
@@ -87,6 +93,9 @@ object UltraInstalledIdentityProbe {
 
     private val cache = UltraIdentityReadCache(SystemClock::elapsedRealtime, CACHE_TTL_MS)
 
+    private val completedReadbacks = MutableStateFlow(0L)
+    val readbackRevision = completedReadbacks.asStateFlow()
+
     @Volatile
     private var bridgeIdentity: NativeReceipt? = null
 
@@ -100,21 +109,41 @@ object UltraInstalledIdentityProbe {
      *
      * @param client 使用当前环境的 SDK Root 通道回读，不依赖独立的 su 授权。
      */
-    fun read(context: Context, client: UltraRuntimeClient, force: Boolean = false): InstalledIdentity {
+    fun read(context: Context, client: UltraRuntimeClient, force: Boolean = false): InstalledIdentity =
+        readWithBudget(context, client, force, 300) {}
+
+    private fun readWithBudget(context: Context, client: UltraRuntimeClient, force: Boolean,
+                               timeoutMillis: Int, failure: (NativeReceipt?) -> Unit): InstalledIdentity {
+        if (Thread.currentThread().isInterrupted) throw CancellationException("IDENTITY_READBACK_INTERRUPTED")
         check(Looper.myLooper() != Looper.getMainLooper()) { "ULTRA_IDENTITY_BACKGROUND_THREAD_REQUIRED" }
         val key = keyFingerprint(context)
         val bootId = UltraEnvironmentAutoSetup.currentBootId()
-        return cache.read(key, bootId, force) {
-            val identity = readFromDevice(context, client)
+        var completedReadback = false
+        val observed = cache.read(key, bootId, force) {
+            val identity = readFromDevice(context, client, timeoutMillis, failure)
                 ?: readPersisted(context)
                 ?: InstalledIdentity.unknown(bootId)
-            if (key != keyFingerprint(context) || bootId != UltraEnvironmentAutoSetup.currentBootId()) {
+            if (Thread.currentThread().isInterrupted || key != keyFingerprint(context) || bootId != UltraEnvironmentAutoSetup.currentBootId()) {
                 InstalledIdentity.unknown()
             } else {
                 Log.i(TAG, "identity source=${identity.source} known=${identity.known} buildId=${identity.buildId.orEmpty()}")
+                completedReadback = identity.source == Source.Readback
                 identity
             }
         }
+        // A completed live read replaces an earlier display observation. Cached
+        // reads and persisted fallbacks do not create another refresh event.
+        if (completedReadback) completedReadbacks.update { it + 1 }
+        return observed
+    }
+
+    /** A local completion event never starts another helper/SDK read. */
+    fun completedReadback(context: Context): InstalledIdentity? {
+        val fingerprint = keyFingerprint(context)
+        val bootId = UltraEnvironmentAutoSetup.currentBootId()
+        val identity = cache.peek(fingerprint, bootId)
+        return identity?.takeIf { fingerprint == keyFingerprint(context) &&
+            bootId == UltraEnvironmentAutoSetup.currentBootId() }
     }
 
     private fun keyFingerprint(context: Context): String? {
@@ -128,9 +157,9 @@ object UltraInstalledIdentityProbe {
     /** Identity partitions cached file evidence; none of these fields grant Root. */
     internal fun identityFingerprint(key: String?, owner: UltraRuntimeClient.ManagerOwnerIdentity?,
                                      bootId: String?, activation: Int): String? {
-        val material = key ?: owner?.takeIf { !bootId.isNullOrBlank() }
-            ?.let { "owner:${it.fullUid}:${it.epoch}:${it.hostInstance}:$bootId:$activation" } ?: return null
-        return MessageDigest.getInstance("SHA-256").digest(material.toByteArray(Charsets.US_ASCII))
+        if (bootId.isNullOrBlank() || key == null && owner == null) return null
+        val material = "key:$key:owner:${owner?.fullUid}:${owner?.epoch}:${owner?.hostInstance}:$bootId:$activation"
+        return MessageDigest.getInstance("SHA-256").digest(material.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
 
@@ -145,18 +174,36 @@ object UltraInstalledIdentityProbe {
         client: UltraRuntimeClient,
         attempts: Int = 1,
         delayMillis: Long = 0L,
+        readbackTimeoutMillis: Int = 300,
     ): IdentityObservation {
         var last = IdentityObservation(
             InstalledIdentity.unknown(),
             IdentityVerification(false, "IDENTITY_UNREADABLE", null),
         )
         repeat(attempts.coerceAtLeast(1)) { index ->
-            val identity = read(context, client, force = true)
+            var failedReadback: NativeReceipt? = null
+            var readbackFailed = false
+            val identity = readWithBudget(context, client, true, readbackTimeoutMillis) {
+                readbackFailed = true
+                failedReadback = it
+            }
             val verification = verifyAgainstBundled(identity)
-            last = IdentityObservation(identity, verification)
+            val failure = if (!readbackFailed) null else {
+                val code = if (failedReadback?.succeeded == true) "IDENTITY_READBACK_RECEIPT_INVALID"
+                    else failedReadback?.sdkError?.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,96}")) } ?: "NO_RECEIPT"
+                val stage = failedReadback?.data?.optString("failureStage")
+                    ?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) } ?: "readback"
+                "$code:$stage:${failedReadback?.data?.optInt("systemError") ?: 0}"
+            }
+            last = IdentityObservation(identity, verification, failure)
             if (verification.verified) return last
+            if (Thread.currentThread().isInterrupted || failedReadback?.data?.optBoolean("cleanupPending") == true ||
+                failedReadback?.data?.optBoolean("timedOut") == true) return last
             if (index + 1 < attempts && delayMillis > 0) {
-                runCatching { Thread.sleep(delayMillis) }
+                try { Thread.sleep(delayMillis) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return last
+                }
             }
         }
         return last
@@ -167,11 +214,12 @@ object UltraInstalledIdentityProbe {
         cache.invalidate()
     }
 
-    private fun readFromDevice(context: Context, client: UltraRuntimeClient): InstalledIdentity? {
+    private fun readFromDevice(context: Context, client: UltraRuntimeClient, timeoutMillis: Int,
+                               failure: (NativeReceipt?) -> Unit): InstalledIdentity? {
         val helperPath = installedHelperPath(UltraSdkCredentials.read(context))
         val offset = keySlotOffset()
         // Read the installed length, including helpers from an older build.
-        val line = locateInstalledHelper(client, helperPath, offset)
+        val line = locateInstalledHelper(client, helperPath, offset, timeoutMillis, failure)
             ?: return null
         if (helperPath != null && line.path != helperPath || line.size <= 0) return null
         return InstalledIdentity(
@@ -184,12 +232,16 @@ object UltraInstalledIdentityProbe {
         )
     }
 
-    private fun locateInstalledHelper(client: UltraRuntimeClient, path: String?, offset: Long?): Readback? {
-        val result = runCatching { client.readInstalledHelper(path, offset) }
-            .onFailure { Log.w(TAG, "identity readback threw ${it.javaClass.simpleName}") }
-            .getOrNull()
+    private fun locateInstalledHelper(client: UltraRuntimeClient, path: String?, offset: Long?, timeoutMillis: Int,
+                                      failure: (NativeReceipt?) -> Unit): Readback? {
+        val result = try { client.readInstalledHelper(path, offset, timeoutMillis) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw CancellationException("IDENTITY_READBACK_INTERRUPTED") }
+        catch (error: Exception) { Log.w(TAG, "identity readback threw ${error.javaClass.simpleName}"); null }
         if (result == null || !result.succeeded) {
-            val diagnostics = listOf("failureStage", "elapsedUs", "systemError", "uidError", "modeError",
+            failure(result)
+            val diagnostics = listOf("failureStage", "rootPhase", "timeoutMillis", "elapsedUs", "completionUs",
+                "admissionUs", "forkUs", "authenticationUs", "sourceUs", "receiveUs", "waitUs", "systemError", "uidError", "modeError",
                 "channelError", "sdkError", "credentialsError", "rootSystemError", "producerError", "sinkError",
                 "transportError", "waitError", "admissionError", "readAttempted", "headerReceived", "producerEndReceived",
                 "sourceEof", "metadataStable", "pathStable", "rootCheckpointReceived", "receiptComplete", "streamEof",
@@ -199,7 +251,7 @@ object UltraInstalledIdentityProbe {
                 "terminationError", "childStatusValid", "childStatus").mapNotNull { field ->
                 val value = result?.data?.opt(field)
                 when {
-                    field == "failureStage" && value is String && value.matches(Regex("[A-Za-z0-9_-]{1,64}")) -> "$field=$value"
+                    field in setOf("failureStage", "rootPhase") && value is String && value.matches(Regex("[A-Za-z0-9_-]{1,64}")) -> "$field=$value"
                     value is Boolean || value is Number || value is String && value.toLongOrNull() != null -> "$field=$value"
                     else -> null
                 }
@@ -207,8 +259,13 @@ object UltraInstalledIdentityProbe {
             Log.i(TAG, UltraSdkLogging.redact("identity readback unavailable sdkError=${result?.sdkError} $diagnostics"))
             return null
         }
-        return if (path == null) parseOwnerReadback(result, offset, android.os.Process.myUid())
+        val readback = if (path == null) parseOwnerReadback(result, offset, android.os.Process.myUid())
             else parseReadback(result, path, offset)
+        if (readback == null) failure(result)
+        else Log.i(TAG, "identity readback complete timeoutMillis=$timeoutMillis " +
+            listOf("admissionUs", "forkUs", "authenticationUs", "sourceUs", "receiveUs", "waitUs", "elapsedUs")
+                .joinToString(" ") { "$it=${result.data?.optLong(it) ?: 0L}" })
+        return readback
     }
 
     // --- 持久化 ---------------------------------------------------------------------

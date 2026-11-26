@@ -48,6 +48,7 @@ import com.maplesu.core.ui.screen.module.ModuleUiState
 import com.maplesu.core.ui.screen.module.PendingModuleOperations
 import com.maplesu.core.ui.screen.module.moduleListInputs
 import com.maplesu.core.ui.screen.module.withModuleLoadResult
+import com.maplesu.core.ui.screen.module.withModuleReadContextReset
 import com.maplesu.core.ui.screen.module.withUltraSafety
 import com.maplesu.core.ui.screen.module.withModulePending
 import com.maplesu.core.ui.screen.module.withModuleRemovalRequest
@@ -116,6 +117,13 @@ class ModuleViewModel(
     private var searchJob: Job? = null
 
     private var fetchJob: Job? = null
+    private var fetchOperationGeneration = 0L
+    private var fetchActivation: ModeActivation? = null
+    private var fetchCheckUpdate = false
+    private var fetchResort = false
+    private var fetchListPending = false
+    private var moduleListActivation: ModeActivation? = null
+    private var moduleListReadScope: Any? = null
     private val refreshRequests = ModuleRequestGeneration()
     private var listJob: Job? = null
     private val listRequests = ModuleRequestGeneration()
@@ -183,6 +191,18 @@ class ModuleViewModel(
 
     fun markNeedRefresh() {
         isNeedRefresh = true
+        moduleOperationGeneration++
+        ModuleRepositoryImpl.invalidateModuleList()
+    }
+
+    fun refreshAfterReturn() {
+        val state = _uiState.value
+        fetchModuleList(
+            checkUpdate = !state.hasLoaded || isNeedRefresh,
+            resort = !state.hasLoaded,
+            showRefreshing = !state.hasLoaded,
+            coalesce = true,
+        )
     }
 
     fun initializePreferences() {
@@ -294,8 +314,8 @@ class ModuleViewModel(
 
             _uiState.update { state ->
                 if (!listRequests.isCurrent(request) || !inputs.matches(state.moduleListInputs())) state else state.copy(
-                    moduleList = sorted,
-                    searchResults = searchResults,
+                    moduleList = if (sorted == state.moduleList) state.moduleList else sorted,
+                    searchResults = if (searchResults == state.searchResults) state.searchResults else searchResults,
                     searchStatus = state.searchStatus.copy(
                         resultStatus = searchResultStatusFor(searchText, searchResults.isEmpty())
                     )
@@ -336,7 +356,20 @@ class ModuleViewModel(
             val backendStarted = SystemClock.elapsedRealtime()
             var count = -1
             val modules = try {
-                repo.getModules().also { count = it.getOrNull()?.size ?: -1 }
+                repo.getModules { readScope ->
+                    withContext(Dispatchers.Main) {
+                        if (refreshRequests.isCurrent(request) && operationGeneration == moduleOperationGeneration &&
+                            activation === ModeRuntime.activation &&
+                            moduleListReadScope != readScope) {
+                            moduleListReadScope = readScope
+                            _uiState.update { it.withModuleReadContextReset() }
+                            updateInfoMutex.withLock {
+                                updateInfoCache.clear()
+                                updateInfoInFlight.clear()
+                            }
+                        }
+                    }
+                }.also { count = it.getOrNull()?.size ?: -1 }
             } finally {
                 Log.i(TAG, "MAPLESU_MODULE_LATENCY phase=backend count=$count elapsed=${SystemClock.elapsedRealtime() - backendStarted}")
             }
@@ -346,21 +379,46 @@ class ModuleViewModel(
         return withContext(Dispatchers.Main) {
             if (!refreshRequests.isCurrent(request)) return@withContext false
             if (operationGeneration != moduleOperationGeneration || activation !== ModeRuntime.activation) return@withContext false
+            val previous = _uiState.value
             _uiState.update { it.withModuleLoadResult(result).withEnvironmentDisplayState(environmentRequest, environment) }
             // T10：终态（成功或具名失败）发布之后不再等待、也不再自动重取（幂等）。
             startupGate.onTerminal()
             if (result.isSuccess) {
-                updateModuleList(resort).join()
-                if (refreshRequests.isCurrent(request)) {
+                val shouldResort = resort || fetchResort
+                if (shouldResort || !previous.hasLoaded || previous.modules !== _uiState.value.modules) {
+                    updateModuleList(shouldResort).join()
+                }
+                if (!shouldResort && fetchResort && refreshRequests.isCurrent(request)) {
+                    updateModuleList().join()
+                }
+                if (refreshRequests.isCurrent(request) && operationGeneration == moduleOperationGeneration &&
+                    activation === ModeRuntime.activation) {
                     isNeedRefresh = false
                     Log.i(TAG, "MAPLESU_MODULE_LATENCY phase=list-published count=${_uiState.value.moduleList.size} elapsed=${SystemClock.elapsedRealtime() - started}")
                 }
             }
-            result.isSuccess && refreshRequests.isCurrent(request)
+            result.isSuccess && refreshRequests.isCurrent(request) &&
+                operationGeneration == moduleOperationGeneration && activation === ModeRuntime.activation
         }
     }
 
-    fun fetchModuleList(checkUpdate: Boolean = false, resort: Boolean = true, showRefreshing: Boolean = true) {
+    fun fetchModuleList(checkUpdate: Boolean = false, resort: Boolean = true, showRefreshing: Boolean = true, coalesce: Boolean = false) {
+        val activation = ModeRuntime.activation
+        if (coalesce && fetchJob?.isActive == true && fetchActivation === activation &&
+            fetchOperationGeneration == moduleOperationGeneration) {
+            fetchCheckUpdate = fetchCheckUpdate || checkUpdate
+            if (resort && !fetchResort) {
+                fetchResort = true
+                if (!fetchListPending) updateModuleList()
+            }
+            if (showRefreshing && fetchListPending) _uiState.update { it.copy(isRefreshing = true) }
+            return
+        }
+        if (moduleListActivation !== activation) {
+            moduleListActivation = activation
+            moduleListReadScope = null
+            _uiState.update { it.withModuleReadContextReset() }
+        }
         // T10（D4）：运行环境未接线时**不取**列表。旧实现先取一次，撞上
         // Unresolved/Unavailable 就把 loadError + hasLoaded 一起置位 ⇒ 永久空态。
         when (val decision = startupGate.onLoadRequested()) {
@@ -374,15 +432,23 @@ class ModuleViewModel(
         // Invalidate before cancellation: the old finally may run immediately.
         val request = refreshRequests.next()
         fetchJob?.cancel()
-        _uiState.update { it.copy(isRefreshing = showRefreshing) }
+        fetchOperationGeneration = moduleOperationGeneration
+        fetchActivation = activation
+        fetchCheckUpdate = checkUpdate
+        fetchResort = resort
+        fetchListPending = true
+        _uiState.update { it.copy(isRefreshing = showRefreshing || !it.hasLoaded) }
         fetchJob = viewModelScope.launch {
             try {
                 val start = SystemClock.elapsedRealtime()
 
                 val loaded = loadModuleList(resort, request)
                 // Installed rows are ready; update metadata is a separate, optional query.
-                if (refreshRequests.isCurrent(request)) _uiState.update { it.copy(isRefreshing = false) }
-                if (loaded && checkUpdate) {
+                if (refreshRequests.isCurrent(request)) {
+                    fetchListPending = false
+                    _uiState.update { it.copy(isRefreshing = false) }
+                }
+                if (loaded && fetchCheckUpdate) {
                     val updateStarted = SystemClock.elapsedRealtime()
                     try { syncModuleUpdateInfo(_uiState.value.modules) }
                     catch (error: CancellationException) { throw error }
@@ -404,6 +470,7 @@ class ModuleViewModel(
             } finally {
                 // An obsolete/cancelled request never ends the newer request's feedback.
                 if (refreshRequests.isCurrent(request)) {
+                    fetchListPending = false
                     _uiState.update { it.copy(isRefreshing = false) }
                 }
             }
@@ -697,6 +764,7 @@ class ModuleViewModel(
                     }
                 }
                 if (remove != null) _uiState.update { it.withModuleRemovalResult(module.id, remove, success) }
+                if (remove != null && module.id.startsWith("maplesu:")) moduleOperationReadbackNeeded = true
                 if (!success) {
                     // Native mutations can commit before their receipt is lost. Reconcile
                     // after the queue drains, without list loading or holding any card.

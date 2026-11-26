@@ -31,7 +31,11 @@ public:
         }
         for (size_t i : {0, 1, 2, 3, 4, 6, 7}) if (found[i].empty()) return -EINVAL;
         if (found[0] != "true" || found[1].rfind("MapleSU ", 0) ||
-            found[3] != "0" || found[4] != "0" || found[7] != "1") return -EINVAL;
+            found[4] != "0" || found[7] != "1") return -EINVAL;
+        // Only the SDK Root worker probes this exact read-only runtime ABI.
+        // Legacy/hook facts retain their unknown-driver contract.
+        if (found[9].empty() ? (found[3] != "0" && found[3] != "10940") : found[3] != "0")
+            return -EINVAL;
         if (found[9] == "legacy") {
             if (found[6] != "unknown" || !found[5].empty() || !found[8].empty()) return -EINVAL;
         } else {

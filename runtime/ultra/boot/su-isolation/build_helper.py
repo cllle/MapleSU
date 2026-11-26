@@ -2,15 +2,13 @@
 from pathlib import Path
 import argparse, hashlib, io, json, struct, subprocess, sys
 from elftools.elf.elffile import ELFFile
-import os
-sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools"))
-from native_toolchain import ndk_bin, ndk_home
 
-ROOT = Path(__file__).resolve().parents[4]
+REPO = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
 PIN = '02cf4ae01842dd34685c1300cc6316488a0304197faa1ff29e990cb50c611778'
-TOOLS = ndk_bin(ndk_home())
-sys.path.insert(0, str(ROOT/'scripts'))
+sys.path.insert(0, str(REPO/'tools'))
+from native_toolchain import ndk_home, ndk_bin, tool
+sys.path.insert(0, str(REPO/'scripts'))
 from policy_backend_identity import describe_backend, write_identity
 sha=lambda b:hashlib.sha256(b).hexdigest()
 
@@ -21,9 +19,14 @@ def branch(source,target):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--root',type=Path,default=REPO,help='Repository containing the pinned historical helper')
+    p.add_argument('--ndk',type=Path)
     p.add_argument('--backend',required=True,type=Path)
     p.add_argument('--out',required=True,type=Path)
     a=p.parse_args();out=a.out.resolve()
+    ROOT=a.root.resolve()
+    TOOLS=ndk_bin(ndk_home(a.ndk))
+    suffix='.exe' if sys.platform=='win32' else ''
     assert out.is_relative_to(HERE) and not out.exists()
     out.mkdir()
     source=ROOT/'runtime/maplesu-sdk/helper/autorun_bootstrap'
@@ -48,7 +51,7 @@ def main():
         assert name in exports and exports[name]['st_other']['visibility']=='STV_DEFAULT'
     commands=[]
     def run(name,*args):
-        argv=[str(TOOLS/(name + ('.exe' if os.name == 'nt' else ''))),*map(str,args)]
+        argv=[str(tool(TOOLS,name+suffix)),*map(str,args)]
         result=subprocess.run(argv,capture_output=True,text=True,timeout=60)
         commands.append(dict(command=argv,exitCode=result.returncode,stderr=result.stderr))
         (out/'commands.json').write_text(json.dumps(commands,indent=2)+'\n')

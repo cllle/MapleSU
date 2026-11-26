@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -98,7 +99,7 @@ for name,s in fixtures.items():
  file=out/name;file.write_text(s,encoding='utf-8');actual.append(file)
 deps=[cached_jar(*v) for v in [('org.jetbrains.kotlin','kotlin-stdlib','2.4.20'),('org.jetbrains','annotations','13.0'),('org.jetbrains.kotlinx','kotlinx-coroutines-core-jvm','1.11.0'),('junit','junit','4.13.2'),('org.hamcrest','hamcrest-core','1.3')]]
 compiler=cached_jar('org.jetbrains.kotlin','kotlin-compiler-embeddable','2.4.20')
-java=jdk_tool("java")
+java=jdk_tool()
 classes=out/'classes';classes.mkdir();cp=os.pathsep.join(map(str,[classes,*deps]));logs=[]
 commands=[[java,'-Xmx256m','-cp',os.pathsep.join(map(str,[compiler,*deps])),'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler','-no-stdlib','-no-reflect','-nowarn','-jvm-target','21','-classpath',cp,'-d',classes,*actual],[java,'-cp',cp,'org.junit.runner.JUnitCore','dev.maplesu.manager.runtime.ultra.GrantInitializationTest']]
 for cmd in commands:

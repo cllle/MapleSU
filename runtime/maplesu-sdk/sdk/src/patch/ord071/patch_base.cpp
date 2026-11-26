@@ -68,7 +68,7 @@ int PatchBase::get_cred_securebits_size() {
 //         if (--x13 != 0) goto loop;
 //   x10 = 1;
 // deny:
-void PatchBase::emit_check_current_allow_selinux_to_x10(asmjit::a64::Assembler* a) {
+KModErr PatchBase::emit_check_current_allow_selinux_to_x10_checked(asmjit::a64::Assembler* a) {
     using namespace asmjit;
     using namespace asmjit::a64;
 
@@ -82,7 +82,7 @@ void PatchBase::emit_check_current_allow_selinux_to_x10(asmjit::a64::Assembler* 
     Label loop = a->newLabel();
 
     a->mov(x10, Imm(0));
-    kernel_module::export_symbol::get_current(a, x11);
+    RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, x11));
 
     a->ldr(x11, Mem(x11, static_cast<int32_t>(m_cred_offset)));
     a->ldr(w12, Mem(x11, static_cast<int32_t>(m_cred_securebits_offset)));
@@ -107,6 +107,11 @@ void PatchBase::emit_check_current_allow_selinux_to_x10(asmjit::a64::Assembler* 
     a->b(CondCode::kNE, loop);
     a->mov(x10, Imm(1));
     a->bind(deny);
+    return KModErr::OK;
+}
+void PatchBase::emit_check_current_allow_selinux_to_x10(asmjit::a64::Assembler* a) {
+    if (is_failed(emit_check_current_allow_selinux_to_x10_checked(a)))
+        a->reportError(asmjit::kErrorInvalidState);
 }
 
 // 把 a 里发射好的机器码装成 before hook。

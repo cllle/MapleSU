@@ -19,6 +19,7 @@ import dev.maplesu.manager.litehidden.LiteHiddenTraceResult
  * 所有判定仍在 `dev.maplesu.manager.litehidden` 纯策略与 `ui/security/LiteHiddenController`。
  */
 object LiteHiddenRuntimeProxy {
+    private val transitionActive = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun readState(): LiteHiddenState = com.maplesu.core.ui.security.LiteHiddenController.readState()
 
@@ -109,27 +110,28 @@ object LiteHiddenRuntimeProxy {
         if (!dev.maplesu.manager.litehidden.HiddenModePolicy.validatePort(port.toString()).valid) {
             return HiddenActivateResult(false, HiddenFailure.INVALID_PORT, HiddenFailure.INVALID_PORT.wire, host)
         }
-        setPreferredPort(port)
-        // Persist before entering root work: process removal can prevent every post-call update.
-        setActiveHostPackage(host)
-        // 确认窗口：事务进行中首页只显示「正在确认 MapleSU 运行环境」，不先画「正在运行」。
-        // 无论成功/失败/异常都要清标记（进程被杀时标记留在盘上，下次启动仍按确认中处理，
-        // 由一次真实读取收敛 —— 宁可多确认一次，也不自曝）。
-        com.maplesu.core.ui.security.HiddenStartupConfirm.setPending(com.maplesu.core.ksuApp, true)
-        val result = try {
-            dev.maplesu.manager.litehidden.HiddenModeBackends.activate(host, port).also {
+        if (!transitionActive.compareAndSet(false, true)) {
+            return HiddenActivateResult(false, HiddenFailure.UNKNOWN, dev.maplesu.manager.litehidden.ParasiteCodes.BUSY, host)
+        }
+        return try {
+            setPreferredPort(port)
+            // Persist before entering root work: process removal can prevent every post-call update.
+            setActiveHostPackage(host)
+            // Only this owner may clear pending; BUSY calls exit before any preference or pending write.
+            com.maplesu.core.ui.security.HiddenStartupConfirm.setPending(com.maplesu.core.ksuApp, true)
+            val result = dev.maplesu.manager.litehidden.HiddenModeBackends.activate(host, port).also {
                 if (it.success) com.maplesu.core.ui.security.LiteHiddenRuntime.update(LiteHiddenState.ON)
             }
+            // 宿主 so 已被改写（即使后续步骤失败）→ 记录，保证「解除寄生」入口可达。
+            if (result.steps.any { it.step == HiddenActivateStep.HOST_SO.wire && it.ok }) {
+                setActiveHostPackage(host)
+            }
+            if (result.success) setActiveHostPackage(host)
+            result
         } finally {
             runCatching { com.maplesu.core.ui.security.HiddenStartupConfirm.setPending(com.maplesu.core.ksuApp, false) }
+            transitionActive.set(false)
         }
-        // 宿主 so 已被改写（即使后续步骤失败）→ 记录，保证「解除寄生」入口可达。
-        if (result.steps.any { it.step == HiddenActivateStep.HOST_SO.wire && it.ok }) {
-            setActiveHostPackage(host)
-        }
-        if (!result.success) return result
-        setActiveHostPackage(host)
-        return result
     }
 
     /**
@@ -144,22 +146,26 @@ object LiteHiddenRuntimeProxy {
         if (host.isEmpty()) {
             return HiddenDeactivateResult(false, HiddenFailure.HOST_NOT_SELECTED, HiddenFailure.HOST_NOT_SELECTED.wire)
         }
-        com.maplesu.core.ui.security.HiddenStartupConfirm.setPending(com.maplesu.core.ksuApp, true)
-        val result = try {
-            dev.maplesu.manager.litehidden.HiddenModeBackends.deactivate(host)
+        if (!transitionActive.compareAndSet(false, true)) {
+            return HiddenDeactivateResult(false, HiddenFailure.UNKNOWN, dev.maplesu.manager.litehidden.ParasiteCodes.BUSY, host)
+        }
+        return try {
+            com.maplesu.core.ui.security.HiddenStartupConfirm.setPending(com.maplesu.core.ksuApp, true)
+            val result = dev.maplesu.manager.litehidden.HiddenModeBackends.deactivate(host)
+            if (!result.success) result else if (readState().isEffectivelyOn) {
+                result.copy(
+                    success = false,
+                    failure = HiddenFailure.VERIFY_FAILED,
+                    code = HiddenFailure.VERIFY_FAILED.wire,
+                )
+            } else {
+                setActiveHostPackage("")
+                result
+            }
         } finally {
             runCatching { com.maplesu.core.ui.security.HiddenStartupConfirm.setPending(com.maplesu.core.ksuApp, false) }
+            transitionActive.set(false)
         }
-        if (!result.success) return result
-        if (readState().isEffectivelyOn) {
-            return result.copy(
-                success = false,
-                failure = HiddenFailure.VERIFY_FAILED,
-                code = HiddenFailure.VERIFY_FAILED.wire,
-            )
-        }
-        setActiveHostPackage("")
-        return result
     }
 
     // ── 宿主记忆（仅 UI 记忆，不是宿主真实状态）──────────────────────────

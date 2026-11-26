@@ -114,13 +114,16 @@ object LiteWebModWeb {
             "<script src=\"$base/a/modbridge.js\"></script>"
 
     /**
-     * 把 [tag] 插到 `</head>` 前；没有 head 就插到 `<body...>` 后；都没有就放最前面。
+     * 在模块自己的首段脚本前安装桥：优先 `<head...>` 后，其次 `<body...>` 后，再次最前面。
      * 只做一次（模块页面自己已经注入过就不重复）。
      */
     fun injectBridge(html: String, tag: String): String {
         if (html.contains("__7K_BASE__")) return html
-        val headEnd = html.indexOf("</head>", ignoreCase = true)
-        if (headEnd >= 0) return html.substring(0, headEnd) + tag + html.substring(headEnd)
+        val headStart = Regex("<head(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE).find(html)
+        if (headStart != null) {
+            val at = headStart.range.last + 1
+            return html.substring(0, at) + tag + html.substring(at)
+        }
         val bodyStart = Regex("<body[^>]*>", RegexOption.IGNORE_CASE).find(html)
         if (bodyStart != null) {
             val at = bodyStart.range.last + 1

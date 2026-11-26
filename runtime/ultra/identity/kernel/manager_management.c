@@ -407,8 +407,20 @@ static bool msu_management_host_matches(maplesu_host_instance value)
     return value.low == management.host.low && value.high == management.host.high;
 }
 
+/* Protocol addresses retain the caller's ARM64 top-byte tag. Nofault user
+ * access and range checks consume the same canonical user address. */
+static void __user *msu_management_user_pointer(u64 address)
+{
+#ifdef CONFIG_ARM64
+    return (void __user *)untagged_addr((unsigned long)address);
+#else
+    return (void __user *)(unsigned long)address;
+#endif
+}
+
 static bool msu_management_user_range(u64 address, u32 length)
 {
+    address = (unsigned long)msu_management_user_pointer(address);
     return address && length && address <= ~0ULL - (length - 1) &&
         !(address & (1ULL << 55));
 }
@@ -444,8 +456,7 @@ u64 msu_management_capabilities(void)
 #endif
     if (!msu_management_code_available()) return capabilities;
     capabilities |= MAPLESU_CAP_CODE_RESERVE;
-#if defined(MSU_MANAGEMENT_PUBLICATION_GATE_VERIFIED) && MSU_MANAGEMENT_PUBLICATION_GATE_VERIFIED && \
-    defined(CONFIG_TASKS_RCU) && defined(MSU_MANAGEMENT_NATIVE_TEXT_OWNER) && MSU_MANAGEMENT_NATIVE_TEXT_OWNER
+#if defined(CONFIG_TASKS_RCU) && defined(MSU_MANAGEMENT_NATIVE_TEXT_OWNER) && MSU_MANAGEMENT_NATIVE_TEXT_OWNER
     capabilities |= MAPLESU_CAP_PUBLICATION;
 #endif
     return capabilities;
@@ -1456,7 +1467,7 @@ static int msu_shared_bool_create(struct msu_management_session *session,
     const maplesu_management_v3 *operation, maplesu_response_owner_v3 *response)
 {
     u8 value;
-    if (copy_from_user_nofault(&value, (void __user *)(unsigned long)operation->data_user, 1))
+    if (copy_from_user_nofault(&value, msu_management_user_pointer(operation->data_user), 1))
         return -EFAULT;
     return msu_shared_bool_create_domain(session, NULL, value, response);
 }
@@ -1471,7 +1482,7 @@ static int msu_shared_bool_update(struct msu_management_session *session,
     int error;
     response->metadata_address = operation->handle;
     if (!release) {
-        if (copy_from_user_nofault(&value, (void __user *)(unsigned long)operation->data_user, 1))
+        if (copy_from_user_nofault(&value, msu_management_user_pointer(operation->data_user), 1))
             return -EFAULT;
         if (value > 1) return -EINVAL;
     }
@@ -1788,7 +1799,7 @@ static int msu_management_open_output(struct msu_management_session *session,
         &metadata, &descriptor);
     if (!error) {
         response->metadata_address = descriptor;
-        if (copy_to_user_nofault((void __user *)(unsigned long)operation->data_user,
+        if (copy_to_user_nofault(msu_management_user_pointer(operation->data_user),
                 &metadata, sizeof(metadata))) error = -EFAULT;
     }
     if (!error) error = msu_management_check(session);
@@ -2086,7 +2097,7 @@ static int msu_management_write(struct msu_management_session *session,
     bytes = vmalloc(operation->flags & MAPLESU_MANAGEMENT_WRITE_TEXT ?
         ALIGN(operation->length, sizeof(u32)) : operation->length);
     if (!bytes) return -ENOMEM;
-    if (copy_from_user_nofault(bytes, (void __user *)(unsigned long)operation->data_user,
+    if (copy_from_user_nofault(bytes, msu_management_user_pointer(operation->data_user),
         operation->length)) { error = -EFAULT; goto out; }
     error = msu_management_check(session);
     if (error) goto out;
@@ -2200,6 +2211,10 @@ static int msu_publication_prepare_snapshot(struct msu_management_session *sessi
     unsigned int i, j, gate_count = 0;
     bool payload_found = false;
     int error = msu_publication_descriptor_check(&descriptor);
+    _Static_assert(MAPLESU_PRIVATE_RETURN_CONTROL_OFFSET >= sizeof(maplesu_publication_control_v3),
+        "private return control follows public control");
+    _Static_assert(MAPLESU_PRIVATE_RETURN_CONTROL_OFFSET +
+        sizeof(maplesu_publication_return_private) <= PAGE_SIZE, "private return control fits page");
     if (error) return error;
     error = msu_publication_entry_check(&descriptor);
     if (error) return error;
@@ -2350,10 +2365,6 @@ static int msu_publication_prepare_snapshot(struct msu_management_session *sessi
         .resume_address = publication->entry + 4,
         .schema = 1, .length = sizeof(*publication->control), .epoch = publication->epoch,
     };
-    _Static_assert(MAPLESU_PRIVATE_RETURN_CONTROL_OFFSET >= sizeof(maplesu_publication_control_v3),
-        "private return control follows public control");
-    _Static_assert(MAPLESU_PRIVATE_RETURN_CONTROL_OFFSET +
-        sizeof(maplesu_publication_return_private) <= PAGE_SIZE, "private return control fits page");
     *(maplesu_publication_return_private *)((u8 *)publication->control +
         MAPLESU_PRIVATE_RETURN_CONTROL_OFFSET) = (maplesu_publication_return_private) {
         .publication_id = publication->id,
@@ -2405,7 +2416,7 @@ static int msu_publication_prepare(struct msu_management_session *session,
     maplesu_publication_prepare_v3 descriptor;
     maplesu_publication_member_v3 *members;
     int error;
-    if (copy_from_user_nofault(&descriptor, (void __user *)(unsigned long)operation->data_user,
+    if (copy_from_user_nofault(&descriptor, msu_management_user_pointer(operation->data_user),
         sizeof(descriptor))) return -EFAULT;
     error = msu_publication_descriptor_check(&descriptor);
     if (error) return error;
@@ -2415,7 +2426,7 @@ static int msu_publication_prepare(struct msu_management_session *session,
     if (error) return error;
     members = vmalloc(descriptor.member_count * sizeof(*members));
     if (!members) return -ENOMEM;
-    if (copy_from_user_nofault(members, (void __user *)(unsigned long)descriptor.members_user,
+    if (copy_from_user_nofault(members, msu_management_user_pointer(descriptor.members_user),
         descriptor.member_count * sizeof(*members))) error = -EFAULT;
     else error = msu_publication_prepare_snapshot(session, NULL, &descriptor, members, response);
     vfree(members);
@@ -3341,7 +3352,10 @@ static int msu_credential_replace_profile(const struct msu_credential_profile *p
             groups->gid[i] = make_kgid(&init_user_ns, profile->groups[i]);
         groups_sort(groups);
         set_groups(prepared, groups);
-        put_group_info(groups);
+        /* set_groups retained groups for prepared; only our non-last local
+         * reference is released here. Native cred cleanup owns final free. */
+        _Generic(&groups->usage, refcount_t *: refcount_dec,
+                 atomic_t *: atomic_dec)(&groups->usage);
     }
 #endif
     if (profile->clear_securebits) MSU_DYN_FIELD(prepared, cred, securebits) = 0;
@@ -3443,7 +3457,7 @@ static int msu_management_credentials(struct msu_management_session *session,
     const struct cred *previous;
     int error;
     if (!root && copy_from_user_nofault(&caps,
-        (void __user *)(unsigned long)operation->data_user, sizeof(caps))) return -EFAULT;
+        msu_management_user_pointer(operation->data_user), sizeof(caps))) return -EFAULT;
     error = msu_credential_replace_current(root ? NULL : &caps,
         msu_management_validate_credentials, session, &response->metadata_length);
     if (response->metadata_length & MAPLESU_EFFECT_COMMITTED) {
@@ -3510,7 +3524,7 @@ static int msu_management_procattr(struct msu_management_session *session,
     if (error) goto out;
     before = msu_dynamic_get_current_cred();
     response->metadata_length |= MAPLESU_EFFECT_PROC_WRITE_ATTEMPTED;
-    written = vfs_write(file, (const char __user *)(unsigned long)operation->data_user,
+    written = vfs_write(file, (const char __user *)msu_management_user_pointer(operation->data_user),
         operation->length, &position);
     observed = msu_dynamic_get_current_cred();
     if (observed != before || msu_dynamic_current_real_cred() != before)
@@ -3570,7 +3584,7 @@ static int msu_management_deployment(const maplesu_management_v3 *operation,
     output.schema = retained.schema;
     output.bytes = sizeof(output);
     memcpy(output.name, retained.name, sizeof(output.name));
-    if (copy_to_user_nofault((void __user *)(unsigned long)operation->data_user,
+    if (copy_to_user_nofault(msu_management_user_pointer(operation->data_user),
             &output, sizeof(output))) return -EFAULT;
     response->result = sizeof(output);
     return 0;
@@ -3599,7 +3613,7 @@ static int msu_management_su_runtime(const maplesu_management_v3 *operation,
     if (error > 0 || error < -4095 || native.status != error ||
         native.schema != MAPLESU_SU_RUNTIME_STATUS_SCHEMA || native.bytes != sizeof(output)) return -EIO;
     memcpy(&output, &native, sizeof(output));
-    if (copy_to_user_nofault((void __user *)(unsigned long)operation->data_user,
+    if (copy_to_user_nofault(msu_management_user_pointer(operation->data_user),
             &output, sizeof(output))) return error ? error : -EFAULT;
     response->result = sizeof(output);
     return error;
@@ -3611,12 +3625,12 @@ static int msu_management_installation(const maplesu_management_v3 *operation,
     maplesu_installation_state_v3 value;
     int error;
     if (operation->address != MAPLESU_INSTALLATION_READ &&
-        copy_from_user_nofault(&value, (void __user *)(unsigned long)operation->data_user,
+        copy_from_user_nofault(&value, msu_management_user_pointer(operation->data_user),
             sizeof(value))) return -EFAULT;
     error = msu_installation_management(operation->address, &value, &response->metadata_length);
     if (error) return error;
     if (operation->address == MAPLESU_INSTALLATION_READ) {
-        if (copy_to_user_nofault((void __user *)(unsigned long)operation->data_user,
+        if (copy_to_user_nofault(msu_management_user_pointer(operation->data_user),
             &value, sizeof(value))) return -EFAULT;
         response->result = sizeof(value);
     }
@@ -3654,7 +3668,7 @@ static int msu_management_runtime_uid_readback(struct msu_management_session *se
     u32 i;
     int error;
     if (copy_from_user_nofault(&descriptor,
-        (void __user *)(unsigned long)operation->data_user, sizeof(descriptor))) return -EFAULT;
+        msu_management_user_pointer(operation->data_user), sizeof(descriptor))) return -EFAULT;
     if (descriptor.reserved || descriptor.capacity > MAPLESU_UID_SNAPSHOT_MAX_RECORDS) return -EINVAL;
     bytes = sizeof(metadata) + (size_t)descriptor.capacity * sizeof(*records);
     if (!msu_management_user_range(descriptor.destination_user, bytes)) return -EINVAL;
@@ -3696,7 +3710,7 @@ static int msu_management_runtime_uid_readback(struct msu_management_session *se
     }
     error = msu_management_check(session);
     if (error) goto out;
-    if (copy_to_user_nofault((void __user *)(unsigned long)descriptor.destination_user,
+    if (copy_to_user_nofault(msu_management_user_pointer(descriptor.destination_user),
         buffer, bytes)) {
         error = -EFAULT;
         goto out;
@@ -3932,7 +3946,7 @@ void msu_management_dispatch(const maplesu_request_owner_v3 *request,
             (u32)operation->address, (u32)operation->handle,
             (u32)operation->flags, operation->reserved, &fixed);
         else fixed.native_errno = error < 0 && error >= -4095 ? -error : 0;
-        if (copy_to_user_nofault((void __user *)(unsigned long)operation->data_user,
+        if (copy_to_user_nofault(msu_management_user_pointer(operation->data_user),
                 &fixed, sizeof(fixed))) {
             if (!error) error = -EFAULT;
         } else {

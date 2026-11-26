@@ -278,4 +278,84 @@ class HostPickerStateTest {
         assertEquals("20000", confirming.portText)
         assertNotNull(confirming.selectedCandidate)
     }
+
+    @Test
+    fun searchMatchesNameIgnoringCaseAndTrimsQuery() {
+        val state = HostPickerPolicy.search(listed(), "  cHaT  ")
+        assertEquals(listOf(chat), state.filteredCandidates)
+        assertEquals(list, state.candidates)
+    }
+
+    @Test
+    fun searchMatchesPackageAndLocalizedName() {
+        assertEquals(listOf(mail), HostPickerPolicy.search(listed(), "EXAMPLE.MAIL").filteredCandidates)
+        val localized = HostPickerPolicy.loaded(listed(), listOf(HostCandidate("com.example.reader", "阅读助手")))
+        assertEquals(1, HostPickerPolicy.search(localized, " 阅读 ").filteredCandidates.size)
+    }
+
+    @Test
+    fun filteringAndClearingPreserveSelectedPackageEvenOutsideMatches() {
+        val selected = HostPickerPolicy.select(listed(), chat.packageName)
+        val filtered = HostPickerPolicy.search(selected, "mail")
+        assertEquals(listOf(mail), filtered.filteredCandidates)
+        assertEquals(chat.packageName, filtered.selected)
+        assertTrue(filtered.canGoNext)
+        val cleared = HostPickerPolicy.search(filtered, "")
+        assertEquals(list, cleared.filteredCandidates)
+        assertEquals(chat.packageName, cleared.selected)
+    }
+
+    @Test
+    fun whitespaceShowsAllAndNoMatchIsDistinctFromNoCandidates() {
+        assertEquals(list, HostPickerPolicy.search(listed(), "  ").filteredCandidates)
+        val missing = HostPickerPolicy.search(listed(), "missing")
+        assertTrue(missing.filteredCandidates.isEmpty())
+        assertFalse(missing.isEmpty)
+    }
+
+    @Test
+    fun queryDoesNotChangeDuringConfirmOrRunningAndNewOpenResetsIt() {
+        val queried = HostPickerPolicy.search(HostPickerPolicy.select(listed(), chat.packageName), "chat")
+        val confirming = HostPickerPolicy.next(queried)
+        assertEquals(confirming, HostPickerPolicy.search(confirming, "mail"))
+        val running = HostPickerPolicy.startRunning(confirming)
+        assertEquals(running, HostPickerPolicy.search(running, "mail"))
+        assertEquals("", HostPickerPolicy.open(running, "18427", true).searchQuery)
+    }
+
+    @Test
+    fun elapsedTimingUsesMonotonicDifferenceAndOnlyMeasuredEstimate() {
+        val first = HiddenOperationProgress(10_000L, 1)
+        assertNull(first.estimatedSeconds)
+        assertEquals(0L, first.elapsedSeconds(9_000L))
+        assertEquals(2L, first.elapsedSeconds(12_900L))
+        assertEquals(3L, first.copy(estimatedDurationMs = 2_001L).estimatedSeconds)
+        assertNull(first.copy(estimatedDurationMs = 0L).estimatedSeconds)
+    }
+
+    @Test
+    fun secondConfirmDoesNotResetRunningTimingAndFailureClearsIt() {
+        val confirming = HostPickerPolicy.next(HostPickerPolicy.select(listed(), chat.packageName))
+        val progress = HiddenOperationProgress(10_000L, 1, 2_000L)
+        val running = HostPickerPolicy.startRunning(confirming, progress)
+        assertEquals(progress, running.progress)
+        assertEquals(running, HostPickerPolicy.startRunning(running, progress.copy(startedAtElapsedMs = 20_000L)))
+        assertNull(HostPickerPolicy.fail(running, "FAILED", 2).progress)
+        assertNull(HostPickerPolicy.dismiss(running).progress)
+    }
+
+    @Test
+    fun deactivateRetryClearsOldFailureAndCannotRestartItsClock() {
+        val opened = HostPickerPolicy.deactivateOpen(HostPickerPolicy.deactivateInitial(), chat.packageName)
+        val failed = HostPickerPolicy.deactivateFinished(opened, false, 1, "FAILED", 2,
+            listOf(HiddenStepResult("restore_host_so", false)))
+        val progress = HiddenOperationProgress(10_000L, 3)
+        val retry = HostPickerPolicy.deactivateRunning(failed, progress)
+        assertTrue(retry.running)
+        assertTrue(retry.steps.isEmpty())
+        assertNull(retry.failureRes)
+        assertEquals("", retry.failureCode)
+        assertEquals(retry, HostPickerPolicy.deactivateRunning(retry, progress.copy(startedAtElapsedMs = 20_000L)))
+        assertNull(HostPickerPolicy.deactivateFinished(retry, true, 1).progress)
+    }
 }

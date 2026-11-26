@@ -14,6 +14,7 @@ import sys
 
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE
 from unicorn import arm64_const as R
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools"))
 from native_toolchain import ndk_bin, ndk_home
 
@@ -223,8 +224,10 @@ class Target:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--ndk-compiler", type=Path, default=(ndk_bin(ndk_home()) / ("clang.exe" if os.name == "nt" else "clang")))
+    parser.add_argument("--ndk-compiler", type=Path, default=None)
     args = parser.parse_args()
+    if args.ndk_compiler is None:
+        args.ndk_compiler = ndk_bin(ndk_home()) / ("clang.exe" if os.name == "nt" else "clang")
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     source_root, build = out / "source", out / "build"

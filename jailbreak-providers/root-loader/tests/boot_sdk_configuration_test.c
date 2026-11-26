@@ -37,6 +37,8 @@ static int (*observer)(struct kprobe *, struct pt_regs *);
 static void *(*allocate)(unsigned long);
 struct sdk_pgprot { uptr pgprot; };
 static void *(*allocate_range)(unsigned long,unsigned long,uptr,uptr,unsigned int,struct sdk_pgprot,unsigned long,int,const void *);
+static void *(*allocate_segmented_range)(unsigned long,unsigned long,unsigned int,unsigned int,
+    unsigned int,unsigned int,uptr,uptr,unsigned int,struct sdk_pgprot,unsigned long,int,const void *);
 static void (*release)(const void *);
 static char root_key[49];
 static void *fixture_allocate(unsigned long);
@@ -173,7 +175,9 @@ static const struct test_case cases[]={
     {"segmented-init-begin",-95,MSU_BS_CONFIG_ARGUMENTS,1,1},
     {"segmented-init-end",-95,MSU_BS_CONFIG_ARGUMENTS,1,1},
     {"segmented-null-stack",-95,MSU_BS_CONFIG_ARGUMENTS,1,1},
-    {"segmented-conflicting-kind",-22,MSU_BS_CONFIG_LAYOUT,0,0},
+    {"segmented-inner-range",0,MSU_BS_CONFIG_NONE,1,1},
+    {"segmented-inner-noprof",0,MSU_BS_CONFIG_NONE,1,1},
+    {"segmented-inner-user",0,MSU_BS_CONFIG_NONE,1,1},
     {"user-zero-align",-95,MSU_BS_CONFIG_ARGUMENTS,1,1},
     {"user-probe-no-capture",-61,MSU_BS_CONFIG_CAPTURE,1,1},
     {"missing-user-sampler",-95,MSU_BS_CONFIG_ALLOCATOR,0,0},
@@ -260,7 +264,9 @@ int main(int argc,char **argv){
     if(!strcmp(name,"segmented-init-begin"))segmented_fault=4;
     if(!strcmp(name,"segmented-init-end"))segmented_fault=5;
     if(!strcmp(name,"segmented-null-stack"))segmented_fault=6;
-    if(!strcmp(name,"segmented-conflicting-kind"))request.layout.allocator_noprof=10;
+    if(!strcmp(name,"segmented-inner-range"))request.layout.allocator_noprof=10;
+    if(!strcmp(name,"segmented-inner-noprof"))request.layout.allocator_noprof=11;
+    if(!strcmp(name,"segmented-inner-user")){request.layout.allocator_noprof=15;native_args[6]=8;}
     if(!strcmp(name,"user-zero-align"))native_args[1]=0;
     if(!strcmp(name,"user-probe-no-capture"))capture_mode=1;
     if(!strcmp(name,"missing-user-sampler"))missing_user_sampler=1;
@@ -302,7 +308,7 @@ int main(int argc,char **argv){
     fprintf(stdout,"CONFIGURE status=%d stage=%u configured=%u\n",
         request.reply.status,request.reply.padding[3],request.reply.padding[2]);
     if(control_result||request.reply.status!=test->error||
-        request.reply.padding[3]!=test->stage||request.reply.padding[4]!=1||request.reply.padding[5]!=1||!!sdk_dynamic_ready!=!test->error||sdk_allocations||
+        request.reply.padding[3]!=test->stage||request.reply.padding[4]!=1||request.reply.padding[5]!=1||request.reply.padding[6]!=3||!!sdk_dynamic_ready!=!test->error||sdk_allocations||
         registrations!=(int)test->probes||native_allocations!=(int)test->native||
         unregistrations!=registrations-failed_probe||releases!=native_allocations-null_allocation||
         fixture_fault||sample_live||probe_active||active_probe||observer||sdk_allocator_owner||sdk_allocator_hits||sdk_allocator_segmented||control_busy||wrapper_reads)return 1;
@@ -313,11 +319,13 @@ int main(int argc,char **argv){
             sdk_vm.flag||sdk_vm.start!=native_args[2]||sdk_vm.end!=native_args[3]||
             sdk_vm.prot!=native_args[5]||sdk_vm.prot_set!=sdk_vm.prot||
             (uptr)allocate!=lookup_name(request.layout.allocator_noprof&1?"vmalloc_noprof":"vmalloc")||
-            (uptr)allocate_range!=fixture_range_kind(request.layout.allocator_noprof))return 1;
-    }else if(sdk_kallsyms||sdk_layout.task_cred||sdk_vm.start||allocate||allocate_range)return 1;
+            ((request.layout.allocator_noprof&10)==10 ?
+                ((uptr)allocate_segmented_range!=fixture_range_kind(request.layout.allocator_noprof)||allocate_range!=0) :
+                ((uptr)allocate_range!=fixture_range_kind(request.layout.allocator_noprof)||allocate_segmented_range!=0)))return 1;
+    }else if(sdk_kallsyms||sdk_layout.task_cred||sdk_vm.start||allocate||allocate_range||allocate_segmented_range)return 1;
     request.reply=(struct msu_boot_sdk_request){.version=MSU_BOOT_SDK_VERSION,.command=MSU_BOOT_SDK_QUERY};
     if(msu_boot_sdk_control((uptr)&request)||request.reply.padding[2]!=(unsigned)!test->error||
-        request.reply.padding[3]!=test->stage||request.reply.padding[4]!=1||request.reply.padding[5]!=1||sdk_allocations||registrations!=(int)test->probes)return 1;
+        request.reply.padding[3]!=test->stage||request.reply.padding[4]!=1||request.reply.padding[5]!=1||request.reply.padding[6]!=3||sdk_allocations||registrations!=(int)test->probes)return 1;
     if(!strcmp(name,"retry-after-capture-failure")){
         capture_mode=0;
         request.reply=(struct msu_boot_sdk_request){.version=MSU_BOOT_SDK_VERSION,.command=MSU_BOOT_SDK_CONFIGURE};

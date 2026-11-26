@@ -5,6 +5,7 @@ import dev.maplesu.manager.recovery.RecoveryBundle
 import dev.maplesu.manager.recovery.RecoveryCommandResult
 import dev.maplesu.manager.recovery.RecoveryPrepareResult
 import dev.maplesu.manager.workmode.WorkMode
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 生产后端的 root 执行口 —— **只**包一层既有通道，绝不自己开 su/libsu：
@@ -160,6 +161,13 @@ class ProductionHiddenModeBackend(
     // ── 激活 ───────────────────────────────────────────────────────────────
 
     override suspend fun activate(hostPackage: String, port: Int): HiddenActivateResult {
+        if (!transactionActive.compareAndSet(false, true)) {
+            return HiddenActivateResult(false, HiddenFailure.UNKNOWN, ParasiteCodes.BUSY, hostPackage.trim())
+        }
+        return try { activateOwned(hostPackage, port) } finally { transactionActive.set(false) }
+    }
+
+    private fun activateOwned(hostPackage: String, port: Int): HiddenActivateResult {
         val host = hostPackage.trim()
         val plan = resolveDeps()
             ?: return HiddenActivateResult(
@@ -277,6 +285,13 @@ class ProductionHiddenModeBackend(
     // ── 解除寄生 ───────────────────────────────────────────────────────────
 
     override suspend fun deactivate(hostPackage: String): HiddenDeactivateResult {
+        if (!transactionActive.compareAndSet(false, true)) {
+            return HiddenDeactivateResult(false, HiddenFailure.UNKNOWN, ParasiteCodes.BUSY, hostPackage.trim())
+        }
+        return try { deactivateOwned(hostPackage) } finally { transactionActive.set(false) }
+    }
+
+    private fun deactivateOwned(hostPackage: String): HiddenDeactivateResult {
         val host = hostPackage.trim()
         val plan = resolveDeps()
             ?: return HiddenDeactivateResult(
@@ -294,6 +309,27 @@ class ProductionHiddenModeBackend(
                 code = HiddenFailure.ROOT_UNAVAILABLE.wire, hostPackage = host,
             )
         }
+        if (!HiddenHostPolicy.isValidPackage(host)) {
+            return HiddenDeactivateResult(false, HiddenFailure.HOST_REJECTED, ParasiteCodes.HOST_UNSUPPORTED, host)
+        }
+        val checkpoint = runCatching { plan.root.run(ParasiteScripts.readCleanupCheckpoint()) }.getOrNull()
+        val checkpointText = checkpoint?.output?.trim()
+        if (checkpoint?.code != 0 || checkpointText != ParasiteMarkers.CLEANUP_NONE) {
+            val previouslyRestored = listOf(false, true).firstOrNull {
+                checkpoint?.code == 0 && checkpointText == ParasiteScripts.cleanupReceipt(host, plan.mode.name, it)
+            }
+            if (previouslyRestored == null) {
+                return cleanupFailure(host, steps, false, ParasiteCodes.CLEANUP_CHECKPOINT_FAILED,
+                    "checkpoint_untrusted_or_other_host_mode")
+            }
+            // This receipt is outside the recursively removed backup. Even a partial rm
+            // and a rebuilt backend resume cleanup without reusing damaged .orig files.
+            listOf(HiddenDeactivateStep.RESTORE_HOST_SO, HiddenDeactivateStep.REVOKE_SU_AUTH,
+                HiddenDeactivateStep.STOP_DAEMON).forEach {
+                steps += step(it.wire, true, detail = "previously_verified")
+            }
+            return cleanupRecovery(host, plan, steps, previouslyRestored, checkpointExists = true)
+        }
         val restored = restoreHost(host, plan)
         steps += restored.step
         val revoked = if (restored.step.ok) revokeSuAuth(host, plan).also { steps += it.step } else null
@@ -303,20 +339,7 @@ class ProductionHiddenModeBackend(
         val hostSoRestored = restored.verified
         val restoredOk = restored.step.ok
         val success = restoredOk && revoked?.step?.ok == true && stopped?.step?.ok == true
-        if (success) {
-            runCatching { plan.root.run(ParasiteScripts.removeBackup(host)) }
-            // 解除成功才清身份材料：失败保留，WebUI/App 重试还需要它解 rootkey 去撤销授权。
-            runCatching { plan.root.run(RecoveryIdentityScripts.remove()) }
-            lastHostPackage = ""
-            return HiddenDeactivateResult(
-                success = true,
-                hostPackage = host,
-                steps = steps,
-                hostSoRestored = hostSoRestored,
-                suAuthRevoked = true,
-                daemonStopped = true,
-            )
-        }
+        if (success) return cleanupRecovery(host, plan, steps, hostSoRestored, checkpointExists = false)
         val code = steps.firstOrNull { !it.ok }?.code.orEmpty().ifEmpty { ParasiteCodes.HOST_SO_RESTORE_FAILED }
         val failedStep = steps.firstOrNull { !it.ok }
         // 停 daemon 失败 = **总体失败**（不能因为宿主库已还原就报成功）；但已完成的还原/撤销
@@ -343,6 +366,58 @@ class ProductionHiddenModeBackend(
             failedStep = failedStep?.step.orEmpty(),
             retryableStep = retryableStep,
         )
+    }
+
+    private fun cleanupRecovery(
+        host: String,
+        plan: HiddenModeDeps,
+        steps: List<HiddenStepResult>,
+        restored: Boolean,
+        checkpointExists: Boolean,
+    ): HiddenDeactivateResult {
+        if (!checkpointExists) {
+            val started = runCatching {
+                plan.root.run(ParasiteScripts.beginCleanup(host, plan.mode.name, restored))
+            }.getOrNull()
+            if (started?.code != 0 || !started.output.lineSequence().any { it == ParasiteMarkers.CLEANUP_READY }) {
+                return cleanupFailure(host, steps, restored, ParasiteCodes.CLEANUP_CHECKPOINT_FAILED, "checkpoint_write_unverified")
+            }
+        }
+        val removed = runCatching { plan.root.run(ParasiteScripts.removeBackup(host)) }.getOrNull()
+        if (removed?.code != 0 || !removed.output.lineSequence().any { it == ParasiteMarkers.BACKUP_GONE }) {
+            return cleanupFailure(host, steps, restored, ParasiteCodes.HOST_BACKUP_CLEANUP_FAILED,
+                removed?.let(::failureDetail) ?: "backup_cleanup_exception")
+        }
+        val identity = runCatching { plan.root.run(ParasiteScripts.removeCleanupIdentity()) }.getOrNull()
+        if (identity?.code != 0 || !identity.output.lineSequence().any { it == ParasiteMarkers.IDENTITY_GONE }) {
+            return cleanupFailure(host, steps, restored, ParasiteCodes.IDENTITY_CLEANUP_FAILED,
+                identity?.let(::failureDetail) ?: "identity_cleanup_exception")
+        }
+        val finished = runCatching {
+            plan.root.run(ParasiteScripts.finishCleanup(host, plan.mode.name, restored))
+        }.getOrNull()
+        if (finished?.code != 0 || !finished.output.lineSequence().any { it == ParasiteMarkers.CLEANUP_GONE }) {
+            return cleanupFailure(host, steps, restored, ParasiteCodes.CLEANUP_CHECKPOINT_FAILED, "checkpoint_delete_unverified")
+        }
+        lastHostPackage = ""
+        return HiddenDeactivateResult(true, hostPackage = host, steps = steps,
+            hostSoRestored = restored, suAuthRevoked = true, daemonStopped = true)
+    }
+
+    private fun cleanupFailure(
+        host: String,
+        steps: List<HiddenStepResult>,
+        restored: Boolean,
+        code: String,
+        detail: String,
+    ): HiddenDeactivateResult {
+        val cleanup = HiddenDeactivateStep.CLEANUP_RECOVERY.wire
+        logger("hidden.deactivate failed host=$host code=$code step=$cleanup detail=$detail")
+        return HiddenDeactivateResult(false, failureOf(code), code, host,
+            steps = steps + step(cleanup, false, code, detail), hostSoRestored = restored,
+            suAuthRevoked = steps.any { it.step == HiddenDeactivateStep.REVOKE_SU_AUTH.wire && it.ok },
+            daemonStopped = steps.any { it.step == HiddenDeactivateStep.STOP_DAEMON.wire && it.ok },
+            failedStep = cleanup, retryableStep = cleanup)
     }
 
     // ── 步骤实现 ───────────────────────────────────────────────────────────
@@ -405,6 +480,12 @@ class ProductionHiddenModeBackend(
             is HostValidation.Rejected -> return reject(validation.code, validation.detail)
             is HostValidation.Ok -> validation
         }
+        val guard = runCatching { plan.root.run(ParasiteScripts.backupGuard(host)) }.getOrNull()
+            ?: return reject(HiddenFailure.ROOT_UNAVAILABLE.wire, "backup_guard_exception")
+        if (guard.code != 0) return reject(HiddenFailure.ROOT_UNAVAILABLE.wire, "backup_guard")
+        if (guard.output.contains(STALE_BACKUP_MARKER)) {
+            return reject(ParasiteCodes.HOST_BACKUP_STALE, "previous_backup_present")
+        }
         if (plan.mode == WorkMode.LITE) {
             if (!runCatching { plan.prepareBoot() }.getOrDefault(false)) {
                 return reject(ParasiteCodes.DAEMON_START_FAILED, "boot_recovery_unavailable")
@@ -416,12 +497,6 @@ class ProductionHiddenModeBackend(
             if (handover == null || handover.code != 0 || handover.output.trim().startsWith("pending:")) {
                 return reject(HiddenFailure.VERIFY_FAILED.wire, "manager_restore_confirmation_required")
             }
-        }
-        val guard = runCatching { plan.root.run(ParasiteScripts.backupGuard(host)) }.getOrNull()
-            ?: return reject(HiddenFailure.ROOT_UNAVAILABLE.wire, "backup_guard_exception")
-        if (guard.code != 0) return reject(HiddenFailure.ROOT_UNAVAILABLE.wire, "backup_guard")
-        if (guard.output.contains(STALE_BACKUP_MARKER)) {
-            return reject(ParasiteCodes.HOST_BACKUP_STALE, "previous_backup_present")
         }
         return PrecheckOutcome(
             step = step(
@@ -506,6 +581,7 @@ class ProductionHiddenModeBackend(
         // 2b. 注入（root 起 app_process 跑 HostSoPatchMain）。先置位：任何尝试后都允许回滚。
         // 真实 App 可能有几十个 `.so`（如 48 个），按 INJECT_CHUNK 分批跑，避免单条 root 命令
         // 过长/超时；清单由执行端增量合并（见 HostSoPatchEngine），这里逐批校验。
+        rollback.originalHashes = shas.toMap()
         rollback.hostInjected = true
         val patched = mutableMapOf<String, String>()
         val skipped = mutableSetOf<String>()
@@ -900,6 +976,9 @@ class ProductionHiddenModeBackend(
     }
 
     private fun revokeSuAuth(host: String, plan: HiddenModeDeps): SimpleOutcome {
+        if (plan.mode == WorkMode.LITE && runCatching { plan.suAuth.isGranted(host) }.getOrNull() == false) {
+            return SimpleOutcome(step(HiddenDeactivateStep.REVOKE_SU_AUTH.wire, true, detail = "su_auth=already_absent"))
+        }
         val outcome = runCatching { plan.suAuth.revoke(host) }
             .getOrElse { SuAuthOutcome.Failed(it.javaClass.simpleName) }
         if (!outcome.ok) {
@@ -966,6 +1045,7 @@ class ProductionHiddenModeBackend(
         var label: String = ""
         var recoveryUrl: String = ""
         var keepDaemon: Boolean = false
+        var originalHashes: Map<String, String> = emptyMap()
 
         /** Restore side effects first; stop recovery only after every rollback is verified. */
         fun undo(): String {
@@ -986,10 +1066,10 @@ class ProductionHiddenModeBackend(
             }
             if (hostInjected) {
                 val restored = runCatching {
-                    plan.root.run(ParasiteScripts.restore(host, libraryDir, label))
+                    plan.root.run(ParasiteScripts.restore(host, libraryDir, label, originalHashes))
                 }.getOrNull()
                 if (restored == null || restored.code != 0 ||
-                    !restored.output.contains(ParasiteMarkers.RESTORE_OK)
+                    !restoresExpectedOriginals(restored.output, originalHashes)
                 ) {
                     problems += "host_so_restore"
                 }
@@ -1003,9 +1083,23 @@ class ProductionHiddenModeBackend(
                 }
             }
             if (problems.isEmpty()) {
-                // 复原已验证 → 备份不再需要（否则陈旧备份守卫会挡住下一次尝试）。
-                if (hostInjected) runCatching { plan.root.run(ParasiteScripts.removeBackup(host)) }
-                return "rollback=ok"
+                if (hostInjected) {
+                    // Retire atomically instead of recursively deleting the only originals.
+                    // keepDaemon / a pre-existing grant are not full deactivation facts.
+                    val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
+                    fun verified(result: RecoveryCommandResult?): Boolean = result?.code == 0 &&
+                        result.output.lineSequence().any { it == ParasiteMarkers.BACKUP_RETIRED }
+                    val retired = runCatching {
+                        plan.root.run(ParasiteScripts.retireRestoredBackup(host, originalHashes, nonce))
+                    }.getOrNull()
+                    if (!verified(retired)) {
+                        val observed = runCatching {
+                            plan.root.run(ParasiteScripts.verifyRetiredBackup(host, originalHashes, nonce))
+                        }.getOrNull()
+                        if (!verified(observed)) problems += "backup_retire"
+                    }
+                }
+                if (problems.isEmpty()) return "rollback=ok"
             }
             return "rollback=incomplete(${problems.joinToString(",")})"
         }
@@ -1091,9 +1185,22 @@ class ProductionHiddenModeBackend(
     }
 
     private companion object {
+        // All instances share the recovery bundle, hidden state and daemon lifecycle.
+        val transactionActive = AtomicBoolean(false)
         const val PING_ATTEMPTS = 3
         const val PING_BACKOFF_MS = 250L
         const val STALE_BACKUP_MARKER = "PARASITE_STALE_BACKUP"
+
+        fun restoresExpectedOriginals(output: String, expected: Map<String, String>): Boolean {
+            if (expected.isEmpty()) return false
+            val lines = output.lineSequence().toList()
+            val records = lines.filter { it.startsWith(ParasiteMarkers.RESTORED) || it.startsWith(ParasiteMarkers.RESTORE_SKIP) }
+            val pattern = Regex("PARASITE_(?:RESTORED|RESTORE_SKIP) name=([A-Za-z0-9._-]+) sha=([0-9a-f]{64})")
+            val parsed = records.map { pattern.matchEntire(it) ?: return false }
+            if (parsed.size != expected.size || parsed.map { it.groupValues[1] }.distinct().size != parsed.size) return false
+            if (parsed.any { expected[it.groupValues[1]] != it.groupValues[2] }) return false
+            return lines.count { it == "${ParasiteMarkers.RESTORE_OK} count=${expected.size}" } == 1
+        }
 
         fun failureOf(code: String): HiddenFailure = when (code) {
             ParasiteCodes.HOST_UNSUPPORTED,
@@ -1103,7 +1210,11 @@ class ProductionHiddenModeBackend(
             ParasiteCodes.HOST_SCAN_FAILED -> HiddenFailure.HOST_SCAN_FAILED
             HiddenFailure.ROOT_UNAVAILABLE.wire -> HiddenFailure.ROOT_UNAVAILABLE
             ParasiteCodes.SU_AUTH_FAILED -> HiddenFailure.ROOT_UNAVAILABLE
-            ParasiteCodes.SU_AUTH_REVOKE_FAILED -> HiddenFailure.DEACTIVATE_FAILED
+            ParasiteCodes.SU_AUTH_REVOKE_FAILED,
+            ParasiteCodes.HOST_BACKUP_CLEANUP_FAILED,
+            ParasiteCodes.IDENTITY_CLEANUP_FAILED,
+            ParasiteCodes.CLEANUP_CHECKPOINT_FAILED,
+            -> HiddenFailure.DEACTIVATE_FAILED
 
             ParasiteCodes.HOST_BACKUP_FAILED -> HiddenFailure.HOST_BACKUP_FAILED
 

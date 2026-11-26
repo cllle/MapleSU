@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <iostream>
 #include <fcntl.h>
 #include <unistd.h>
@@ -36,9 +36,11 @@ namespace kernel_module {
 namespace export_symbol {
 using namespace asmjit::a64;
 // 原型：struct task_struct *current(void); 获取current指针并赋值到寄存器out_regs，需判空，因为kthread无法获取。无返回值。
+KModErr get_current_checked(Assembler* a, GpX out_regs);
 void get_current(Assembler* a, GpX out_regs);
 
 // 获取当前线程的 thread_info 指针并赋值到寄存器 out_regs。需判空，无返回值。
+KModErr get_current_thread_info_checked(Assembler* a, GpX out_regs);
 void get_current_thread_info(Assembler* a, GpX out_regs);
 
 // 原型：unsigned long copy_from_user(void *to, const void __user *from, unsigned long n); 返回值为 X0 寄存器

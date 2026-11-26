@@ -57,6 +57,13 @@
     <string name="host_picker_confirm_host">Host app</string>
     <string name="host_picker_confirm_port">WebUI port</string>
     <string name="host_picker_running">Enabling</string>
+    <string name="host_picker_search_hint">Search by app name or package</string>
+    <string name="host_picker_search_clear">Clear search</string>
+    <string name="host_picker_search_empty">No matching apps</string>
+    <string name="host_picker_selected">Selected: %1$s</string>
+    <string name="hidden_operation_elapsed">Elapsed: %1$d seconds</string>
+    <string name="hidden_operation_estimated">About %1$d seconds estimated; actual time may vary</string>
+    <string name="hidden_operation_first_run">The first operation may take longer</string>
 
     <!-- unhost -->
     <string name="lite_hidden_deactivate">Remove host</string>
@@ -68,6 +75,7 @@
     <string name="lite_hidden_deactivate_step_so">Restore library</string>
     <string name="lite_hidden_deactivate_step_su">Revoke auth</string>
     <string name="lite_hidden_deactivate_step_daemon">Stop service</string>
+    <string name="lite_hidden_deactivate_step_cleanup">Clean recovery data</string>
 
     <!-- activation steps -->
     <string name="lite_hidden_step_precheck">Check host</string>

@@ -5,17 +5,19 @@
 
 #include "maplesu_payload_assets.h"
 #include "private_maple_runtime.h"
+#include "maplesu_storage_private.h"
 #include "../maplesu/install/executable_publish.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <memory>
 #include <new>
 #include <string>
 #include <string_view>
+
+extern "C" KModErr maplesu_prepare_su_exec_directory(const char*);
 
 namespace maplesu::sdk {
 
@@ -23,10 +25,6 @@ namespace maplesu::sdk {
 constexpr KModErr kOk = KModErr::OK;
 constexpr KModErr kErrPayloadAlloc = static_cast<KModErr>(-19905);
 constexpr KModErr kErrTokenMissing = static_cast<KModErr>(-19908);
-
-constexpr unsigned long kDataDirBufSize = 1024;
-constexpr unsigned long kRootKeyHeadLen = 16;
-constexpr char kDataDirFormat[] = "/data/%s/";
 
 // Equal-length feature token embedded in the payload; at install time every
 // occurrence is overwritten with the current root key.
@@ -62,12 +60,6 @@ static bool replace_feature_string_in_buf(const char* feature_string_buf,
     return write;
 }
 
-// First 16 characters of the current root key.
-static std::string get_kernel_file_dir_name() {
-    const char* root_key = __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-    return std::string(root_key).substr(0, kRootKeyHeadLen);
-}
-
 // Writes the su program to `target_path`, replacing its feature token with the
 // root key.  Returns the publisher's status.
 static KModErr write_su_exec(const char* target_path) {
@@ -78,7 +70,8 @@ static KModErr write_su_exec(const char* target_path) {
 
     if (!replace_feature_string_in_buf(
             static_inline_su_rootkey, sizeof(static_inline_su_rootkey),
-            __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(),
+            kernel_module::maplesu_request_owner_mode() ? "" :
+                __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(),
             sp_su_data.get(), sizeof(su_data))) {
         return kErrTokenMissing;
     }
@@ -95,28 +88,18 @@ KModErr unsafe_install_su() {
     const KModErr set_root_err = default_modules::module_root::set_current_root(true);
     if (set_root_err != kOk) return set_root_err;
 
-    // Path #1.
-    char path_buf[kDataDirBufSize] = {0};
-    {
-        const std::string dir = get_kernel_file_dir_name();
-        snprintf(path_buf, sizeof(path_buf), kDataDirFormat, (dir + dir[0]).c_str());
-    }
-    const std::string su_path = (std::filesystem::path(std::string(path_buf)) / "su").string();
-
-    // The kernel-owned copy uses the unextended 16-character directory.
-    char path_buf2[kDataDirBufSize] = {0};
-    {
-        const std::string dir = get_kernel_file_dir_name();
-        snprintf(path_buf2, sizeof(path_buf2), kDataDirFormat, dir.c_str());
-    }
-    const std::string su_path2 = (std::filesystem::path(std::string(path_buf2)) / "su").string();
+    std::string system_directory, kernel_directory;
+    RETURN_IF_ERROR(maplesu::storage::current_system_directory(system_directory));
+    RETURN_IF_ERROR(maplesu::storage::current_kernel_directory(kernel_directory));
+    const std::string su_path = system_directory + "su";
+    const std::string su_path2 = kernel_directory + "su";
 
     KModErr err = write_su_exec(su_path.c_str());
     if (err != kOk) return err;
     err = write_su_exec(su_path2.c_str());
     if (err != kOk) return err;
 
-    return kOk;
+    return maplesu_prepare_su_exec_directory(system_directory.c_str());
 }
 
 }  // namespace maplesu::sdk

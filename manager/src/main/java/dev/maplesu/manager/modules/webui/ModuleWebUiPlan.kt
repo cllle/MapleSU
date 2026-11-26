@@ -248,6 +248,9 @@ enum class WebUiLifecycleStage(val code: String) {
     /** 兼容门拦下：本次没有 SDK 调用。 */
     GATE_BLOCKED("WEBUI_GATE_BLOCKED"),
 
+    ENVIRONMENT_PREPARING("WEBUI_ENVIRONMENT_PREPARING"),
+    ENVIRONMENT_PREPARED("WEBUI_ENVIRONMENT_PREPARED"),
+
     /** 开始调用 SDK（这一步会执行模块 WebUI 原生代码）。 */
     SDK_OPEN("WEBUI_SDK_OPEN"),
 
@@ -377,6 +380,7 @@ class WebUiOpenCoordinator(
     private val onStage: (WebUiOpenEvent) -> Unit = {},
     private val flights: SingleFlight<String, WebUiOpenResult> = SingleFlight(),
     private val pageOpen: suspend (WebUiOpenResult) -> WebUiFailure? = { null },
+    private val prepareEnvironment: (suspend () -> WebUiFailure?)? = null,
 ) {
 
     suspend fun open(spec: WebUiOpenSpec): WebUiOpenResult = when (spec.route) {
@@ -463,6 +467,22 @@ class WebUiOpenCoordinator(
             ),
         )
 
+        prepareEnvironment?.let { prepare ->
+            emit(WebUiOpenEvent(WebUiLifecycleStage.ENVIRONMENT_PREPARING, operationId, id32, spec.route))
+            currentCoroutineContext().ensureActive()
+            val failure = try { prepare() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                WebUiFailure(WebUiFailureReason.SDK_REJECTED, "environment preparation: ${error.javaClass.simpleName}")
+            }
+            currentCoroutineContext().ensureActive()
+            if (failure != null) {
+                emit(WebUiOpenEvent(WebUiLifecycleStage.SDK_OPEN_FAILED, operationId, id32, spec.route,
+                    detail = "environment preparation failed before module submission", failure = failure))
+                return failed(spec, operationId, failure, WebUiLifecycleStage.SDK_OPEN_FAILED)
+            }
+            emit(WebUiOpenEvent(WebUiLifecycleStage.ENVIRONMENT_PREPARED, operationId, id32, spec.route))
+        }
         emit(WebUiOpenEvent(WebUiLifecycleStage.SDK_OPEN, operationId, id32, spec.route))
         currentCoroutineContext().ensureActive()
         val outcome = try {
@@ -774,9 +794,9 @@ object ModuleWebUiPlan {
     /**
      * 选路。顺序即优先级：
      *  1. 没有 web_ui 声明 → UNSUPPORTED；
-     *  2. Ultra 模块且环境 Running → ULTRA_SDK（这是设备 A 模式的正常路径）；
-     *  3. 有 liteweb daemon（A 模式的兜底 / B 模式的自建代理）→ LITEWEB_MODWEB；
-     *  4. 剩下的 KSU 脚本模块 → KSU_ASSET_WEBROOT（由 WebUIActivity 读模块 webroot）。
+     *  2. Ultra 模块 → ULTRA_SDK；未就绪时由显式打开准备真实环境。
+     *  3. KSU 脚本模块 → KSU_ASSET_WEBROOT（由 WebUIActivity 读模块 webroot）。
+     * liteweb 只服务脚本目录，原生模块不以它替代 SDK 的目录与 loader。
      */
     fun routeFor(
         hasWebUi: Boolean,
@@ -789,9 +809,7 @@ object ModuleWebUiPlan {
         if (!hasWebUi || moduleRemoved) return WebUiRoute.UNSUPPORTED
         if (isUltraModule) {
             if (!moduleEnabled) return WebUiRoute.UNSUPPORTED
-            if (ultraEnvironmentRunning) return WebUiRoute.ULTRA_SDK
-            return if (normalizeBase(litewebBaseUrl) != null) WebUiRoute.LITEWEB_MODWEB
-            else WebUiRoute.UNSUPPORTED
+            return WebUiRoute.ULTRA_SDK
         }
         if (!moduleEnabled) return WebUiRoute.UNSUPPORTED
         return WebUiRoute.KSU_ASSET_WEBROOT
@@ -821,6 +839,11 @@ object ModuleWebUiPlan {
     /** SDK 明确报告「服务已在运行」时的错误码（`SERVER_RUNNING`，见旧启动器注释）。 */
     const val SERVER_RUNNING_SDK_ERROR = -19918
 
+    fun moduleDirectoryOrNull(path: String?): String? = path?.takeIf {
+        it.startsWith('/') && it.any { c -> c != '/' } && it.none { c -> c.code < 0x20 || c == '\\' } &&
+            it.split('/').none { part -> part == "." || part == ".." }
+    }
+
     /**
      * [SdkOpenOutcome] → 失败（null = 可以继续探活）。
      *
@@ -832,8 +855,8 @@ object ModuleWebUiPlan {
      */
     fun failureFromSdkOpen(outcome: SdkOpenOutcome): WebUiFailure? {
         if (outcome.ok) {
-            if (outcome.pageOpener == WebUiPageOpener.MAPLESU && outcome.moduleDir.isNullOrBlank()) {
-                return WebUiFailure(WebUiFailureReason.SDK_REJECTED, "manager receipt missing moduleDir")
+            if (outcome.pageOpener == WebUiPageOpener.MAPLESU && moduleDirectoryOrNull(outcome.moduleDir) == null) {
+                return WebUiFailure(WebUiFailureReason.SDK_REJECTED, "manager receipt missing or invalid moduleDir")
             }
             return failureFromReceipt(true, outcome.sdkError, outcome.port)
         }

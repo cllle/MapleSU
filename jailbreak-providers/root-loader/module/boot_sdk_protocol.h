@@ -60,7 +60,7 @@ static int msu_sdk_metadata_offset(unsigned long base, unsigned long metadata,
 }
 /* __vmalloc_node_range still owns reservations and the guard page. Restrict
  * its search to the real VMALLOC range and the SDK's unsigned metadata window. */
-static int msu_sdk_arena_range(unsigned long base, unsigned long image_bytes,
+static inline int msu_sdk_arena_range(unsigned long base, unsigned long image_bytes,
     unsigned long vm_start, unsigned long vm_end, unsigned long page,
     unsigned long bytes, unsigned long *start, unsigned long *end)
 {

@@ -17,6 +17,7 @@ commit. The rules exist so that the documented boundaries cannot drift unnoticed
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -123,6 +124,23 @@ LOCAL_PATH_EXEMPT_DIRECTORIES = ("upstream", "maplesu-sdk")
 #: Files that name these strings in order to refuse them.
 LOCAL_PATH_DETECTORS = ("tools/check_architecture.py", "tools/tests/test_check_architecture.py",
                         "zygisk/package.py", "zygisk/tests/host_checks.py")
+
+#: These exact retained receipts and IR headers describe their original producer.
+#: JSON is provenance data; IR is still scanned after removing only its source metadata.
+LOCAL_PATH_RETAINED_PROVENANCE = {
+    "image-core/src/test/resources/zstd-compressed/receipt.json":
+        "5f48f34cda78416c134807abfa37092d6bda9c79604624aff15dbb26ef50c10f",
+    "manager/src/test/resources/ultrakernel/case04-saved-id-frame/SOURCE.json":
+        "e7f20f3b2c0231fcb691beb058a009f875858e1028f6ce32dcbf897bffc47148",
+    "runtime/ultra/authorization/su-isolation/stat-access/m084.patched.ll":
+        "6d5dfab0be8dfbfa0306124a36e7fa4ae077771bbf3785beac7a66eb07cb8ae1",
+    "runtime/ultra/authorization/su-isolation/stat-access/m085.patched.ll":
+        "ef195a242a8f76d95d7b1c52edcd42db26ee6af789812b37c4f51581889aeea3",
+    "runtime/ultra/boot/bootstrap-readiness/m053.patched.ll":
+        "7876faab55a70ecbb247e5d05b4188bd536dc2aed0d520f30069a6b5247638ed",
+    "runtime/ultra/policy/hook-bundles/policy-bundles.json":
+        "32fd24fea891c4a65cb5f8a664eccc9d8d00f65120106ed3533396a80059f29c",
+}
 
 #: The SDK record that pins part of the Ultra toolchain, and the scripts whose SHA-256 it (or the delivery and
 #: maintenance records under runtime/maplesu-sdk/maintenance/, formerly under work/) records. Renaming, moving or
@@ -407,15 +425,6 @@ def rule_third_party_records(repo: Repo) -> Result:
 
 CODE_SPAN = re.compile(r"`([^`\n]+)`")
 PATH_TOKEN = re.compile(r"^\.?/?[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+/?$")
-DOCUMENTED_PATH_ALIASES = {
-    "runtime/pro/bridge/NativeBridge.java": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/bridge/NativeBridge.java",
-    "runtime/upstream-pro/SDK-RELEASE.json": "runtime/maplesu-sdk/SDK-RELEASE.json",
-    "runtime/upstream-pro/maintenance/": "runtime/maplesu-sdk/maintenance/",
-    "runtime/pro/ProRuntimeClient.kt": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
-    "modules/compat/ProModuleCompatibilityRegistry.kt": "manager/src/main/java/dev/maplesu/manager/modules/compat/UltraModuleCompatibilityRegistry.kt",
-    "prokernel/ProKernelFlow.kt": "manager/src/main/java/dev/maplesu/manager/ultrakernel/UltraKernelFlow.kt",
-    "prokernel/KernelSeries.kt": "manager/src/main/java/dev/maplesu/manager/ultrakernel/KernelSeries.kt",
-}
 
 
 def rule_docs_paths(repo: Repo) -> Result:
@@ -431,8 +440,6 @@ def rule_docs_paths(repo: Repo) -> Result:
         checked.add(token)
         relative = token[2:] if token.startswith("./") else token.lstrip("/")
         candidates = [root + relative for root in DOC_PATH_ROOTS]
-        if relative in DOCUMENTED_PATH_ALIASES:
-            candidates.append(DOCUMENTED_PATH_ALIASES[relative])
         if any(repo.has(c) for c in candidates):
             continue
         if any(repo.is_excluded(c) for c in candidates):
@@ -510,12 +517,41 @@ def rule_script_layout(repo: Repo) -> Result:
 def rule_pinned_scripts(repo: Repo) -> Result:
     result = Result("pinned-scripts", "Scripts pinned by the SDK records are present and unchanged")
     if not repo.has(SDK_RECORD):
-        result.skipped = "the SDK records are not part of this tree"
+        if repo.has("release/source-policy.json"):
+            result.problems.append(f"{SDK_RECORD}: missing SDK receipt for the declared source policy")
+        else:
+            result.skipped = "the SDK records are not part of this tree"
         return result
     record = repo.text(SDK_RECORD)
     for named in sorted(set(re.findall(r'"((?:scripts|tools)/[A-Za-z0-9_./-]+)"', record))):
         if not repo.has(named):
             result.problems.append(f"{named}: named by {SDK_RECORD} but missing")
+    if repo.has("release/source-policy.json"):
+        try:
+            policy = json.loads(repo.text("release/source-policy.json"))
+            if policy.get("public_scope") == "work-in-progress-source-checkpoint":
+                from check_sdk_source_contract import checked_retained, check_snapshot_policy
+                from prepare_native_inputs import prepare
+                from release_audit import native_inputs
+
+                check_snapshot_policy(policy)
+                inputs = native_inputs(repo.root, policy)
+                for name in PINNED_SCRIPT_DIGESTS:
+                    matching = [item for item in inputs if item["path"] == name]
+                    if len(matching) != 1:
+                        raise ValueError(f"{name}: needs exactly one current native-input record")
+                    prepare(repo.root, matching[0], check_only=True)
+                    ast.parse(repo.data(name), filename=name)
+                retained = json.loads(record)
+                for item in (retained["archive"], retained["helper"], retained["environmentPolicyBoot"]["backend"]):
+                    checked_retained(repo.root, item)
+                result.notes.append(
+                    "WIP current source script identities and retained input bytes verified; "
+                    "artifact provenance and runtime acceptance remain unverified")
+                return result
+        except (KeyError, OSError, SyntaxError, TypeError, ValueError) as error:
+            result.problems.append("source snapshot contract: " + str(error))
+            return result
     digests = record.lower() + "".join(repo.text(name).lower() for base in SDK_MAINTENANCE_RECORDS
                                        for name in repo.under(base, (".json",)))
     for name in PINNED_SCRIPT_DIGESTS:
@@ -541,14 +577,25 @@ def rule_portable_paths(repo: Repo) -> Result:
                 or any(part in LOCAL_PATH_EXEMPT_DIRECTORIES for part in parts[:-1])):
             continue
         path = repo.root / name
+        retained = LOCAL_PATH_RETAINED_PROVENANCE.get(name)
         try:
             with path.open("rb") as stream:
                 head = stream.read(4096)
-                if b"\0" in head or path.stat().st_size > 2_000_000:
+                if retained is None and (b"\0" in head or path.stat().st_size > 2_000_000):
                     continue
                 data = head + stream.read()
-        except OSError:
+        except OSError as error:
+            if retained is not None:
+                result.problems.append(f"{name}: retained provenance read failed: {error}")
             continue
+        if retained is not None:
+            if path.is_symlink() or hashlib.sha256(data).hexdigest() != retained:
+                result.problems.append(f"{name}: retained provenance bytes changed")
+            elif name.endswith(".json"):
+                continue
+            else:
+                data = re.sub(rb'^(?:; ModuleID = [^\r\n]*|source_filename = [^\r\n]*)\r?$',
+                              b"", data, flags=re.MULTILINE)
         text = data.decode("utf-8", errors="replace")
         for label, pattern in LOCAL_PATH_PATTERNS:
             match = pattern.search(text)

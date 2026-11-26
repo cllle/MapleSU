@@ -26,7 +26,6 @@ import dev.maplesu.manager.installer.InstallPartition
 import dev.maplesu.manager.installer.InstallTargetDecision
 import dev.maplesu.manager.installer.InstallTargetMode
 import dev.maplesu.manager.installer.installTargetBlockerMessage
-import dev.maplesu.manager.ultrakernel.UltraKernelGenerateCodes
 import dev.maplesu.manager.workmode.ui.WorkModeTargetRow
 import dev.maplesu.manager.workmode.ui.WorkModeTargetSheet
 import dev.maplesu.manager.workmode.ui.workModeNameRes
@@ -120,9 +119,31 @@ internal fun InstallPartitionSection(
     }
 }
 
-/** Automatically discovered information is read-only, rather than a fake selection. */
+/** Boot uses its own kernel; init_boot selects an actually packaged KMI component. */
 @Composable
-internal fun InstallTargetStepSection(state: InstallUiState, modifier: Modifier = Modifier) {
+internal fun InstallTargetStepSection(state: InstallUiState, modifier: Modifier = Modifier,
+    onSelectInitBootKmi: (String?) -> Unit = {}) {
+    if (state.partition == InstallPartition.INIT_BOOT &&
+        (state.targetMode == InstallTargetMode.ULTRA || state.installMethod is InstallMethod.SelectFile)) {
+        val kmis = listOf<String?>(null) + state.initBootKmis
+        val items = listOf(stringResource(R.string.current_device_kmi)) + state.initBootKmis
+        val selected = kmis.indexOf(state.initBootKmi).coerceAtLeast(0)
+        val onSelected: (Int) -> Unit = { index ->
+            if (state.targetSelectable && index in kmis.indices) onSelectInitBootKmi(kmis[index])
+        }
+        when (LocalUiMode.current) {
+            UiMode.Material -> SegmentedColumn(modifier = modifier, content = listOf {
+                SegmentedDropdownItem(title = stringResource(R.string.select_kmi), items = items,
+                    selectedIndex = selected, enabled = state.targetSelectable, onItemSelected = onSelected)
+            })
+            UiMode.Miuix -> Column(modifier) {
+                OverlayDropdownPreference(title = stringResource(R.string.select_kmi), items = items,
+                    selectedIndex = selected, enabled = state.targetSelectable,
+                    onSelectedIndexChange = onSelected)
+            }
+        }
+        return
+    }
     when (state.targetMode) {
         InstallTargetMode.ULTRA -> InstallKernelVersionSection(profile = state.bootFlow, modifier = modifier)
         InstallTargetMode.NORMAL -> InstallNormalTargetSection(
@@ -188,7 +209,7 @@ internal fun InstallKernelVersionSection(profile: BootFlowProfile?, modifier: Mo
                 title = stringResource(R.string.install_step_kernel),
                 summary = stringResource(R.string.install_target_kernel_loading),
             )
-            profile.target != null -> {
+            profile.release.isNotBlank() -> {
                 InstallTargetInfo(
                     title = if (profile.seriesLabel.isNotEmpty()) {
                         stringResource(R.string.install_kernel_series, profile.seriesLabel)
@@ -208,9 +229,7 @@ internal fun InstallKernelVersionSection(profile: BootFlowProfile?, modifier: Mo
                 }
             }
             else -> InstallTargetInfo(
-                title = stringResource(if (profile.stableCode == UltraKernelGenerateCodes.CREDENTIAL_REQUIRED) {
-                    R.string.install_kernel_pairing_required_title
-                } else R.string.install_step_kernel_unavailable),
+                title = stringResource(R.string.install_step_kernel_unavailable),
                 summary = profile.reasonText(),
             )
         }
@@ -265,13 +284,12 @@ private fun KernelWarning(text: String) {
 private fun BootFlowProfile.reasonText(): String {
     val reason = stringResource(
         when (stableCode) {
-            UltraKernelGenerateCodes.CREDENTIAL_REQUIRED -> R.string.install_kernel_pairing_required
             "BOOT_SOURCE_READ_FAILED", "ULTRA_KERNEL_BASE_UNAVAILABLE", "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE" ->
                 R.string.install_kernel_image_unreadable
             else -> R.string.install_kernel_unavailable_hint
         },
     )
-    val imageHint = if (stableCode == UltraKernelGenerateCodes.CREDENTIAL_REQUIRED) "" else
+    val imageHint = if (stableCode.startsWith("ULTRA_INIT_") || stableCode.startsWith("ULTRA_KERNEL_INIT_BOOT_")) "" else
         "\n" + stringResource(R.string.install_kernel_boot_image_hint)
     return reason + imageHint + stableCode.takeIf(String::isNotBlank)?.let { " [$stableCode]" }.orEmpty()
 }

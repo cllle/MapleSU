@@ -16,6 +16,7 @@
 #include "manager_owner_claim.h"
 #include "manager_resident_host.h"
 #include "manager_su_runtime_factory.h"
+#include "manager_ksu_compat.h"
 #include "manager_installation_state.h"
 #include "request_protocol.h"
 #include "manager_dynamic_layout.h"
@@ -24,7 +25,9 @@
 #include "native_lookup.h"
 #include "su_nonroot_transition_work.h"
 #include "su_exec_session.h"
+#include "boot_events.h"
 static bool msu_resident_raw_targets_bound;
+static bool msu_resident_boot_events_stopped;
 #endif
 
 const u32 msu_manager_deployment_host_facts[] = {
@@ -153,6 +156,12 @@ int msu_manager_resident_init(const struct msu_resident_config *config)
         error = msu_su_exec_session_bind_boot_resident(config3->slot,
             config3->memory, config3->allocation_bytes);
         if (error) return error;
+        error = msu_ksu_compat_bind_boot_resident(config3->slot,
+            config3->memory, config3->allocation_bytes);
+        if (error) return error;
+        error = msu_boot_events_bind_boot_resident(config3->slot,
+            config3->memory, config3->allocation_bytes);
+        if (error) return error;
 #endif
     }
     error = msu_manager_owner_init(&host.owner);
@@ -234,6 +243,13 @@ int msu_manager_resident_init(const struct msu_resident_config *config)
         if (error) return error;
         error = msu_su_runtime_init(&host.metadata.host, deployment);
         if (error) return error;
+#ifdef MSU_RAW_RESIDENT_LOOKUP
+        /* kernel_init_freeable has returned in PID1; userspace init has not
+         * executed or read init.rc. Preserve its actual stage ordering. */
+        msu_resident_boot_events_stopped = false;
+        error = msu_boot_events_start(deployment);
+        if (error) return error;
+#endif
     }
     smp_store_release(&host.initialized, 1);
     return 0;
@@ -248,6 +264,12 @@ int msu_manager_resident_deployment(struct msu_deployment_namespace_record *outp
     if (!smp_load_acquire(&host.initialized) || !host.deployment_available) return -EOPNOTSUPP;
     *output = host.deployment;
     return 0;
+}
+int msu_manager_resident_ksu_appid(u32 *appid)
+{
+    if (!appid) return -EINVAL;
+    if (!smp_load_acquire(&host.initialized)) return -EAGAIN;
+    return msu_manager_owner_appid(&host.owner, appid);
 }
 
 /* Only the authenticated helper session supplies principal/epoch. The template
@@ -273,6 +295,13 @@ int msu_manager_resident_discard(void)
     if (!msu_runtime_layout_ready()) return -EPROTO;
     if (!msu_resident_sleepable()) return -EWOULDBLOCK;
     if (!mutex_trylock(&msu_resident_discard_mutex)) return -EINPROGRESS;
+#ifdef MSU_RAW_RESIDENT_LOOKUP
+    if (!msu_resident_boot_events_stopped) {
+        error = msu_boot_events_stop();
+        if (error) goto out;
+        msu_resident_boot_events_stopped = true;
+    }
+#endif
     /* Every successful stage is consumed once. A pending later owner never
      * re-enters an already-discarded runtime or replays prior cleanup effects. */
     if (!msu_resident_discard_stage) {

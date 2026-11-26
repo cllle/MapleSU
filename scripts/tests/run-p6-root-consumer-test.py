@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -31,7 +32,7 @@ def main():
     junit = cached_jar('junit', 'junit', '4.13.2')
     hamcrest = cached_jar('org.hamcrest', 'hamcrest-core', '1.3')
     compiler = cached_jar('org.jetbrains.kotlin', 'kotlin-compiler-embeddable', '2.4.20')
-    java = jdk_tool("java")
+    java = jdk_tool()
     sources = [ROOT / p for p in [
         'manager/src/main/java/dev/maplesu/manager/runtime/RootManagement.kt',
         'manager/src/main/java/dev/maplesu/manager/runtime/SdkRootShellClient.kt',

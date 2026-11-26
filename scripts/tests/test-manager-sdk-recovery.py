@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -478,7 +479,7 @@ class UltraSdkPreparationReasonTest {
         ("org.jetbrains.kotlinx","kotlinx-coroutines-core-jvm","1.11.0"),
         ("junit","junit","4.13.2"),("org.hamcrest","hamcrest-core","1.3")]]
     compiler=cached_jar("org.jetbrains.kotlin","kotlin-compiler-embeddable","2.4.20")
-    java=jdk_tool("java")
+    java=jdk_tool()
     classes=out/"classes"
     classes.mkdir(parents=True,exist_ok=True)
     cp=os.pathsep.join(map(str,[classes,*deps]))

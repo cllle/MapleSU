@@ -15,6 +15,20 @@ import java.io.IOException
 class StockInstallAttemptTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun failedCleanupKeepsTheOriginalCancellationPrimary() {
+        val source = temporary.newFile("cancel-cleanup-source.img")
+        val cancelled = java.util.concurrent.CancellationException("cancelled")
+        val failure = assertThrows(java.util.concurrent.CancellationException::class.java) {
+            StockInstallAttempt.run<Unit>(source, "boot", prepare = { throw cancelled },
+                acquireSource = {}, produce = { error("unexpected producer") }, beforeCommit = {},
+                commit = { error("unexpected commit") }, cancel = { throw IOException("cleanup failure") })
+        }
+        assertEquals(cancelled, failure)
+        assertEquals("INSTALLER_CANCELLATION_FAILED", failure.suppressed.single().message)
+        assertEquals("cleanup failure", failure.suppressed.single().cause?.message)
+        assertFalse(source.exists())
+    }
+
     private fun runAttempt(failAt: String = "", mutate: ((InstallCandidateImage) -> InstallCandidateImage)? = null): Pair<List<String>, String> {
         val events = mutableListOf<String>()
         val source = File(temporary.root, "source.img")
@@ -112,14 +126,14 @@ class StockInstallAttemptTest {
 
     @Test fun failedCancelIsVisibleAndRetainsOriginalError() {
         val source = temporary.newFile("source.img")
-        val failure = assertThrows(IllegalStateException::class.java) {
+        val failure = assertThrows(IOException::class.java) {
             StockInstallAttempt.run<Unit>(source, "boot", prepare = { throw IOException("prepare failure") },
                 acquireSource = {}, produce = { error("unexpected producer") }, beforeCommit = {},
                 commit = { error("unexpected commit") }, cancel = { throw IOException("cancel failure") })
         }
-        assertEquals("INSTALLER_CANCELLATION_FAILED", failure.message)
-        assertEquals("cancel failure", failure.cause?.message)
-        assertEquals("prepare failure", failure.suppressed.single().message)
+        assertEquals("prepare failure", failure.message)
+        assertEquals("INSTALLER_CANCELLATION_FAILED", failure.suppressed.single().message)
+        assertEquals("cancel failure", failure.suppressed.single().cause?.message)
         assertFalse(source.exists())
     }
 

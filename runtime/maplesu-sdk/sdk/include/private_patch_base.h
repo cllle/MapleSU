@@ -25,6 +25,7 @@ namespace default_modules {
         ~PatchBase();                                                      \
         KModErr patch_kernel_before_hook(uint64_t kaddr, const asmjit::a64::Assembler* assembler); \
         KModErr patch_kernel_after_hook(uint64_t kaddr, const asmjit::a64::Assembler* assembler);  \
+        KModErr emit_check_current_allow_selinux_to_x10_checked(asmjit::a64::Assembler* assembler); \
         void emit_check_current_allow_selinux_to_x10(asmjit::a64::Assembler* assembler);           \
                                                                                \
     private:                                                               \

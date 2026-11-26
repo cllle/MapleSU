@@ -46,7 +46,8 @@ struct msu_boot_sdk_layout {
     unsigned int task_bytes, cred_bytes, task_cred;
     unsigned int cred_suid, cred_securebits, cred_usage, cred_usage_size;
     unsigned int kprobe_bytes, kp_addr, kp_name, kp_pre, regs_pc;
-    /* Allocator bits: noprof, native inner range, user sampler, segmented observer. */
+    /* Allocator bits: noprof, native inner range, user sampler, segmented observer.
+     * INNER | SEGMENTED selects the thirteen-argument callable as well. */
     unsigned int allocator_noprof, execmem_free, environment, seccomp;
 };
 struct msu_boot_sdk_configuration {
@@ -58,6 +59,9 @@ struct msu_boot_sdk_configuration {
 #define MSU_BOOT_SDK_ALLOCATOR_INNER 2u
 #define MSU_BOOT_SDK_ALLOCATOR_USER_SAMPLE 4u
 #define MSU_BOOT_SDK_ALLOCATOR_SEGMENTED 8u
+/* Reply padding[6]: observer support and, independently, the INNER|SEGMENTED callable. */
+#define MSU_BOOT_SDK_SEGMENTED_OBSERVER 1u
+#define MSU_BOOT_SDK_SEGMENTED_CALLABLE 2u
 #define MSU_BOOT_SDK_PROBE_BYTES 512u
 static inline int msu_boot_sdk_extent(unsigned int at, unsigned int size, unsigned int limit)
 {
@@ -83,8 +87,6 @@ static inline int msu_boot_sdk_layout_valid(const struct msu_boot_sdk_layout *p,
         msu_boot_sdk_extent(p->kp_pre, 8, p->kprobe_bytes) &&
         p->regs_pc >= 31 * 8 && p->regs_pc < 512 && !(p->regs_pc & 7) &&
         p->allocator_noprof <= (MSU_BOOT_SDK_ALLOCATOR_NOPROF | MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_USER_SAMPLE | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED) &&
-        (p->allocator_noprof & (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED)) !=
-            (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED) &&
         p->execmem_free <= 1 && p->environment <= 1 &&
         msu_boot_sdk_extent(p->seccomp, 4, p->task_bytes) &&
         (!p->environment || (p->seccomp && p->seccomp <= 32767));

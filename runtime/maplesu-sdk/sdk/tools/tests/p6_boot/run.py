@@ -25,6 +25,7 @@ def main():
                SDK / 'src/helper/helper_session.cpp']
     inputs = [*HERE.glob('*.*'), *sources, SDK / 'src/helper/helper_text.cpp',
               SDK / 'include/maplesu_storage_worker_private.h',
+              SDK / 'include/maplesu_module_environment_private.h',
               SDK / 'include/maplesu_storage_private.h', SDK / 'include/maplesu_request_private.h',
               ROOT / 'runtime/ultra/boot/bootstrap_finish.c']
     before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}

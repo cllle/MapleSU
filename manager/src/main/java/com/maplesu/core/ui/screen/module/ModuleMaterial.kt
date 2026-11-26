@@ -99,7 +99,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -188,7 +187,6 @@ fun ModulePagerMaterial(
 
     val pullToRefreshState = rememberPullToRefreshState()
 
-    val refreshTick = remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     var fabHeight by remember { mutableStateOf(56.dp) }
     val listBottomPadding = bottomInnerPadding + 16.dp +
@@ -458,7 +456,6 @@ fun ModulePagerMaterial(
             onRefresh = {
                 haptic.performHapticFeedback(HapticFeedbackType.VirtualKey)
                 actions.onRefresh()
-                refreshTick.intValue++
             },
             state = pullToRefreshState,
             indicator = {
@@ -507,7 +504,6 @@ fun ModulePagerMaterial(
                 listState,
                 uiState.sortEnabledFirst,
                 uiState.sortActionFirst,
-                refreshTick.intValue,
                 isBusy = { latestRefreshing.value },
             ) { latestModuleList.value }
             ModuleList(
@@ -594,6 +590,7 @@ private fun ModuleList(
             val moduleUpdateInfo = updateInfoMap[module.id] ?: ModuleUpdateInfo.Empty
 
             ModuleItem(
+                modifier = Modifier.animateItem(),
                 module = module,
                 isPending = module.id in pendingModuleIds,
                 removalPending = module.id in removalChanges,
@@ -796,6 +793,7 @@ private fun ModuleItem(
     removalPending: Boolean = false,
     recoveryOnly: Boolean = false,
     environmentWebUiAvailable: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val cardArt by produceState<ImageBitmap?>(null, context, module.id, ModuleCardArt.version) {
@@ -820,7 +818,7 @@ private fun ModuleItem(
     val cardInteractionSource = remember { MutableInteractionSource() }
 
     TonalCard(
-        modifier = Modifier.fillMaxWidth().onSizeChanged { cardSize = it }.then(cardArtModifier),
+        modifier = modifier.fillMaxWidth().onSizeChanged { cardSize = it }.then(cardArtModifier),
         containerColor = if (art != null) Color.Transparent else cardContainer,
         contentColor = MaterialTheme.colorScheme.contentColorFor(cardContainer),
         interactionSource = cardInteractionSource,

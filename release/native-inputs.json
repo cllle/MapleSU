@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "sdk_build_id": "maplesu-ultra-source-7af6f0d42a440ac7",
-  "sdk_archive_sha256": "7af6f0d42a440ac7616d555ab788d90f728dc0fc89df46e7976c5634cf3749e4",
-  "helper_sha256": "7bb87568ae7a259394feae39d7ffb37541b8c799ee23feb0813a2dc6ff95fc44",
-  "policy_backend_sha256": "4728060da7028ab28d8e1faa11932eff195760a27784ad756d8660f5c4ab2263",
+  "sdk_build_id": "maplesu-pro-source-f7acc05a435c3b9f",
+  "sdk_archive_sha256": "f7acc05a435c3b9f5beba1112cf12b123cca57ad5c1eae3ad4c9529b7a502f0c",
+  "helper_sha256": "9e5b77b0873e8311339dd32267752b7656a0c44b17de29b2dee4ba9edcb5ec34",
+  "policy_backend_sha256": "273c730d625fbb4575d19c07f43aad88a4eae85d4a9b564645c9ff9b038f30f3",
   "files": [
     {
       "path": ".deps/selinux/.circleci/config.yml",
@@ -9257,8 +9257,121 @@
     },
     {
       "path": "jailbreak-providers/root-loader/module/boot_sdk_allocator.h",
-      "bytes": 5453,
-      "sha256": "4324a9d5a27a887796ad81347d88e7c8f6d71b4449cdf2ebf7bb13fa44963b0e"
+      "bytes": 5434,
+      "sha256": "5cd67ab9084710b7e6b5db0bccc1ed9d34f51d178ffeaa80890745d32e208e2a"
+    },
+    {
+      "path": "jailbreak-providers/shark/plants/arm64-v8a/plant-61223",
+      "bytes": 47208,
+      "sha256": "f492283c410e7a421cee83a043eee770d727b83d921c1eb6d5670500f0ef4b18",
+      "repository": "https://github.com/Yunnijian/Shark",
+      "commit": "2af72cb8959fae5f1c7f929a649db5e546334cef",
+      "source_path": "jailbreak-providers/shark/upstream/exploit/src/K61223_plant.c",
+      "source_sha256": "df1a688925cfdc3afce2d29e4ef2bc08e57fcf47a4f76221c9dce26bb92b302f",
+      "license_status": "GPL-3.0",
+      "reason": "Project-built retained-source plant; manifest, all 24 source hashes and exact output hashes statically verified. Build replay and runtime acceptance remain pending."
+    },
+    {
+      "path": "jailbreak-providers/shark/plants/arm64-v8a/plant-61238",
+      "bytes": 46920,
+      "sha256": "010b1c4426456e215616609bff263e8f5965fe109d3fe1ab4f95dbb351b7f271",
+      "repository": "https://github.com/Yunnijian/Shark",
+      "commit": "2af72cb8959fae5f1c7f929a649db5e546334cef",
+      "source_path": "jailbreak-providers/shark/upstream/exploit/src/K61238_plant.c",
+      "source_sha256": "f2d8ad16df7f2bc9dd60b20b0d497d14c7e282715a98bac2bdafca78b20df31f",
+      "license_status": "GPL-3.0",
+      "reason": "Project-built retained-source plant; manifest, all 24 source hashes and exact output hashes statically verified. Build replay and runtime acceptance remain pending."
+    },
+    {
+      "path": "jailbreak-providers/shark/plants/arm64-v8a/plant-61258",
+      "bytes": 88136,
+      "sha256": "e2096ce9903a7ab804f15faefeeb955730259bde9f96d0fbd53de7efcef190ca",
+      "repository": "https://github.com/Yunnijian/Shark",
+      "commit": "2af72cb8959fae5f1c7f929a649db5e546334cef",
+      "source_path": "jailbreak-providers/shark/upstream/exploit/src/K61258_plant.c",
+      "source_sha256": "820c6519faf26537886361ed9a323c252478b83a5d4b149235c76aa7c02b8f20",
+      "license_status": "GPL-3.0",
+      "reason": "Project-built retained-source plant; manifest, all 24 source hashes and exact output hashes statically verified. Build replay and runtime acceptance remain pending."
+    },
+    {
+      "path": "jailbreak-providers/shark/plants/arm64-v8a/plant-61269",
+      "bytes": 47216,
+      "sha256": "440388e7bd4c8cb34437117eec361079216d66eb591abbc9da25ce7fd7ebe901",
+      "repository": "https://github.com/Yunnijian/Shark",
+      "commit": "2af72cb8959fae5f1c7f929a649db5e546334cef",
+      "source_path": "jailbreak-providers/shark/upstream/exploit/src/K61269_plant.c",
+      "source_sha256": "3016cc5626efef62d993160f1e06ff9948185ffd5e4f354c2974f201a68d6947",
+      "license_status": "GPL-3.0",
+      "reason": "Project-built retained-source plant; manifest, all 24 source hashes and exact output hashes statically verified. Build replay and runtime acceptance remain pending."
+    },
+    {
+      "path": "jailbreak-providers/shark/plants/arm64-v8a/plant-61821",
+      "bytes": 48184,
+      "sha256": "e8c2530af2f4cd02d37d043d08ce3246f1aa0909e2814448b8beeab4a99ce460",
+      "repository": "https://github.com/Yunnijian/Shark",
+      "commit": "2af72cb8959fae5f1c7f929a649db5e546334cef",
+      "source_path": "jailbreak-providers/shark/upstream/exploit/src/K61821_plant.c",
+      "source_sha256": "d78159ec5c9e5501da22b4672c67cabcc9d0716a6a895aecf3e732607652eabd",
+      "license_status": "GPL-3.0",
+      "reason": "Project-built retained-source plant; manifest, all 24 source hashes and exact output hashes statically verified. Build replay and runtime acceptance remain pending."
+    },
+    {
+      "path": "jailbreak-providers/shark/plants/arm64-v8a/plant-66118",
+      "bytes": 47544,
+      "sha256": "4f12224e267aa5de874445de54a1416a0e487e9436937a0e69b9f43bd13368b8",
+      "repository": "https://github.com/Yunnijian/Shark",
+      "commit": "2af72cb8959fae5f1c7f929a649db5e546334cef",
+      "source_path": "jailbreak-providers/shark/upstream/exploit/src/K66118_plant.c",
+      "source_sha256": "0906fc2aa507f0766aaeae8d555ff0cd19af20ace046b2ca5864a28fcdd4c911",
+      "license_status": "GPL-3.0",
+      "reason": "Project-built retained-source plant; manifest, all 24 source hashes and exact output hashes statically verified. Build replay and runtime acceptance remain pending."
+    },
+    {
+      "path": "jailbreak-providers/shark/plants/arm64-v8a/plant-66127",
+      "bytes": 85208,
+      "sha256": "d28abdd10c24a317f2f9ccb273f907a375c13a52b321a914f7fd7deeb15ad319",
+      "repository": "https://github.com/Yunnijian/Shark",
+      "commit": "2af72cb8959fae5f1c7f929a649db5e546334cef",
+      "source_path": "jailbreak-providers/shark/upstream/exploit/src/K66127_plant.c",
+      "source_sha256": "1eef36990f8d50f2473060dc42dff1eb83a37267908e3cb03f43b1a471bdd8b7",
+      "license_status": "GPL-3.0",
+      "reason": "Project-built retained-source plant; manifest, all 24 source hashes and exact output hashes statically verified. Build replay and runtime acceptance remain pending."
+    },
+    {
+      "path": "manager/src/main/assets/ultra-kernels/recovery/kernel-inverses/065190241d93cee3585c22ab473f4bef1b28df406c175d03bb39aeaae10afe34.bin",
+      "bytes": 1576,
+      "sha256": "ab02c3d01facc32f4d9723117de4fe78a589bdf82f8157cbdebbb71e9267c61d",
+      "reason": "Retained project recovery or SDK baseline input; source-checkpoint inventory, not runtime acceptance."
+    },
+    {
+      "path": "manager/src/main/assets/ultra-kernels/recovery/kernel-inverses/529d6e612c182091787b1a963d180a2d592c713200f4197af8b5161f4e0f3ac6.bin",
+      "bytes": 1576,
+      "sha256": "f901dc7b5444f13e4fa79af38101219b672065630fa350795a5951b81b67db90",
+      "reason": "Retained project recovery or SDK baseline input; source-checkpoint inventory, not runtime acceptance."
+    },
+    {
+      "path": "manager/src/main/assets/ultra-kernels/recovery/kernel-inverses/6fe408ccae579af6a071c0a28492b1708e2374403390259c23e0d2db3b7fc37b.bin",
+      "bytes": 1576,
+      "sha256": "ad3e7b621850a88ab97ec0ffdabbccd510de6528eefd6fd030b17dc8a9c8208f",
+      "reason": "Retained project recovery or SDK baseline input; source-checkpoint inventory, not runtime acceptance."
+    },
+    {
+      "path": "manager/src/main/assets/ultra-kernels/recovery/kernel-inverses/7a78d504d95c5768744fd264de862fc0166e2f2235d99d5d76ae2a13534e85e7.bin",
+      "bytes": 32884,
+      "sha256": "18a0251e85326363303e893f82dd28565603e64691a82e1fec7e31da219cb32b",
+      "reason": "Retained project recovery or SDK baseline input; source-checkpoint inventory, not runtime acceptance."
+    },
+    {
+      "path": "manager/src/main/assets/ultra-kernels/recovery/kernel-inverses/8bb9c45c0b2ff3d84f35d8c84624bca6e7d08288c0b99728370eb4c6749ee8ae.bin",
+      "bytes": 1576,
+      "sha256": "22a1e02afa6788a6dee3eaddf3dfec34d052b0d49b0a1c9c4129692ea41f27df",
+      "reason": "Retained project recovery or SDK baseline input; source-checkpoint inventory, not runtime acceptance."
+    },
+    {
+      "path": "manager/src/main/assets/ultra-kernels/recovery/kernel-inverses/9ee6d3759f50db6d96869aea88e5b79d8fe6cc5608df6bf93bd7dcc7bc838d7c.bin",
+      "bytes": 32928,
+      "sha256": "84714619ec78e356018fa3d11174b174ff31b41dc3e1f8d70236191fb902206b",
+      "reason": "Retained project recovery or SDK baseline input; source-checkpoint inventory, not runtime acceptance."
     },
     {
       "path": "manager/src/main/assets/ultra-manager-claim/android12-5.10/claim.so",
@@ -11577,13 +11690,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/SDK-IDENTITY.cmake",
-      "bytes": 647,
-      "sha256": "187464eb9fe067300b53ec0092e6c1554d6ae6edd63f4a8e7cdf053d5774a8bd"
+      "bytes": 643,
+      "sha256": "b7470276d33d5222d19f0d40b8ec7411ae1c489b75a3e7c2574e16a19769fc2f"
     },
     {
       "path": "runtime/maplesu-sdk/SDK-RELEASE.json",
-      "bytes": 4843,
-      "sha256": "f94ad587b4e07180ef28b6092c0b94ac609d48269a7152911fc6fde92f7971b8"
+      "bytes": 801556,
+      "sha256": "5b21b3132bc74ea0f6e48226b83631df4b5c5e543ede87013b66e00f500f3823"
     },
     {
       "path": "runtime/maplesu-sdk/SDK-SOURCES.json",
@@ -11596,24 +11709,29 @@
       "sha256": "dc56c44f5ba0ef8c0669ac8b4cb70b825b3af20c6eee574af6cf1ba83f3af3ab"
     },
     {
+      "path": "runtime/maplesu-sdk/backend/libmaplesu_policy_boot.273c730d625fbb4575d19c07f43aad88a4eae85d4a9b564645c9ff9b038f30f3.so",
+      "bytes": 4033216,
+      "sha256": "273c730d625fbb4575d19c07f43aad88a4eae85d4a9b564645c9ff9b038f30f3"
+    },
+    {
       "path": "runtime/maplesu-sdk/backend/libmaplesu_policy_boot.4728060da7028ab28d8e1faa11932eff195760a27784ad756d8660f5c4ab2263.so",
       "bytes": 4188216,
       "sha256": "4728060da7028ab28d8e1faa11932eff195760a27784ad756d8660f5c4ab2263"
     },
     {
       "path": "runtime/maplesu-sdk/backend/policy-bundles.cpp",
-      "bytes": 1100369,
-      "sha256": "6e36c28fd4705e9ee9719b26c28b52c78e2fdd8f63c5c8a4bc4560a725f5ebf1"
+      "bytes": 1069357,
+      "sha256": "302b910377e24a7766deda98082f2fe682c33d97e026f595b3e2e587c0e95e4a"
     },
     {
       "path": "runtime/maplesu-sdk/backend/policy-bundles.json",
-      "bytes": 42619,
-      "sha256": "a1d9a4c0eea729ad0896af469e111899c22025a35dd06b2f0a0ab088035a33b0"
+      "bytes": 42434,
+      "sha256": "7e50ecc8a24ba92c90cb99a54520c97c935748867e5b8dd887662ae5bfa5bd2e"
     },
     {
       "path": "runtime/maplesu-sdk/helper/autorun_bootstrap",
-      "bytes": 1812496,
-      "sha256": "7bb87568ae7a259394feae39d7ffb37541b8c799ee23feb0813a2dc6ff95fc44"
+      "bytes": 1369296,
+      "sha256": "9e5b77b0873e8311339dd32267752b7656a0c44b17de29b2dee4ba9edcb5ec34"
     },
     {
       "path": "runtime/maplesu-sdk/include/a_kernel_module_kit_umbrella.h",
@@ -11762,8 +11880,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/include/kernel_offsets/task_struct.h",
-      "bytes": 7696,
-      "sha256": "6932e29a13586a0216dfc2665e043f028cc0773411b8112fa83a74c5759626de"
+      "bytes": 8145,
+      "sha256": "160f9be77fa61f7a361cf52bc881a16be2131d0a678aad9a563dea83c2676b7f"
     },
     {
       "path": "runtime/maplesu-sdk/include/kernel_offsets/vm_area_struct.h",
@@ -11857,13 +11975,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/include/module_base_kernel_export_symbol.h",
-      "bytes": 24229,
-      "sha256": "a2f93607a9f6d242763093211eb95e49c21a0e0c42587f56761f09cf61e023bf"
+      "bytes": 24354,
+      "sha256": "7d2d9c68a7db86b43f5dad5dd1428c9b2bffb8b43a403e6a0b9ba27700d264f7"
     },
     {
       "path": "runtime/maplesu-sdk/include/module_base_kernel_export_symbol.inl",
-      "bytes": 40403,
-      "sha256": "c8ac54d7817687e34207246fbe46c927f97a41800b9f48e76ec0c0ff54516639"
+      "bytes": 41587,
+      "sha256": "f66caabd1535a49cbb4c034e6e2869edeea78b67939a0e77d0709274de0e60c7"
     },
     {
       "path": "runtime/maplesu-sdk/include/module_base_kernel_func_executor.h",
@@ -12412,8 +12530,14 @@
     },
     {
       "path": "runtime/maplesu-sdk/lib/arm64-v8a/libkernel_module_kit_static.a",
-      "bytes": 20353684,
-      "sha256": "7af6f0d42a440ac7616d555ab788d90f728dc0fc89df46e7976c5634cf3749e4"
+      "bytes": 17160228,
+      "sha256": "f7acc05a435c3b9f5beba1112cf12b123cca57ad5c1eae3ad4c9529b7a502f0c"
+    },
+    {
+      "path": "runtime/maplesu-sdk/maintenance/baseline/libkernel_module_kit_static.a",
+      "bytes": 18019554,
+      "sha256": "215cdd0c928f46f282b11a7be18e604eed2c96a668783071b82a2f2329148272",
+      "reason": "Retained project recovery or SDK baseline input; source-checkpoint inventory, not runtime acceptance."
     },
     {
       "path": "runtime/maplesu-sdk/maintenance/entry/build.json",
@@ -12439,6 +12563,12 @@
       "path": "runtime/maplesu-sdk/maintenance/freeze/freeze-maplesu-pro-5.2.0-su-uid-isolation-20261114-20261114/archive/libkernel_module_kit_static.a",
       "bytes": 18920256,
       "sha256": "49df399288a2fc08d38c7c20e0632fbb21525fb05723a3443cb14fabd350b1e9"
+    },
+    {
+      "path": "runtime/maplesu-sdk/maintenance/freeze/freeze-maplesu-pro-5.2.0-su-uid-isolation-20261114-20261114/helper/autorun_bootstrap",
+      "bytes": 1351120,
+      "sha256": "6d270d39bc65165c2dec54e8f6923b2a405325c5ffe63c958ce35e138bff7c31",
+      "reason": "Byte-identical to already public retained SDK helper input at runtime/maplesu-sdk/sdk/assets/autorun_bootstrap.bin"
     },
     {
       "path": "runtime/maplesu-sdk/maintenance/freeze/freeze-maplesu-pro-5.2.0-su-uid-isolation-20261114-20261114/include/a_kernel_module_kit_umbrella.h",
@@ -13352,8 +13482,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/include/default_modules_module_root_patch_base.h",
-      "bytes": 1674,
-      "sha256": "2b219b0e9d33d74e87ef5cae3e5f2fd7af6ddb6107c28f4057f952701ac9e3c3"
+      "bytes": 1763,
+      "sha256": "41e5dc16c47e1e724cb34b43391e499c32351b98624d8e313b07239365a87f09"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/include/file_utils/file_utils.h",
@@ -13407,8 +13537,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/include/maplesu_module_environment_private.h",
-      "bytes": 6033,
-      "sha256": "311bde9147eed782a7e25ce3178274cbab1c05e845223ca431632051fd8f5670"
+      "bytes": 7054,
+      "sha256": "a954858cae83f485298f8a23f53f9bb7fc09278a6ff666041aac78ee2fa41dca"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/include/maplesu_module_install_private.h",
@@ -13502,13 +13632,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/include/private_patch_base.h",
-      "bytes": 3107,
-      "sha256": "3504ca07dc4ed983f815e31abfec9d9f4d7c4a86218c84e1bd6f0810d842b146"
+      "bytes": 3210,
+      "sha256": "e2a98c7855528628305b86aa9a18a8ddcbbacf0b69da18a839c175da72c3179a"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/manifest.jsonl",
-      "bytes": 368811,
-      "sha256": "129b52f518f87fad39eaab96cf39bced723de356c9c1187bdb3c1ab2dee503b1"
+      "bytes": 324017,
+      "sha256": "706f6ce1f47f85ed3a1d3271669bdeb3787b2f10b43559f71095cc96eb239147"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/manifest/0000_cred.o.json",
@@ -13752,8 +13882,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/manifest/0048_maplesu_unsafe_su_install.o.json",
-      "bytes": 6760,
-      "sha256": "437b324e34944bd6f6d1394287ff2c73f92afc98e9d3637a549501027441f70e"
+      "bytes": 6108,
+      "sha256": "8b0028d251cbaa8eeba3c1839b68223aa9e2da2172acfca89576a2aca1fd347c"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/manifest/0049_maplesu_unsafe_resetprop_install.o.json",
@@ -14937,8 +15067,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/helper/bootstrap_runtime.cpp",
-      "bytes": 10967,
-      "sha256": "0dd3129fd6868a67c06bbc97e26eb71e520b7e0e9e3a24837a0a59d750a69458"
+      "bytes": 11351,
+      "sha256": "3d7bb476e607ac4490e89bb154510cc51a558f755f614630af70fb1f6e225f0e"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/helper/helper.dynlist",
@@ -15052,8 +15182,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/file.cpp",
-      "bytes": 25414,
-      "sha256": "22894e5ed8a091d11d06411d09bb814575209d2218f688b03f628df2ef636413"
+      "bytes": 25489,
+      "sha256": "1dfaa82e0159db83e8a4d5beda331a68ab5b47537e81a7ee82b85a9044794e45"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/file_operations.cpp",
@@ -15072,8 +15202,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/inode.cpp",
-      "bytes": 70051,
-      "sha256": "227619bb72f137ba75b009eb1efb83a7fac31ccc1d70895bf8bdd083d7de6c02"
+      "bytes": 70076,
+      "sha256": "b709ef1e4833ab427f18d5a7097a5c0fdf8e59bc8866af470dab4887af297caa"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/inode_operations.cpp",
@@ -15097,13 +15227,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/mm_struct.cpp",
-      "bytes": 29832,
-      "sha256": "166eb0a8a012e0388596c181d434ece89bf28f7e4a39864d351080da583875ce"
+      "bytes": 29907,
+      "sha256": "f5ddd9b8ff3bbd4fd2b3682c7aa2f91afcdea74d354a2191127b1ba771df02a8"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/offset_probe_private.h",
-      "bytes": 10332,
-      "sha256": "2f77103287bc75a0bacfcd2febaa5caf7266585e89084e0d3db446bbc84332a2"
+      "bytes": 10357,
+      "sha256": "c0f275d37e5c15554794b17cbde5dd46eb6f854f84e085be3c0cf27f92f14936"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/offsets_internal.h",
@@ -15127,8 +15257,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/renamedata.cpp",
-      "bytes": 14861,
-      "sha256": "de9bcf26380d0c544fe26d5ec432b490a1cbb66548324af4f5a0f642228c72da"
+      "bytes": 14907,
+      "sha256": "5444c7297aa8d6b233bd2a5b8a92b9c19acdf7771f7f81f3f2cecbcf19cfd2b9"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/seq_file.cpp",
@@ -15147,8 +15277,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/task_comm_scan.cpp",
-      "bytes": 4556,
-      "sha256": "5558619c40f5623695c24c686b31ee507946f7b949fe985c5cd4bdab30586747"
+      "bytes": 4581,
+      "sha256": "071802d190f44bd00c35a8108452c8caf3bb3b37f6c66c0d383eb0b3d31662ea"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/task_comm_scan.h",
@@ -15157,13 +15287,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/task_struct.cpp",
-      "bytes": 38033,
-      "sha256": "12501bec8c9e6652f360ad5971868fa318d420bcdfae15b24f98498eb5c0cb3f"
+      "bytes": 37359,
+      "sha256": "4b8dbc72b73842374cf117a943cea6e03e563d91b8b6d5f7675b042e6031675a"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_offsets/vm_area_struct.cpp",
-      "bytes": 17441,
-      "sha256": "2b65ad0aed081ca1034b9efdea2f243855c0076464627e5cac05197757ed285f"
+      "bytes": 17541,
+      "sha256": "9494cdca1aa52dd3fca55774848af34180aa810779fb975f2632fdbeb5337f73"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/kernel_request/module_base_kernel_request.cpp",
@@ -15402,8 +15532,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/maplesu/install/lifecycle.cpp",
-      "bytes": 31942,
-      "sha256": "59013dc25e92c059f67ff3df2bdb01e9e5cca07340b746db7ac4079628aca7a1"
+      "bytes": 32459,
+      "sha256": "ac4c076b114ec08f57c9caf3a8b475c959859f1019f7a482ff3d9e294a3457d9"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/maplesu/install/lifecycle.h",
@@ -15597,8 +15727,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/maplesu_assets/maplesu_unsafe_su_install.cpp",
-      "bytes": 4985,
-      "sha256": "b36161964bcefffc544620527294dc6e41e4091f31499de0fded97aa0772fdb7"
+      "bytes": 4436,
+      "sha256": "f75bb2ee264c0ec87a6b0982c59b273b3ec68c3e34b3dfb61329c3f64b9b8dcf"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/maplesu_assets/maplesu_unsafe_webui_loader_install.cpp",
@@ -15862,13 +15992,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/kernel/su_install_registry.c",
-      "bytes": 51822,
-      "sha256": "571cfa501b0065d04f18b2f603f77af6f032a87b08161725f5fbc6eeeeeab3ab"
+      "bytes": 55420,
+      "sha256": "6d84c1b94869c1381c0d35d75732a835ee2a5c5e138b34e4243caadeec44d280"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/kernel/su_install_registry.h",
-      "bytes": 12870,
-      "sha256": "0e6d0b4876f5c34a09d9f517d8d0cd95f7c2eca6ec4e764863674cda70919392"
+      "bytes": 13254,
+      "sha256": "cd3157c98f0aad35a625259d219281be38ca8f4962e35aa3aed3d35618d9f14b"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/kernel/su_profile_apply.c",
@@ -15947,8 +16077,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/su_exec_context.cpp",
-      "bytes": 4008,
-      "sha256": "a3b3a9a68a5198f4552031db07a675eb57f0e8d0d63c225b279936f877c60b4d"
+      "bytes": 5460,
+      "sha256": "e668cd8e20537d13fd81ca20bc530995d21fd0b51760b946041053684c39ffde"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/su_native_reader_abi.h",
@@ -16027,13 +16157,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module_base/module_base_kernel_idle_mem.cpp",
-      "bytes": 31760,
-      "sha256": "a512a7705784228f86375a5ba459b60b0ff21d2a5b00166351aae02cbe1c0695"
+      "bytes": 39858,
+      "sha256": "265af1d0e1afd9c42f4e3d719dd8a66da40ef5fe16c8f022e34a96cb8bf39ace"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module_base/module_base_kernel_physical_addr.cpp",
-      "bytes": 13056,
-      "sha256": "c403259c720cd67e08424d4d9e450308cbe99b4e78ee2860bf778537a6015447"
+      "bytes": 13081,
+      "sha256": "a05033b63adb312d3576ac1f74d8fa21dd801640c59df6e4cdeca1a15ba225be"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/module_base/module_base_kernel_physical_addr_private.h",
@@ -16082,8 +16212,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/idx082/patch_base.cpp",
-      "bytes": 18377,
-      "sha256": "6220375dffa36e357cfdc2bf9a295dcb2d5ca7c4c4774840d61cec9293706d44"
+      "bytes": 18433,
+      "sha256": "ea80e70107d9b2286eecbb4b3a4285cf190b20bf73df16aae2dfa63c7bdb7be5"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/idx083/patch_do_execve.cpp",
@@ -16097,18 +16227,18 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/ord071/patch_base.cpp",
-      "bytes": 5307,
-      "sha256": "149f7afa2457c97482094cc9cc95ffe8e564138d583f78ebcbc70c9850277501"
+      "bytes": 5577,
+      "sha256": "45523effd78e57ca26f5dc6abe053763fdf2569054cdb569a178944b7681a421"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/patch_audit_log_start.cpp",
-      "bytes": 1834,
-      "sha256": "c8c384d2e9fdd6ebcb697aaa69a1777d51847a9d8cd1132a87c0cd6dfd18413c"
+      "bytes": 1859,
+      "sha256": "09ac9ad5fef23ea96a312acf65d836a1424d3500eeff48c9783706bc92632ce8"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/patch_avc_denied.cpp",
-      "bytes": 60153,
-      "sha256": "2dbf7bf1ae1e05f18e06f5f261466abcf0e29a67bc7675f97fb1e776347ace5b"
+      "bytes": 60267,
+      "sha256": "0ddc2831c3d120f7b33093ff8b18b86c02962c4e5ed5d55d63173dd766dfbc3e"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/patch_base_0091.h",
@@ -16122,13 +16252,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/patch_current.cpp",
-      "bytes": 8338,
-      "sha256": "93a0790ccdb47136441fc226ebc1252a46b61cbb6075a17e819d63a79e595b4e"
+      "bytes": 7896,
+      "sha256": "26d395806ad6f489c64774ecc52c88fd86b22b5a70a0f9dbd8066cc300aa283b"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/patch_do_execve.cpp",
-      "bytes": 5866,
-      "sha256": "76e3f8196cf6aa531043707ce36da637dd9ad9518a728050862c64fc8a74042b"
+      "bytes": 5940,
+      "sha256": "eb3dc578b2ef90713aca26b25985ebed534a52601b16006e32dbe184c0f78a6e"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/patch_filldir64.cpp",
@@ -16182,8 +16312,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/patch/stat_uid_path.cpp",
-      "bytes": 1807,
-      "sha256": "39e6a85855976d4540cb31a324c76cb342196caea4b88bd939dcff99f86b9bed"
+      "bytes": 1855,
+      "sha256": "d3b83e40c3aea8344312b38ff3d610610649779faa995a6c4e31273f9d2a659d"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/src/payload/common/feature_token.h",
@@ -16527,8 +16657,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/p4_credential_lifecycle_fixture.cpp",
-      "bytes": 35474,
-      "sha256": "d7de3c7ea2783361570745cb6a065c8f769f2b86bf7dea7a5631d446831ece06"
+      "bytes": 38751,
+      "sha256": "540baf5ed1ba9acd14cc980261a12e378d223c85371c508192f1c4a71ed275a0"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/p4_root_receipt_fixture.cpp",
@@ -16537,8 +16667,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/p4_task_state_fixture.cpp",
-      "bytes": 19626,
-      "sha256": "17cbe11d5c8062aec30fa109edb219153cc879762fc9e79ba162180596d5b958"
+      "bytes": 21481,
+      "sha256": "fe780da23048df7877bacbbcbcf2fc58c06045e62b779d84723605305af289ec"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/p5_branch_probe.cpp",
@@ -16642,8 +16772,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/run_p4_credential_lifecycle_test.py",
-      "bytes": 5413,
-      "sha256": "55bd276a3520b36eee8bc69ebed8d42ec0b4557436355ed4124fb6d1fd173382"
+      "bytes": 6002,
+      "sha256": "356aeacd0ef57914dd206f113798a659215c9ca62714c5126fe82c2927d7a5e7"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/run_p4_root_receipt_test.py",
@@ -16652,8 +16782,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/run_p4_task_state_test.py",
-      "bytes": 6288,
-      "sha256": "8e8406a61e90a24e417251e80963f846d2a102615c5507875fe6153847fcba17"
+      "bytes": 6583,
+      "sha256": "80ea76df44c678d5bb014653e0f611248fbc0b0b427576419e58356fba56aa2a"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tests/run_p5_kernel_owner_test.py",
@@ -18407,8 +18537,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/caps_precheck/patch_current/kernel_module_kit_umbrella.h",
-      "bytes": 2380,
-      "sha256": "d6cd330dcd16d4965d5356f47cc0d751b6ccaef2d1dfd2cdc1ff67a6c0f3eacc"
+      "bytes": 2621,
+      "sha256": "d7668116b54e500076833ded6a18673952155bff5003b9122920a03bbe0c1544"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/caps_precheck/run.py",
@@ -18457,8 +18587,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/helper_native/test_session.cpp",
-      "bytes": 5033,
-      "sha256": "bb8ced6bf59763aa24580ef393e8bb1b86b08ced2ff223382bc4e94db564c79e"
+      "bytes": 5642,
+      "sha256": "a529c578b33669d644fe7a2eeee2094ea3a29e0f4554c29c38ee6aee7fad14ca"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/kernel_layout/fixtures/android12-5.10.h",
@@ -18482,8 +18612,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/kernel_layout/kernel_module_kit_umbrella.h",
-      "bytes": 4806,
-      "sha256": "6577d3334e9c5af743228d556c4266548326a8cf74ee75d0326d3e1c408cd7c3"
+      "bytes": 4932,
+      "sha256": "7d52edbeb192f2317df2db3dd97886ace21cf6560e1d497614fd6491fe5514b8"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/kernel_layout/run.py",
@@ -18542,13 +18672,13 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/mm_layout_batch/file_fixture.cpp",
-      "bytes": 8838,
-      "sha256": "518884d91ee0eda1b4128906378034e068d4e2b32abfdc4f3edc8a83b9a44d3b"
+      "bytes": 8950,
+      "sha256": "0d2448f31e8fdda3f7b93012336a7d083c528713f0efdd892c0dfcd01bd82306"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/mm_layout_batch/fixture.cpp",
-      "bytes": 11326,
-      "sha256": "2fd584221f8c2c606bc1f220a4d70d574bcb18bf6ce654668eb7c6bdfb62aa0b"
+      "bytes": 11438,
+      "sha256": "dea4b061a6c20c6e7f0dce0a8e47b1207f3b07edcbf52272b2aeefe121671f8a"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/mm_layout_batch/run.py",
@@ -18557,8 +18687,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/mm_layout_batch/task_fixture.cpp",
-      "bytes": 5145,
-      "sha256": "4af90ae4986e1af66804178af4cdea2eabe4f70f69773e6ab2f93a87a951b9cb"
+      "bytes": 5257,
+      "sha256": "2553533d2c3b222f7f7f8b3c614a1cc3652921ce9240f612cf06967f72f7f94e"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/module_desc_bounds/fixture.cpp",
@@ -18632,8 +18762,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/p6_boot/run.py",
-      "bytes": 4723,
-      "sha256": "e714f0159a921a8a2f1787ce62b3399eb1f48105c271b0588a836944bc1f7b9b"
+      "bytes": 4791,
+      "sha256": "f6f6f7986066a69e5772d40be028a4d5ab54f6591feb2a13a9d40fc1622b1cdf"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/p6_boot/run_single_close.py",
@@ -18642,8 +18772,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/p6_boot/test_boot.cpp",
-      "bytes": 12909,
-      "sha256": "14dcc784821c134294ce4aa104b371d0831d51a834dad72c5fa706f97533d535"
+      "bytes": 13312,
+      "sha256": "1ee20a511147b9c41b4369e5b5ba8e630f316ede66e51f32a145eee9dd6da3d4"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/p6_boot/test_module_environment.cpp",
@@ -18662,8 +18792,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/p6_boot/worker_boundary.cpp",
-      "bytes": 5074,
-      "sha256": "978311bbeb6ff1c942e9c733e6344c6cdd1787f90e7cd63d980c1c4034dfdd8c"
+      "bytes": 5500,
+      "sha256": "025115c3fb7c09dd940e0473f2b4c27ee778d3e71b7ba68ccbfd494ce7c4d003"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/p6_boot/worker_boundary.h",
@@ -18812,8 +18942,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/task_windows/fixture.h",
-      "bytes": 5170,
-      "sha256": "9180d142c219f891ce90be14c46bb7cf0c2347c45c286749be1cd254e7c20b00"
+      "bytes": 5295,
+      "sha256": "da8cc351866130df2917eb4d97bd785ab9733eae88d833dcb3c546a29c1fc488"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/tools/tests/task_windows/run.py",
@@ -18907,8 +19037,8 @@
     },
     {
       "path": "runtime/ultra/authorization/su-isolation/host-test/run.py",
-      "bytes": 2250,
-      "sha256": "2fc5596c16faf381e4a3ebc3fba5274480c054814e8a69b36813e44845f97a5d"
+      "bytes": 2588,
+      "sha256": "d69b4ae2123a157a48b65b14d208aab7af9a745be5045c12c22f1b421fd430fd"
     },
     {
       "path": "runtime/ultra/authorization/su-isolation/host-test/test.cpp",
@@ -19017,8 +19147,8 @@
     },
     {
       "path": "runtime/ultra/boot/su-isolation/build_helper.py",
-      "bytes": 9315,
-      "sha256": "2afafac02e8139184365498d7789896f96b494209aff5f8448b14fe87b133fef"
+      "bytes": 9483,
+      "sha256": "39d85635052ac59274418afacbc89c245146177781e9948b4499c312701263c4"
     },
     {
       "path": "runtime/ultra/boot/su-isolation/helper_su_backend.cpp",
@@ -19246,11 +19376,6 @@
       "sha256": "3897bf816066543f497ae0154ceb1e188c8dee3e2eed536781763e3389e8e0a8"
     },
     {
-      "path": "runtime/upstream-pro/include/third_party/asmjit2/LICENSE.md",
-      "bytes": 879,
-      "sha256": "5b0f48131c666e80bae8d194389dba07bcb61831edc3ab7d7ce90f4a6a8d2ee4"
-    },
-    {
       "path": "runtime/upstream/include/____DO_NOT_EDIT____/private_api_runtime_helper.h",
       "bytes": 3398,
       "sha256": "f675022fe04fb168c0da48752850489fbf4db3fcf9ebf783fdbb21fbec1d9852"
@@ -19371,6 +19496,11 @@
       "sha256": "9855da8d30f8173a1dea8ba84052a74524d6f3b6656ee8a5033d238146ee950a"
     },
     {
+      "path": "scripts/build-ultra-policy-entry.py",
+      "bytes": 10232,
+      "sha256": "d168e546e24cdbb22607da85208b533dba5d01727d91c9b4cd7edbfbfa4ba024"
+    },
+    {
       "path": "scripts/package-ultra-memory-protection.py",
       "bytes": 10471,
       "sha256": "b771ac2c8859b947c1c0523191cb5e5f5539bf5d57c2062a47723bea22ea3be7"
@@ -19379,6 +19509,11 @@
       "path": "scripts/policy_backend_delivery.py",
       "bytes": 25380,
       "sha256": "b5fd5966999c0d4c8a944b8943cf93e4e18de0ac2f4af15eed26d605a5b2ef0f"
+    },
+    {
+      "path": "scripts/policy_backend_identity.py",
+      "bytes": 2251,
+      "sha256": "f66a5cf85169d738920d0c9def8006d265a62952a47292e1e588b028a0fc1d6c"
     },
     {
       "path": "scripts/policy_config_declarations.py",
@@ -19396,9 +19531,34 @@
       "sha256": "bd6a4a6e261907817c03a39f8d53ee2731e088e792cb9090e0aca3cfd79a010e"
     },
     {
+      "path": "scripts/rebind-ultra-policy-backend.py",
+      "bytes": 11292,
+      "sha256": "b242bb9ac8cd1a6d67bf82e31129b5147a603996159e10ac5a6dee03c8173382"
+    },
+    {
+      "path": "scripts/repair-ultra-boot-lifecycle.py",
+      "bytes": 12924,
+      "sha256": "ed2384e28881d85ea47875b6ceac5a6bcdd26292a4af22ca982110c28d9e3392"
+    },
+    {
+      "path": "scripts/repair-ultra-environment-state.py",
+      "bytes": 9576,
+      "sha256": "16fa72929fced0e2540ff71890abbc5e16b457f822cfae970e95eb97871ede57"
+    },
+    {
       "path": "scripts/repair-ultra-environment-upgrade.py",
       "bytes": 9767,
       "sha256": "cf5e1fb977be655321363b10f77b2b20903917cf79a9d7ed9ebff1defeabba95"
+    },
+    {
+      "path": "scripts/repair-ultra-request-context.py",
+      "bytes": 16061,
+      "sha256": "6bc78b10f82bea84c1b4ecf74a44af27557d53ca72da5e37e53095f014bccd14"
+    },
+    {
+      "path": "scripts/repair-ultra-request-reply.py",
+      "bytes": 11884,
+      "sha256": "b405b978a9509ad0034e99f65c831bf5387572cb9fa370153e8c705a892f46e3"
     },
     {
       "path": "scripts/repair-ultra-su-authorization.py",

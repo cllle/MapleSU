@@ -13,20 +13,18 @@ import dev.maplesu.manager.installer.LenovoSigningOptions
  * 页面只承载**用户的选择**与**纯函数算出来的结论**：
  * - [targetMode] 是步骤 ① 的目标工作模式（默认 Ultra）；
  * - [partition] 是步骤 ① 的实际目标载体；更新保持已观测载体，切换进入原载体恢复事务；
- * - [bootFlow] 是 Ultra 的步骤 ③（Ultra 内核版本）；
+ * - [bootFlow] 是 Ultra boot 的步骤 ③；init_boot 使用 [initBootKmi] 选择对应目标的内嵌组件；
  * - [normalDecision] 是 Normal 的步骤 ③（设备 KMI + 分区 → 能不能装），由纯函数
  *   `InstallTargetDispatch.decide` 算出，页面只投影。
  */
 @Immutable
 internal data class InstallUiState(
     val installMethod: InstallMethod?,
-    /** File is always offered; the current partition requires an actual Root grant. */
+    /** Both sources are offered before execution requests actual Root access. */
     val installMethodOptions: List<InstallMethod>,
     /**
-     * 步骤 ③（Ultra）：这个 boot 能被修成哪个内核版本。
-     *
-     * `null` = 还没选来源。**它参与 [canInstall]**：步骤 ③ 是四步里的必选一步，
-     * 没有可选目标时按钮不可点（并就地显示原因），而不是让用户点了再看到失败。
+     * 步骤 ③（Ultra boot）：从源镜像识别可修补的内核版本。
+     * init_boot 没有 kernel，组件选择与实际错误由执行链处理。
      */
     val bootFlow: BootFlowProfile? = null,
     /** 步骤 ①：目标工作模式（默认 Ultra，与 `InstallTargetMode.DEFAULT` 一致）。 */
@@ -40,8 +38,7 @@ internal data class InstallUiState(
     /**
      * 步骤 ③（Normal）：本次直装/选文件能不能装（纯函数结论）。
      *
-     * `null` = 当前目标是 Ultra（走 [bootFlow]）。`Blocked` 时「下一步」不可点，
-     * 并就地显示可读原因 + 稳定码 —— 与真正点下去时的判据**同一个函数**。
+     * 仅作页面提示；实际源镜像、KMI 与组件在执行阶段重新核实。
      */
     val normalDecision: InstallTargetDecision? = null,
     val migrationEntry: Boolean = false,
@@ -62,6 +59,8 @@ internal data class InstallUiState(
     val observedSlotSuffix: String? = null,
     val availableCarriers: Set<String>? = null,
     val bridgeFailure: String? = null,
+    val initBootKmi: String? = null,
+    val initBootKmis: List<String> = emptyList(),
 ) {
     val directInstallLabel: Int get() = com.maplesu.core.R.string.direct_install
 
@@ -91,12 +90,7 @@ internal data class InstallUiState(
             }
             if (lenovoSigning.enabled && installMethod is InstallMethod.SelectFile &&
                 !lenovoSigning.fileInputsReady(partition.wire)) return false
-            return when (targetMode) {
-                // Ultra：步骤 ③ 必须选出可修补的内核版本（既有判据，逐字保留）。
-                InstallTargetMode.ULTRA -> bootFlow?.selectable == true
-                // Normal：分区 + 设备 KMI 必须能落到本次 APK 的内嵌产物上。
-                InstallTargetMode.NORMAL -> normalDecision is InstallTargetDecision.Ready
-            }
+            return true
         }
 }
 
@@ -106,6 +100,7 @@ internal data class InstallScreenActions(
     /** 步骤 ② 选了某个 boot 来源（文件来源会立刻打开系统文件选择器）。 */
     val onSelectMethod: (InstallMethod) -> Unit,
     val onSelectBootImage: () -> Unit,
+    val onSelectInitBootKmi: (String?) -> Unit = {},
     /** 步骤 ① 选了目标工作模式（Ultra / Normal）。 */
     val onSelectTargetMode: (InstallTargetMode) -> Unit = {},
     /** 步骤 ① 选了实际目标分区。 */

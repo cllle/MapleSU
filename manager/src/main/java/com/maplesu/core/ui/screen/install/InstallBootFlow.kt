@@ -33,7 +33,7 @@ internal data class BootFlowProfile(
     val reading: Boolean = false,
     /** 来源镜像的真实内核版本；镜像身份与写入检查始终使用它。 */
     val release: String = "",
-    /** 我们能为此产出的目标；`null` = 这个内核修不了（原因在 [stableCode] / [detail]）。 */
+    /** 可选的旧调用目标提示；标准页面预览只显示来源事实，实际生成在执行阶段完成。 */
     val target: KernelTarget? = null,
     val stableCode: String = "",
     val detail: String = "",
@@ -50,7 +50,7 @@ internal data class BootFlowProfile(
     val releaseMismatch: Boolean
         get() = release.isNotEmpty() && deviceRelease.isNotEmpty() && release != deviceRelease
 
-    /** 步骤 ③ 是否已经选出了目标（「下一步」是否可点的唯一新判据）。 */
+    /** 兼容旧调用的生成结果，页面提交不以它作为前置条件。 */
     val selectable: Boolean get() = !reading && target != null
 }
 
@@ -159,7 +159,7 @@ private const val PROBE_SIZE_LIMIT = 512L * 1024 * 1024
  * **不写** `files/images/imported.img`（它在确认之前必须保持"现场 boot 的备份"语义，
  * 见 47 报告 R3）。识别完立刻删临时文件。
  */
-internal fun probeChosenBoot(context: Context, uri: Uri, deviceRelease: String, pairedBoot: File? = null): BootFlowProfile {
+internal fun probeChosenBoot(context: Context, uri: Uri, deviceRelease: String): BootFlowProfile {
     val source = uri.lastPathSegment?.substringAfterLast('/').orEmpty()
     val temp = try {
         File.createTempFile("boot-probe-", ".img", context.cacheDir)
@@ -184,15 +184,8 @@ internal fun probeChosenBoot(context: Context, uri: Uri, deviceRelease: String, 
         }
         val carrier = temp.inputStream().use(dev.maplesu.manager.installer.InstallPartitionPolicy::imagePartition)
         if (carrier == dev.maplesu.manager.installer.InstallPartition.INIT_BOOT) {
-            val paired = pairedBoot ?: return InstallBootFlow.failed(source, deviceRelease,
-                "ULTRA_INIT_PAIRED_BOOT_REQUIRED")
-            val artifact = dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(context, paired)
-                ?: return InstallBootFlow.failed(source, deviceRelease, "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED")
-            val targetRelease = ultraKernelReleaseOf(artifact.targetBoot)
-            if (targetRelease.isBlank()) return InstallBootFlow.failed(source, deviceRelease,
-                "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE")
-            return InstallBootFlow.fromFacts(source, deviceRelease, ultraKernelFacts(targetRelease))
-                .copy(hasRamdisk = true)
+            return BootFlowProfile(source = source, deviceRelease = deviceRelease,
+                hasRamdisk = dev.maplesu.image.BootImageInspector.inspect(temp).ramdiskSize > 0)
         }
         val release = try {
             ultraKernelReleaseOf(temp)
@@ -202,9 +195,10 @@ internal fun probeChosenBoot(context: Context, uri: Uri, deviceRelease: String, 
         if (release.isEmpty()) {
             return InstallBootFlow.failed(source, deviceRelease, "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE")
         }
-        // Preview uses the selected target; an old catalogue does not decide its layout.
-        InstallBootFlow.fromFacts(source, deviceRelease, ultraKernelFacts(release), temp)
-            .copy(hasRamdisk = dev.maplesu.image.BootImageInspector.inspect(temp).ramdiskSize > 0)
+        // Preview reads facts only; component selection and plan generation follow submission.
+        BootFlowProfile(source = source, deviceRelease = deviceRelease, release = release,
+            series = ultraKernelFacts(release).series,
+            hasRamdisk = dev.maplesu.image.BootImageInspector.inspect(temp).ramdiskSize > 0)
     } catch (error: Exception) {
         val code = error.message.orEmpty().substringBefore(':').takeIf {
             it.startsWith("ULTRA_INIT_") || it.startsWith("ULTRA_KERNEL_")
@@ -220,6 +214,7 @@ internal fun probeCurrentBoot(deviceRelease: String): BootFlowProfile {
     if (deviceRelease.isBlank()) {
         return InstallBootFlow.failed("current", deviceRelease, "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE")
     }
-    // 没有镜像可读：真正的凭据准备与渲染发生在确认安装时（现场 dump）。
-    return InstallBootFlow.fromFacts("current", deviceRelease, ultraKernelFacts(deviceRelease), null)
+    // 真正的源镜像、凭据与组件在 PRE 和构建阶段核实。
+    return BootFlowProfile(source = "current", deviceRelease = deviceRelease, release = deviceRelease,
+        series = ultraKernelFacts(deviceRelease).series)
 }

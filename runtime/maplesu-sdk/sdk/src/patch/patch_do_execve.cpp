@@ -34,10 +34,11 @@ public:
     ~PatchBase();
 
     std::string get_fake_su_path();
-    void emit_current_uid(Assembler* a) {
-        kernel_module::export_symbol::get_current(a, x12);
+    KModErr emit_current_uid(Assembler* a) {
+        RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, x12));
         a->ldr(x12, ptr(x12, field_0_));
         a->ldr(w12, ptr(x12, field_1_)); // +4 is the independently resolved cred.uid offset.
+        return KModErr::OK;
     }
 
     // 生成"current 是否允许 su"的判定代码，结果放 x10（非 0 表示允许）。
@@ -128,7 +129,7 @@ KModErr PatchDoExecve::patch_do_execve(uint64_t hook_kaddr) {
         aarch64_asm_set_x_cstr_ptr(a, x11, user_path);
         a->mov(x10, sp);
         kernel_module::string_ops::kstrcpy(a, x10, x11);
-        emit_current_uid(a);
+        RETURN_IF_ERROR(emit_current_uid(a));
         aarch64_asm_set_x_cstr_ptr(a, x15, std::string("0123456789abcdef"));
         const size_t digits = fake_su_path.size();
         for (unsigned index = 0; index < 8; ++index) {

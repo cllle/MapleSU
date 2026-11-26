@@ -108,17 +108,17 @@ class ModuleWebUiPlanTest {
     }
 
     @Test
-    fun ultraModuleFallsBackToLitewebProxyOnlyWhenDaemonIsReachable() {
+    fun nativeModuleKeepsSdkOwnershipWhileEnvironmentNeedsPreparation() {
         val base = "http://127.0.0.1:18427/x7k9f/${"a".repeat(64)}/"
         assertEquals(
-            WebUiRoute.LITEWEB_MODWEB,
+            WebUiRoute.ULTRA_SDK,
             ModuleWebUiPlan.routeFor(
                 hasWebUi = true, isUltraModule = true, ultraEnvironmentRunning = false,
                 litewebBaseUrl = base, moduleEnabled = true,
             ),
         )
         assertEquals(
-            WebUiRoute.UNSUPPORTED,
+            WebUiRoute.ULTRA_SDK,
             ModuleWebUiPlan.routeFor(
                 hasWebUi = true, isUltraModule = true, ultraEnvironmentRunning = false,
                 litewebBaseUrl = null, moduleEnabled = true,

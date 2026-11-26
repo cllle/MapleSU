@@ -21,4 +21,20 @@ class UltraIdentityScopeFingerprintTest {
         assertNull(fingerprint(value = null))
         assertNull(fingerprint(boot = null))
     }
+
+    @Test fun keyCacheAlsoBelongsToOwnerBootAndActivation() {
+        fun fingerprint(value: UltraRuntimeClient.ManagerOwnerIdentity? = owner,
+                        boot: String? = "boot-one", activation: Int = 1) =
+            UltraInstalledIdentityProbe.identityFingerprint("a".repeat(48), value, boot, activation)
+        val first = fingerprint()
+        assertNotNull(first)
+        assertEquals(first, fingerprint())
+        assertNotEquals(first, fingerprint(owner.copy(fullUid = 110123)))
+        assertNotEquals(first, fingerprint(owner.copy(epoch = 8)))
+        assertNotEquals(first, fingerprint(owner.copy(hostInstance = "host-two")))
+        assertNotEquals(first, fingerprint(value = null))
+        assertNotEquals(first, fingerprint(boot = "boot-two"))
+        assertNotEquals(first, fingerprint(activation = 2))
+        assertNull(fingerprint(boot = null))
+    }
 }

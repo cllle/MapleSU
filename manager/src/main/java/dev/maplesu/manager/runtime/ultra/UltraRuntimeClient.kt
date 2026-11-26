@@ -9,6 +9,7 @@ import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import dev.maplesu.manager.runtime.PageReadDeadline
 import java.net.URLDecoder
 import java.security.MessageDigest
+import java.util.concurrent.CancellationException
 import org.json.JSONObject
 
 class UltraRuntimeClient(
@@ -94,6 +95,13 @@ class UltraRuntimeClient(
             NativeReceipt.parse(block())
                 ?: NativeReceipt.bridgeFailure(operation, "MAPLESU_BRIDGE_UNPARSEABLE", "answer was not a receipt")
         } catch (error: Throwable) {
+            if (operation == "read_installed_helper") {
+                if (error is CancellationException) throw error
+                if (error is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw CancellationException("IDENTITY_READBACK_INTERRUPTED")
+                }
+            }
             NativeReceipt.bridgeFailure(operation, "MAPLESU_BRIDGE_EXCEPTION", UltraSdkLogging.redact(error.toString()))
         }
     }
@@ -224,10 +232,24 @@ class UltraRuntimeClient(
         return if (operation == "read_installed_helper") localCall(operation, submit) else call(operation, submit)
     }
 
-    internal fun readInstalledHelper(helperPath: String?, keySlotOffset: Long?): NativeReceipt =
-        callWithIdentity("read_installed_helper") {
-            NativeBridge.readInstalledHelper(it, helperPath, keySlotOffset?.takeIf { offset -> offset > 0 } ?: 0L)
+    internal fun readInstalledHelper(helperPath: String?, keySlotOffset: Long?, timeoutMillis: Int = 300): NativeReceipt {
+        val operation = "read_installed_helper"
+        if (Thread.currentThread().isInterrupted) return NativeReceipt.bridgeFailure(
+            operation, "MAPLESU_SDK_INTERRUPTED", "The request was cancelled before helper readback.")
+        val deadline = PageReadDeadline.currentNanos()
+        if (deadline != null && deadline - System.nanoTime() <= 0) return busy(operation)
+        return callWithIdentity(operation) {
+            val remaining = deadline?.let { limit -> (limit - System.nanoTime()) / 1_000_000L }
+            when {
+                Thread.currentThread().isInterrupted -> NativeReceipt.bridgeFailure(
+                    operation, "MAPLESU_SDK_INTERRUPTED", "The request was cancelled before helper readback.").raw
+                remaining != null && remaining <= 0 -> busy(operation).raw
+                else -> NativeBridge.readInstalledHelper(it, helperPath,
+                    keySlotOffset?.takeIf { offset -> offset > 0 } ?: 0L,
+                    remaining?.coerceAtMost(timeoutMillis.toLong())?.toInt() ?: timeoutMillis)
+            }
         }
+    }
 
     fun modulePolicySettings(requested: Int = -1): NativeReceipt =
         callWithIdentity(if (requested < 0) "get_module_policy_settings" else "set_module_policy_settings") {

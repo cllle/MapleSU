@@ -661,7 +661,7 @@ policies() {
     set -- "$@" --rules "$directory/sepolicy.rule"
   done
   [ "$#" -gt 0 ] || return 0
-  "$bin/maplesu-policy" apply --require-boot-policy "$@" 9>&-
+  "$bin/maplesu-policy" module-apply --require-boot-policy "$@" 9>&-
   record "$?" policy
 }
 properties_and_mount() {

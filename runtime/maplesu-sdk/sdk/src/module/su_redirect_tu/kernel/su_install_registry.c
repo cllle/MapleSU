@@ -957,6 +957,79 @@ int msu_su_registry_non_root_policy(struct msu_su_registry *registry,
     return 0;
 }
 
+int msu_su_registry_query_root(struct msu_su_registry *registry, u32 full_uid,
+    bool *out_granted, enum msu_su_non_root_umount_policy *out_policy)
+{
+    struct msu_su_install_entry *entry;
+    struct msu_uid_snapshot *snapshot;
+    struct msu_uid_snapshot_record row;
+    const struct cred *cred;
+    enum msu_su_non_root_umount_policy policy = MSU_SU_NON_ROOT_UMOUNT_DEFAULT;
+    unsigned long irq;
+    u64 generation;
+    u32 position;
+    bool granted, explicit_profile, allow_su, non_root, use_default, umount_modules;
+    int error = 0;
+    if (!registry || !out_granted || !out_policy || full_uid > 0x7fffffffU) return -EINVAL;
+    if (!msu_su_sleepable()) return -EWOULDBLOCK;
+    cred = msu_dynamic_current_cred();
+    if (!cred || cred != msu_dynamic_current_real_cred() ||
+        MSU_DYN_FIELD(cred, cred, user_ns) != &init_user_ns ||
+        __kuid_val(MSU_DYN_FIELD(cred, cred, uid)) ||
+        __kuid_val(MSU_DYN_FIELD(cred, cred, euid))) return -EPERM;
+    raw_spin_lock_irqsave(&registry->lock, irq);
+    if (registry->closed || registry->gateway_retired) error = -ESHUTDOWN;
+    else if (registry->gateway_binding || !registry->gateway_bound) error = -EINPROGRESS;
+    position = msu_su_position(registry, full_uid);
+    if (error) goto unlock;
+    if (position == registry->count || registry->entries[position]->full_uid != full_uid) {
+        *out_granted = false;
+        *out_policy = policy;
+        goto unlock;
+    }
+    entry = registry->entries[position];
+    if (entry->busy || entry->cancelled || entry->source_invalidated ||
+        (entry->revoked && entry->granted)) { error = -EINPROGRESS; goto unlock; }
+    if (entry->installation.full_uid != full_uid || !entry->installation.pin) {
+        error = -ESTALE; goto unlock;
+    }
+    generation = entry->generation;
+    granted = entry->granted;
+    explicit_profile = entry->saved_profile.explicit_profile;
+    allow_su = entry->saved_profile.allow_su;
+    non_root = entry->saved_profile.non_root;
+    use_default = entry->saved_profile.non_root_use_default;
+    umount_modules = entry->saved_profile.umount_modules;
+    raw_spin_unlock_irqrestore(&registry->lock, irq);
+    snapshot = msu_uid_gateway_acquire(&registry->host, registry->controller);
+    if (!snapshot) return -EAGAIN;
+    error = msu_uid_snapshot_lookup(snapshot, full_uid, generation, &row);
+    if (!error && (row.profile_revision != generation || !!row.decision != granted)) error = -ESTALE;
+    msu_uid_snapshot_put(snapshot);
+    if (error) return error;
+    raw_spin_lock_irqsave(&registry->lock, irq);
+    position = msu_su_position(registry, full_uid);
+    if (registry->closed || registry->gateway_retired || !registry->gateway_bound ||
+        registry->gateway_binding || position == registry->count ||
+        registry->entries[position] != entry || entry->generation != generation ||
+        entry->busy || entry->cancelled || entry->source_invalidated ||
+        entry->granted != granted || (entry->revoked && entry->granted)) error = -ESTALE;
+    raw_spin_unlock_irqrestore(&registry->lock, irq);
+    if (error) return error;
+    if (granted) policy = MSU_SU_NON_ROOT_UMOUNT_DISABLED;
+    else if (explicit_profile) {
+        if (allow_su || !non_root) return -ESTALE;
+        if (!use_default) policy = umount_modules ? MSU_SU_NON_ROOT_UMOUNT_ENABLED :
+            MSU_SU_NON_ROOT_UMOUNT_DISABLED;
+    }
+    *out_granted = granted;
+    *out_policy = policy;
+    return 0;
+unlock:
+    raw_spin_unlock_irqrestore(&registry->lock, irq);
+    return error;
+}
+
 int msu_su_lease_begin(const void *context, struct msu_su_lease *lease)
 {
     struct msu_su_registry *registry = (struct msu_su_registry *)context;

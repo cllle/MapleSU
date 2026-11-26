@@ -303,7 +303,7 @@ public final class BootImageRebuilder {
         Path source = sourceFile.toPath(), component = componentFile.toPath(), output = outputFile.toPath();
         Path work = output.toAbsolutePath().getParent().resolve(".maplesu-rebuild-" + UUID.randomUUID() + ".pending");
         BasicFileAttributes sourceIdentity = input(source, 1632, MAX_IMAGE, "BOOT_IMAGE_SIZE_LIMIT");
-        BasicFileAttributes componentIdentity = input(component, 1, MAX_KERNEL,
+        BasicFileAttributes componentIdentity = input(component, replacingRamdisk ? 0 : 1, MAX_KERNEL,
                 replacingRamdisk ? "REPLACEMENT_RAMDISK_SIZE_LIMIT" : "REPLACEMENT_KERNEL_SIZE_LIMIT");
         boolean created = false, complete = false;
         OutputIdentity outputIdentity = null;
@@ -475,7 +475,7 @@ public final class BootImageRebuilder {
         Path source = sourceFile.toPath(), component = componentFile.toPath(), output = outputFile.toPath();
         Path work = output.toAbsolutePath().getParent().resolve(".maplesu-rebuild-" + UUID.randomUUID() + ".pending");
         BasicFileAttributes sourceIdentity = input(source, PAGE, MAX_IMAGE, "BOOT_IMAGE_SIZE_LIMIT");
-        BasicFileAttributes componentIdentity = input(component, 1, MAX_KERNEL,
+        BasicFileAttributes componentIdentity = input(component, replacingRamdisk ? 0 : 1, MAX_KERNEL,
                 replacingRamdisk ? "REPLACEMENT_RAMDISK_SIZE_LIMIT" : "REPLACEMENT_KERNEL_SIZE_LIMIT");
         boolean created = false, complete = false;
         OutputIdentity outputIdentity = null;

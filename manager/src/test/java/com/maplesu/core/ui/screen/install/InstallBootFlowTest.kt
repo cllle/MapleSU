@@ -88,6 +88,18 @@ class InstallBootFlowTest {
     )
 
     @Test
+    fun currentSourcePreviewNeverAsksTheGeneratorForPermissionToContinue() {
+        val generation = unavailable("ULTRA_KERNEL_GENERATE_SITE_COVERAGE")
+        InstallBootFlow.generation = generation
+        val profile = probeCurrentBoot(release)
+        assertEquals(release, profile.release)
+        assertEquals("6.6", profile.series)
+        assertEquals(0, generation.calls)
+        assertNull(profile.target)
+        assertEquals("", profile.stableCode)
+    }
+
+    @Test
     fun theOnlyTargetOfferedComesFromTheTargetRenderer() {
         InstallBootFlow.generation = available()
         val profile = InstallBootFlow.fromFacts("boot.img", release, readyFacts())

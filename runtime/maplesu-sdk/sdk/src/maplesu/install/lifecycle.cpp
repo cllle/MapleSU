@@ -37,6 +37,7 @@ extern "C" long maplesu_installer_result_open(int, int[2]);
 extern "C" long maplesu_installer_result_parent(pid_t, int, int[2]);
 extern "C" void maplesu_installer_result_worker(int[2]);
 extern "C" int maplesu_installer_result_complete(int[2], const char*, int);
+extern "C" KModErr maplesu_prepare_su_exec_directory(const char*);
 
 namespace maplesu::install {
 namespace {
@@ -490,6 +491,14 @@ core::err_t install_environment(const char* root_key, DeploymentMode mode,
 
                     (void)compat::installer_first_configuration();
                 }
+            }
+
+            if (!need_install && kernel_module::maplesu_request_owner_mode()) {
+                std::string system_directory;
+                err = static_cast<core::err_t>(storage::current_system_directory(system_directory));
+                if (failed(err)) return err;
+                err = static_cast<core::err_t>(maplesu_prepare_su_exec_directory(system_directory.c_str()));
+                if (failed(err)) return err;
             }
 
             if (mode != DeploymentMode::Refresh) {

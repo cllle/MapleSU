@@ -1,93 +1,59 @@
 # 模块仓库上传与维护
 
-[maplesu-module-market](https://github.com/FengQiuFQ/maplesu-module-market) 独立维护模块条目、版本、原始包、源码索引、维护登记和目录签名。Manager 负责接口与安装流程；模块作者通过 Fork/PR 或“模块投稿”Issue 提交更新。
+MapleSU Ultra 模块市场由贡献者共同维护，目录与安装包独立于 Manager 发布。主仓库维护应用与接口，市场仓库维护条目、版本、来源、校验数据和目录签名。
 
-开发入口：[脚本与 WebUI](MODULES.md)、[MapleSU_Ultra 原生模块](ULTRA_MODULES.md)。
+社区仓库：[maplesu-module-market](https://github.com/FengQiuFQ/maplesu-module-market)。模块开发入口：[脚本与 WebUI](MODULES.md)、[Ultra 原生模块](ULTRA_MODULES.md)。
 
-## 1. 准备发布内容
+## 提交一个模块
 
-每个版本提交原始 ZIP、对应源码与许可、ID、版本、作者、GitHub 维护账号、更新说明及运行模式。原 SKRoot(Pro) 模块沿用原生 ID 与安装包，新模块使用 MapleSU_Ultra SDK。
+1. Fork 市场仓库，准备原始 ZIP、对应版本的源码、许可证和发布说明。
+2. 声明真实作者、维护账号、仓库地址、模块 ID、版本和兼容模式。转载需要明确再分发依据。
+3. 使用仓库工具导入。原生模块填写库内真实 ID 和成员名，脚本模块从根目录 `module.prop` 读取身份。
+4. 在 `maintainers.json` 登记维护与来源信息，运行本地检查。
+5. 通过 PR 提交包、索引、来源和更新记录；不包含市场签名私钥，不执行包内代码作为投稿检查。
 
-| 类型 | 身份来源 | 导入元信息 |
-| --- | --- | --- |
-| 脚本模块 | 根目录 `module.prop` | 同一份 `module.prop` |
-| 原生模块 | ARM64 库内 ID 与描述 | `payload/module.prop` |
+也可使用“模块投稿”Issue 提交材料。模块由用户贡献、上传并维护；如涉及侵权，请在市场仓库提交 Issue 申请删除。
 
-原生元信息填写本次发布的名称、版本与作者；`--native-id` 和 `--native-member` 指向真实库内身份与 ZIP 成员名。新原生条目使用 `MAPLESU`，既有 `SKROOT_PRO` 目录继续兼容。包内 `webroot/source.zip` 会自动保存为对应源码并记录摘要。
+## 导入命令
 
-## 2. 导入模块
+以下命令在市场仓库根目录运行。
 
-在市场仓库根目录执行，包文件保存在相邻的 `module-release/`：
+脚本模块示例：
 
 ```shell
 python -m pip install -r requirements.txt
+python tools/market.py add-local --package example-module.zip --release-date 2026-11-11
 ```
 
-脚本模块：
+Ultra 原生模块示例；将 ID、成员名和日期替换为实际包的信息：
 
 ```shell
-python tools/market.py add-local --package ../module-release/example.zip --release-date 2026-11-22
+python tools/market.py add-local --package example-module.zip --native-id a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6 --native-member libmodule_example.so --release-date 2026-11-11
 ```
 
-原生模块，下列 ID 对应[开发指南的 Hello 示例](ULTRA_MODULES.md)：
+原生模块的市场元信息位于 `payload/module.prop`，新目录使用 `MAPLESU` 类型；Manager 继续接受已发布目录中的旧类型名。模块接口见[Ultra 原生模块开发](ULTRA_MODULES.md)，底层组件来源见[致谢](../CREDITS.md)。
 
-```shell
-python tools/market.py add-local --package ../module-release/hello.zip --native-id e46a18d2c9074f63b85a9210d7ce304f --native-member libmodule_hello.so --release-date 2026-11-22
-```
-
-工具保留包字节，生成 `packages/`、`sources/`、`changelogs/`、`modules/` 与来源快照，更新清单并移除旧签名。作者补充本次实际变更说明。
-
-## 3. 登记维护者并提交
-
-在 `maintainers.json` 的 `entries` 中使用同一模块 ID。维护记录示例：
-
-```json
-{
-  "maintainers": ["FengQiuFQ"],
-  "origin": "MapleSU_Ultra Hello source and package",
-  "license": "GPL-3.0-or-later",
-  "evidence": ["provenance/maplesu-hello.json"],
-  "status": "ready"
-}
-```
-
-账号、实际来源和许可按投稿填写，`evidence` 指向随 PR 提交的版本来源文件。运行检查：
+导入之后运行：
 
 ```shell
 python tools/market.py verify --allow-unsigned
 python tools/check_maintainers.py
 python tools/check_publish_tree.py
-python -m unittest discover -s tools -p "test_*.py" -v
+python -m unittest discover -s tools -p "test_*.py"
 ```
 
-PR 包含包、源码、索引、维护登记和更新说明。`--allow-unsigned` 用于目录更新后的待签名检查；发布使用固定公钥验签。
+导入改变目录内容后旧签名失效，PR 阶段以 `--allow-unsigned` 检查结构和包完整性。最终签名与公钥验证由维护者在发布前完成。
 
-## 4. 更新与交接
+## 更新与交接
 
-更新复用 ID，使用新版本，通过 `--select-latest` 明确选择当前版本：
+同一模块复用原 ID，发布新版本和变更说明；更新当前版本时显式使用 `--select-latest`。同 ID、同版本的不同字节会被拒绝，修订应使用新版本。保留旧版本、源码索引和原作者署名。
 
-```shell
-python tools/market.py add-local --package ../module-release/hello-1.0.1.zip --native-id e46a18d2c9074f63b85a9210d7ce304f --native-member libmodule_hello.so --release-date 2026-11-22 --select-latest
-```
+每个条目可以登记多位维护者。变更维护人时提交 PR 并提供原作者或现任维护者的交接依据；首次认领已有收录项也通过同一流程。目录签名权不会因为条目登记而下放。
 
-同 ID、同版本对应固定字节。`modules/ID/module.json` 保存各版本、来源与摘要；切换当前版本时同步更新索引并签名。交接通过 PR 更新维护账号，关联原作者或现任维护者的交接记录，保留原作者署名及历史版本。
+## 来源、下架与发布
 
-## 5. 签名与主备发布
+来源记录至少关联实际版本的源码与许可。仓库工具自身的许可证不覆盖上传模块。来源有待确认的包保留在私有审阅材料中，确认后再进入公共分发；目录来自公开服务不自动构成再分发依据。
 
-维护者核对清单、包与来源索引后，使用仓库外的私钥签名：
+侵权问题通过 `COPYRIGHT.md` 和专用 Issue 模板处理。确认后撤下公开索引和受影响发布物，保留必要的内部处理记录，不把更换包名或删除原作署名作为处理方式。
 
-```shell
-python tools/market.py sign --private-key ../market-signing/private-key.pem
-python tools/market.py verify --public-key trust/public-key.pem
-```
-
-提交 `market.json` 与 `market.json.sig` 后，`main` 的 Pages 工作流导出并部署静态树。`Sign catalog` 工作流也可使用 `MARKET_SIGNING_PRIVATE_KEY` Secret 生成签名 artifact，验签后提交。
-
-| 源 | 清单 |
-| --- | --- |
-| 主源 | `https://fengqiufq.github.io/maplesu-module-market/market.json` |
-| 备源 | `https://raw.githubusercontent.com/FengQiuFQ/maplesu-module-market/main/market.json` |
-
-两源发布同一清单和签名，包按大小及 SHA-256 校验。个人源使用独立 HTTPS 地址和固定公钥，在应用中登记后采用同一格式。
-
-详细流程见市场仓库 [PUBLISH.md](https://github.com/FengQiuFQ/maplesu-module-market/blob/main/PUBLISH.md)，字段见 [SCHEMA.md](https://github.com/FengQiuFQ/maplesu-module-market/blob/main/SCHEMA.md)。版权与移除请求通过该仓库 `COPYRIGHT.md` 和专用 Issue 处理。
+合并后的目录由维护者签名，验证清单原始字节及所有包摘要，再导出同一静态树到主备源。完整命令和 Pages 配置见市场仓库 `PUBLISH.md`。个人开发者也可以维护独立 HTTPS 源，并在应用中设置对应地址与公钥。

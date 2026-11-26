@@ -15,6 +15,8 @@ internal data class UltraKernelManagerClaimPayload(
     val runtimeLayout: RuntimeLayoutFacts? = null,
     val runtimeProfiles: RuntimeProfilesFacts? = null,
     val sessionAbi: SessionAbiFacts? = null,
+    val bootEventsAbi: BootEventsAbiFacts? = null,
+    val ksuCompatAbi: KsuCompatAbiFacts? = null,
 ) {
     data class RuntimeLayoutField(val type: String, val member: String, val signature: String?, val alignment: Int,
         val key: String = "$type.$member") {
@@ -40,6 +42,12 @@ internal data class UltraKernelManagerClaimPayload(
         val groupInfo: UltraKernelResidentAbi.CompiledLayout, val groupAlignment: Int, val gid: SessionGid,
         val fileOperations: UltraKernelResidentAbi.CompiledLayout, val fileOperationsAlignment: Int,
         val callbacks: Map<String, SessionCallback>, val cfiMode: String, val normalizeIntegers: Boolean)
+    data class BootEventsAbiFacts(val offset: Int, val bytes: Int, val compiledSha256: String, val words: List<Int>,
+        val layouts: Map<String, UltraKernelResidentAbi.CompiledLayout>, val callbacks: Map<String, SessionCallback>,
+        val cfiMode: String, val normalizeIntegers: Boolean)
+    data class KsuCompatAbiFacts(val offset: Int, val bytes: Int, val compiledSha256: String, val words: List<Int>,
+        val layouts: Map<String, UltraKernelResidentAbi.CompiledLayout>, val callbacks: Map<String, SessionCallback>,
+        val cfiMode: String, val normalizeIntegers: Boolean)
     data class ReferenceAbi(val functions: Map<String, String>, val callbacks: Map<String, String>,
                             val bootstrapFunctions: Map<String, String>,
                             val dataImports: Set<String>, val cfi: CallbackCfi,
@@ -82,13 +90,23 @@ internal data class UltraKernelManagerClaimPayload(
         internal fun parseTaskProfile(report: JsonObject, manifest: JsonObject, payload: JsonObject,
             reference: JsonObject, coreInputs: Map<String, JsonObject>, elf: ByteArray,
             mode: String, normalize: Boolean): TaskProfileFacts {
-            fun identity(value: JsonElement?, allowEmpty: Boolean = false): JsonObject = (value?.jsonObject
+            fun identity(value: JsonElement?): JsonObject = (value?.jsonObject
                 ?: error("ULTRA_KERNEL_TASK_PROFILE_IDENTITY")).also {
                 val bytes = it["bytes"]?.jsonPrimitive?.longOrNull
                 require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
-                    bytes != null && (if (allowEmpty) bytes >= 0 else bytes > 0) &&
+                    bytes != null && bytes > 0 &&
                     it["sha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true) {
                     "ULTRA_KERNEL_TASK_PROFILE_IDENTITY"
+                }
+            }
+            fun dependencyIdentity(value: JsonElement): JsonObject = value.jsonObject.also {
+                if (it["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(it) else {
+                    val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
+                        it["sha256"]?.jsonPrimitive?.content == empty &&
+                        it["archivePath"]?.jsonPrimitive?.content == "build-dependencies/files/$empty.bin") {
+                        "ULTRA_KERNEL_TASK_PROFILE_DEPENDENCY_IDENTITY"
+                    }
                 }
             }
             fun same(a: JsonObject, b: JsonObject) = a["bytes"] == b["bytes"] && a["sha256"] == b["sha256"]
@@ -114,7 +132,7 @@ internal data class UltraKernelManagerClaimPayload(
             val selection = identity(report["sourceSelectionIdentity"])
             require(same(selection, identity(reference.getValue("coreLifecycleAbi").jsonObject
                 .getValue("sourceSelection").jsonObject["identity"]))) { "ULTRA_KERNEL_TASK_PROFILE_SELECTION" }
-            val dependencies = report.getValue("dependencies").jsonArray.map { identity(it, allowEmpty = true) }
+            val dependencies = report.getValue("dependencies").jsonArray.map(::dependencyIdentity)
             require(dependencies.isNotEmpty() && listOf("sourceIdentity", "headerIdentity", "configIdentity").all { key ->
                 dependencies.any { same(it, identity(report[key])) }
             }) { "ULTRA_KERNEL_TASK_PROFILE_DEPENDENCIES" }
@@ -303,9 +321,13 @@ internal data class UltraKernelManagerClaimPayload(
             fun flag(owner: JsonObject, key: String) = owner.getValue(key).jsonPrimitive.boolean
             fun path(item: JsonObject) = item.getValue("path").jsonPrimitive.content.replace('\\', '/')
             fun selected(value: JsonElement?): JsonObject = identity(value).also { item ->
-                require(manifest.getValue("inputs").jsonObject.entries.singleOrNull {
+                val matches = manifest.getValue("inputs").jsonObject.entries.filter {
                     path(item) == it.key.replace('\\', '/') || path(item).endsWith("/" + it.key.replace('\\', '/'))
-                }?.value == item["sha256"]) { "ULTRA_KERNEL_CORE_SELECTED_SOURCE" }
+                }
+                val longest = matches.maxOfOrNull { it.key.replace('\\', '/').length }
+                require(matches.singleOrNull { it.key.replace('\\', '/').length == longest }?.value == item["sha256"]) {
+                    "ULTRA_KERNEL_CORE_SELECTED_SOURCE"
+                }
             }
             fun layouts(value: JsonElement?): Map<String, UltraKernelResidentAbi.CompiledLayout> = value?.jsonObject?.mapValues { (_, entry) ->
                 val item = entry.jsonObject
@@ -332,6 +354,18 @@ internal data class UltraKernelManagerClaimPayload(
                 selected(owner["identity"]) == selected(evolution["selectionIdentity"]) &&
                 selected(owner["freezeIdentity"]) == selected(evolution["freezeIdentity"]) &&
                 selected(owner["parentFreezeIdentity"]) == selected(evolution["parentFreezeIdentity"])) { "ULTRA_KERNEL_CORE_OWNER_SOURCE" }
+            fun sourceRolePath(actual: String, expected: String) = actual == expected ||
+                actual.startsWith(".tmp/") && expected.endsWith("/$actual")
+            fun historicalCore(value: JsonElement?, logical: String): JsonObject {
+                val item = identity(value)
+                val root = path(selected(owner["identity"])).substringBeforeLast('/')
+                val archive = "$root/archive/source/$logical"
+                val original = if (logical.startsWith("runtime/ultra/identity/kernel/"))
+                    "$root/selected-native/${logical.substringAfterLast('/')}" else archive
+                require(sourceRolePath(path(item), original)) { "ULTRA_KERNEL_CORE_HISTORICAL_SOURCE_ROLE:$logical" }
+                selected(JsonObject(item + ("path" to JsonPrimitive(archive))))
+                return item
+            }
             val runtimeEvolution = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze")
                 .jsonObject["runtimeLayoutEvolution"]?.jsonObject
             val runtimeRows = runtimeEvolution?.let { runtime ->
@@ -351,8 +385,30 @@ internal data class UltraKernelManagerClaimPayload(
                     }
                     row["before"]?.takeUnless { it is JsonNull }?.let(::selected)
                 }
-                for (list in runtime.getValue("predecessorInputs").jsonObject.values)
-                    list.jsonArray.forEach { selected(it) }
+                val predecessors = runtime["predecessorInputs"] as? JsonObject
+                    ?: error("ULTRA_KERNEL_RUNTIME_LAYOUT_PREDECESSOR_FIELDS")
+                require(predecessors.keys == setOf("native", "support", "private", "su", "protocol", "frame")) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_PREDECESSOR_FIELDS"
+                }
+                for (key in listOf("native", "support", "private", "su")) {
+                    val values = predecessors[key] as? JsonArray
+                        ?: error("ULTRA_KERNEL_RUNTIME_LAYOUT_PREDECESSOR_TYPE:$key")
+                    values.forEach { selected(it) }
+                }
+                for (key in listOf("protocol", "frame")) {
+                    val value = predecessors[key] as? JsonObject
+                        ?: error("ULTRA_KERNEL_RUNTIME_LAYOUT_PREDECESSOR_TYPE:$key")
+                    selected(value)
+                }
+                val predecessorFiles = listOf("native", "support", "private", "su").flatMap {
+                    predecessors.getValue(it).jsonArray.map { entry -> selected(entry) }
+                } + listOf(selected(predecessors["protocol"]), selected(predecessors["frame"]))
+                for ((logical, row) in mapped) row["before"]?.takeUnless { it is JsonNull }?.let { value ->
+                    val before = selected(value)
+                    require(predecessorFiles.any { path(it) == path(before) && same(it, before) }) {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_PREDECESSOR_EDGE:$logical"
+                    }
+                }
                 mapped
             }.orEmpty()
             require(runtimeEvolution != null || owner["runtimeLayoutSourceSelection"] == null &&
@@ -373,6 +429,18 @@ internal data class UltraKernelManagerClaimPayload(
                 (if (ownerRevision == null) owner["sourceFileCount"] == null else
                     if (lifecycleRevision == 2) sourceFileCount in setOf(48, 54) else sourceFileCount == 47)) {
                 "ULTRA_KERNEL_CORE_SOURCE_REVISION"
+            }
+            val runtimeSuccessor = owner["runtimeSuccessor"]?.jsonObject
+            val coreRuntimeEvolution = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze")
+                .jsonObject["coreRuntimeEvolution"]?.jsonObject
+            require(runtimeSuccessor == coreRuntimeEvolution) { "ULTRA_KERNEL_CORE_RUNTIME_SOURCE" }
+            runtimeSuccessor?.let { successor ->
+                require(lifecycleRevision == 2 && successor["schema"]?.jsonPrimitive?.content == "maplesu-core-runtime-source-evolution/1" &&
+                    !flag(successor, "productionWritten") && !flag(successor, "targetQualified") &&
+                    same(selected(successor["parentCoreSelection"]), selected(owner["identity"]))) {
+                    "ULTRA_KERNEL_CORE_RUNTIME_SOURCE"
+                }
+                selected(successor["identity"])
             }
             for (key in listOf("previousCoreFreezeIdentity", "previousCoreSelectionIdentity")) {
                 if (lifecycleRevision == 2) {
@@ -453,6 +521,143 @@ internal data class UltraKernelManagerClaimPayload(
             }
             val sources = rows.associateBy { it.getValue("path").jsonPrimitive.content }
             require(sources.size == rows.size && sources.keys == expectedPaths) { "ULTRA_KERNEL_CORE_SOURCE_INPUTS" }
+            val runtimePredecessors = if (runtimeEvolution == null) emptyMap() else {
+                val freeze = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze").jsonObject
+                val layers = runtimeEvolution.getValue("selectedLayers").jsonArray.map { it.jsonObject }
+                val selectors = listOf("select_core_sources", "select_su_component_sources", "select_host_deployment_sources",
+                    "select_core_runtime_sources", "select_su_component_metadata_sources", "select_host_durable_sources",
+                    "select_host_initialization_sources", "select_core_current_task_sources", "select_host_publication_sources",
+                    "select_host_sync_sources", "select_host_retirement_sources")
+                require(layers.map { it["selector"]?.jsonPrimitive?.content } == selectors) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_LAYER_ORDER"
+                }
+                val layerOwners = listOf(owner["identity"], reference.getValue("suProviderAbi").jsonObject
+                    .getValue("sourceSelection").jsonObject["identity"], freeze.getValue("hostDeploymentEvolution").jsonObject["identity"],
+                    freeze.getValue("coreRuntimeEvolution").jsonObject["identity"], freeze.getValue("suProfileMetadataEvolution").jsonObject["identity"],
+                    freeze.getValue("hostDurableEvolution").jsonObject["identity"], null,
+                    freeze.getValue("sdkCurrentTaskEvolution").jsonObject["identity"], freeze.getValue("hostPublicationEvolution").jsonObject["identity"],
+                    freeze.getValue("hostSyncEvolution").jsonObject["identity"], freeze.getValue("hostRetirementEvolution").jsonObject["identity"])
+                layers.forEachIndexed { index, layer ->
+                    val actual = selected(layer["selection"])
+                    layerOwners[index]?.let { require(same(actual, selected(it))) {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_LAYER_IDENTITY:${selectors[index]}"
+                    } }
+                }
+                val current = sources.filterKeys { it in runtimeRows }.mapValues { (logical, row) ->
+                    historicalCore(row["previousRuntimeLayoutInput"], logical)
+                }.toMutableMap()
+                fun stage(name: String, schema: String, key: String, count: Int): Pair<JsonObject, Map<String, JsonObject>> {
+                    val value = freeze.getValue(name).jsonObject
+                    require(value["schema"]?.jsonPrimitive?.content == schema &&
+                        value["productionWritten"]?.jsonPrimitive?.booleanOrNull == false &&
+                        (value["targetQualified"] == null || value["targetQualified"]?.jsonPrimitive?.booleanOrNull == false)) {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_STAGE:$name"
+                    }
+                    selected(value["identity"])
+                    val entries = value.getValue(key).jsonArray.map { it.jsonObject }
+                    val mapped = entries.associateBy { it.getValue("logicalPath").jsonPrimitive.content }
+                    require(mapped.size == count && entries.size == count) { "ULTRA_KERNEL_RUNTIME_LAYOUT_STAGE_ROWS:$name" }
+                    return value to mapped
+                }
+                fun advance(name: String, entries: Map<String, JsonObject>, beforeKey: String = "before", afterKey: String = "after") {
+                    for ((logical, entry) in entries) {
+                        val before = entry[beforeKey]?.takeUnless { it is JsonNull }?.let(::selected)
+                        val after = selected(entry[afterKey])
+                        require(path(after).substringAfterLast('/') == logical.substringAfterLast('/')) {
+                            "ULTRA_KERNEL_RUNTIME_LAYOUT_STAGE_PATH:$name:$logical"
+                        }
+                        current[logical]?.let { prior ->
+                            require(before != null && same(prior, before)) { "ULTRA_KERNEL_RUNTIME_LAYOUT_STAGE_EDGE:$name:$logical" }
+                            current[logical] = after
+                        }
+                    }
+                }
+                val (host, hostRows) = stage("hostDeploymentEvolution", "maplesu-host-deployment-source-evolution/1", "selectedInputs", 25)
+                require(same(selected(host["corePredecessor"]), selected(owner["identity"]))) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_HOST_PARENT"
+                }
+                advance("hostDeploymentEvolution", hostRows)
+                val protocol = host.getValue("protocolInput").jsonObject
+                require(protocol["logicalPath"]?.jsonPrimitive?.content == "runtime/ultra/authorization/request_protocol.h") {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_HOST_PROTOCOL"
+                }
+                advance("hostDeploymentEvolution.protocolInput", mapOf("runtime/ultra/authorization/request_protocol.h" to protocol))
+                val (coreRuntime, coreRuntimeRows) = stage("coreRuntimeEvolution", "maplesu-core-runtime-source-evolution/1", "selectedInputs", 17)
+                require(coreRuntime == owner["runtimeSuccessor"] &&
+                    same(selected(coreRuntime["parentCoreSelection"]), selected(owner["identity"])) &&
+                    same(selected(coreRuntime["parentHostSelection"]), selected(host["identity"]))) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_CORE_RUNTIME_PARENT"
+                }
+                for (key in listOf("parentCoreAbi", "core73Selection", "core73Freeze")) selected(coreRuntime[key])
+                for ((logical, entry) in coreRuntimeRows) {
+                    require(entry.keys == setOf("logicalPath", "kind", "rootCurrentRole", "rootCurrent",
+                        "coreSelectedBefore", "coreFrozenAfter", "mergedAfter", "ownershipRule")) {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_CORE_RUNTIME_ROLE_FIELDS:$logical"
+                    }
+                    val root = entry["rootCurrent"]?.takeUnless { it is JsonNull }?.let(::selected)
+                    val before = entry["coreSelectedBefore"]?.takeUnless { it is JsonNull }?.let(::selected)
+                    val frozen = selected(entry["coreFrozenAfter"])
+                    val merged = selected(entry["mergedAfter"])
+                    require((root == null) == (before == null) &&
+                        (logical.startsWith("runtime/ultra/identity/kernel/") || same(frozen, merged))) {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_CORE_RUNTIME_ROLE:$logical"
+                    }
+                }
+                advance("coreRuntimeEvolution", coreRuntimeRows, "rootCurrent", "mergedAfter")
+                val (currentTask, currentTaskRows) = stage("sdkCurrentTaskEvolution", "maplesu-host-current-task-source-successor/1", "files", 9)
+                val taskRoot = path(selected(currentTask["identity"])).substringBeforeLast('/')
+                val taskOwner = selected(currentTask["ownerSelection"])
+                val taskOwnerRoot = path(taskOwner).substringBeforeLast('/')
+                val ownerArchive = selected(currentTask.getValue("receipts").jsonObject["SOURCE-SELECTION.json"])
+                require(same(taskOwner, ownerArchive) && path(ownerArchive) == "$taskRoot/archive/receipts/SOURCE-SELECTION.json") {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_CURRENT_TASK_OWNER_RECEIPT"
+                }
+                for ((logical, entry) in currentTaskRows) {
+                    val origin = identity(entry["ownerAfter"])
+                    val after = selected(entry["after"])
+                    val before = selected(entry["before"])
+                    require(sourceRolePath(path(origin), "$taskOwnerRoot/source/$logical") && same(origin, after)) {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_CURRENT_TASK_OWNER_ARCHIVE:$logical"
+                    }
+                    require(path(after) == "$taskRoot/archive/after/$logical" && path(before) == "$taskRoot/archive/before/$logical") {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_CURRENT_TASK_ARCHIVE_ROLE:$logical"
+                    }
+                }
+                for ((logical, entry) in currentTaskRows.filterKeys { it in current }) require(
+                    same(selected(entry["before"]), selected(entry["parentSelected"])) &&
+                    same(selected(entry["after"]), identity(entry["ownerAfter"])) &&
+                    same(selected(entry["before"]), selected(entry["after"]))) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_CURRENT_TASK_PROVENANCE:$logical"
+                }
+                advance("sdkCurrentTaskEvolution", currentTaskRows)
+                val (sync, syncRows) = stage("hostSyncEvolution", "maplesu-host-runtime-sync-source-successor/1", "files", 9)
+                require(same(selected(sync["coreSuccessorSelection"]), selected(coreRuntime["identity"]))) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_SYNC_PARENT"
+                }
+                for ((logical, entry) in syncRows) require(same(selected(entry["before"]), selected(entry["archivedBefore"])) &&
+                    same(selected(entry["before"]), selected(entry["upstreamBefore"])) &&
+                    same(selected(entry["after"]), selected(entry["upstreamAfter"]))) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_SYNC_PROVENANCE:$logical"
+                }
+                advance("hostSyncEvolution", syncRows)
+                val (retirement, retirementRows) = stage("hostRetirementEvolution", "maplesu-host-retirement-source-successor/1", "files", 4)
+                val retiredParent = selected(retirement["parentEffectiveSelection"])
+                val retiredCandidate = selected(retirement["parentCandidate"])
+                val runtimeParent = identity(runtimeEvolution["predecessor"])
+                // The publisher retains this reference; actual predecessor inputs are bound above.
+                require(path(runtimeParent) == path(selected(retirement["identity"])).substringBeforeLast('/') +
+                    "/EFFECTIVE-SOURCE-SELECTION.json") { "ULTRA_KERNEL_RUNTIME_LAYOUT_PREDECESSOR_ROLE" }
+                require(path(retiredParent).substringBeforeLast('/') == path(selected(sync["identity"])).substringBeforeLast('/') &&
+                    path(retiredCandidate).substringBeforeLast('/') == path(retiredParent).substringBeforeLast('/') &&
+                    path(runtimeParent).substringBeforeLast('/') == path(selected(retirement["identity"])).substringBeforeLast('/')) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_RETIREMENT_PARENT"
+                }
+                for ((logical, entry) in retirementRows) require(same(selected(entry["before"]), selected(entry["archivedBefore"]))) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_RETIREMENT_PROVENANCE:$logical"
+                }
+                advance("hostRetirementEvolution", retirementRows)
+                current
+            }
             for ((logical, row) in sources) {
                 val after = selected(row["after"])
                 require(path(after).endsWith("/$logical")) { "ULTRA_KERNEL_CORE_SOURCE_AFTER_PATH" }
@@ -467,9 +672,8 @@ internal data class UltraKernelManagerClaimPayload(
                 }
                 val runtime = runtimeRows[logical]
                 if (runtime != null) {
-                    val previous = selected(row["previousRuntimeLayoutInput"])
                     val task = taskRows[logical]
-                    require(same(previous, selected(runtime["before"])) &&
+                    require(same(runtimePredecessors.getValue(logical), selected(runtime["before"])) &&
                         (if (task == null) same(after, selected(runtime["after"])) && row["previousTaskProfileInput"] == null
                         else same(selected(row["previousTaskProfileInput"]), selected(runtime["after"])) &&
                             same(selected(task["before"]), selected(runtime["after"])) && same(after, selected(task["after"])))) {
@@ -505,8 +709,10 @@ internal data class UltraKernelManagerClaimPayload(
                     old["nativeCopyIdentity"]?.let { require(same(selected(it), prior)) {
                         "ULTRA_KERNEL_CORE_DEPLOYMENT_PREDECESSOR_NATIVE:$logical"
                     } }
-                    val channelInput = sources.getValue(logical).let { it["previousRuntimeLayoutInput"] ?: it["after"] }
-                    if (!same(prior, selected(channelInput))) changed += logical
+                    val channelInput = sources.getValue(logical).let { row ->
+                        row["previousRuntimeLayoutInput"]?.let { historicalCore(it, logical) } ?: selected(row["after"])
+                    }
+                    if (!same(prior, channelInput)) changed += logical
                 }
                 val readbackPath = "runtime/ultra/bridge/installed_helper_readback.cpp"
                 val channelPaths = setOf("runtime/maplesu-sdk/sdk/include/maplesu_request_private.h",
@@ -515,10 +721,17 @@ internal data class UltraKernelManagerClaimPayload(
                     "runtime/ultra/authorization/request_protocol.h", supportRoot + "manager_management.c",
                     supportRoot + "manager_resident_host.c")
                 require(changed == channelPaths + readbackPath) { "ULTRA_KERNEL_CORE_DEPLOYMENT_CHANGED_PATHS" }
-                val adopted = evolution.getValue("adoptedBetweenPredecessorAndChannel").jsonObject
+                val adoptedRows = evolution["adoptedBetweenPredecessorAndChannel"] as? JsonArray
+                    ?: error("ULTRA_KERNEL_CORE_DEPLOYMENT_READBACK_ADOPTION_ROWS")
+                require(adoptedRows.size == 1) { "ULTRA_KERNEL_CORE_DEPLOYMENT_READBACK_ADOPTION_ROWS" }
+                val adopted = adoptedRows.single() as? JsonObject
+                    ?: error("ULTRA_KERNEL_CORE_DEPLOYMENT_READBACK_ADOPTION_ROWS")
                 require(adopted["logicalPath"]?.jsonPrimitive?.content == readbackPath &&
                     same(selected(adopted["before"]), selected(oldSources.getValue(readbackPath)["after"])) &&
-                    same(selected(adopted["after"]), selected(sources.getValue(readbackPath)["after"]))) {
+                    same(selected(adopted["after"]), selected(sources.getValue(readbackPath)["after"])) &&
+                    sourceRolePath(path(identity(adopted["before"])), path(identity(oldSources.getValue(readbackPath)["after"]))) &&
+                    sourceRolePath(path(identity(adopted["after"])), path(identity(owner["identity"])).substringBeforeLast('/') +
+                        "/archive/production/$readbackPath")) {
                     "ULTRA_KERNEL_CORE_DEPLOYMENT_READBACK_PREDECESSOR"
                 }
                 val channel = evolution.getValue("authenticatedDeployment").jsonObject
@@ -547,7 +760,18 @@ internal data class UltraKernelManagerClaimPayload(
             val objectIds = identities("objectIdentities", ".o")
             val commands = identities("commandIdentities", ".o.cmd", ".")
             val receipts = identities("dependencyReceiptIdentities", ".json")
-            val dependencies = report.getValue("inlineDependencies").jsonArray.map(::identity)
+            fun dependencyIdentity(value: JsonElement): JsonObject {
+                val item = value.jsonObject
+                return if (runtimeEvolution == null || item["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(value)
+                else item.also {
+                    val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    require(path(it).isNotBlank() && it["sha256"]?.jsonPrimitive?.content == empty &&
+                        it["archivePath"]?.jsonPrimitive?.content == "build-dependencies/files/$empty.bin") {
+                        "ULTRA_KERNEL_CORE_DEPENDENCY_IDENTITY"
+                    }
+                }
+            }
+            val dependencies = report.getValue("inlineDependencies").jsonArray.map(::dependencyIdentity)
             require(dependencies.isNotEmpty() || actualSources.isEmpty() && !complete) { "ULTRA_KERNEL_CORE_DEPENDENCIES" }
             for (name in objects) actualSources["$name.c"]?.let { actual ->
                 val selected = identity(sources.getValue("runtime/ultra/identity/kernel/$name.c")["after"])
@@ -576,7 +800,8 @@ internal data class UltraKernelManagerClaimPayload(
                     item.getValue("signature").jsonPrimitive.content, parameterIndex = expected.third)
             }
             val fence = report.getValue("readerFenceAbi").jsonObject.mapValues { it.value.jsonPrimitive.content }
-            UltraKernelResidentAbi.verifyCoreLifecycleMetadata(facts, uidFacts, compiled, functions, callbackSignatures, fence, complete, lifecycleRevision)
+            UltraKernelResidentAbi.verifyCoreLifecycleMetadata(facts, uidFacts, compiled, functions, callbackSignatures, fence, complete,
+                lifecycleRevision, runtimeSuccessor != null, runtimeEvolution != null)
             val functionObjects = mapOf(
                 "manager_management" to setOf("msu_runtime_service_register", "msu_runtime_service_bind", "msu_runtime_service_bind_held",
                     "msu_runtime_service_revoke", "msu_runtime_service_alloc", "msu_runtime_service_write", "msu_runtime_service_shared_bool_create",
@@ -651,7 +876,7 @@ internal data class UltraKernelManagerClaimPayload(
             val configKeys = setOf("CONFIG_SECCOMP", "CONFIG_SECCOMP_FILTER", "CONFIG_GENERIC_ENTRY", "CONFIG_THREAD_INFO_IN_TASK",
                 "CONFIG_PREEMPT_RT", "CONFIG_SECURITY_SELINUX", "CONFIG_SECURITY", "CONFIG_CFI", "CONFIG_CFI_CLANG", "CONFIG_CFI_ICALL_NORMALIZE_INTEGERS")
             require(config.isEmpty() && !complete || config.keys == configKeys && config.all { (name, value) ->
-                value.jsonPrimitive.content in setOf("y", "n") && value == reference.getValue("managementAbi").jsonObject.getValue("config").jsonObject[name]
+                value.jsonPrimitive.content in setOf("y", "n") && value == (reference.getValue("managementAbi").jsonObject.getValue("config").jsonObject[name] ?: JsonPrimitive("n"))
             }) { "ULTRA_KERNEL_CORE_CONFIG" }
             fun layout(key: String, name: String, words: Int, expectedNames: String): Pair<JsonObject, IntArray>? {
                 val item = report.getValue(key).jsonObject
@@ -681,7 +906,7 @@ internal data class UltraKernelManagerClaimPayload(
                     same(identity(item["objectIdentity"]), objectIds.getValue("$sourceName.o")) &&
                     same(identity(item["commandIdentity"]), commands.getValue(".$sourceName.o.cmd")) &&
                     same(identity(item["dependencyReceiptIdentity"]), receipts.getValue("$sourceName.json"))) { "ULTRA_KERNEL_CORE_LAYOUT_SOURCE:$key" }
-                val deps = item.getValue("dependencies").jsonArray.map(::identity)
+                val deps = item.getValue("dependencies").jsonArray.map(::dependencyIdentity)
                 require(deps.isNotEmpty() && deps.any { same(it, source) } && deps.any { same(it, header) }) { "ULTRA_KERNEL_CORE_LAYOUT_DEPENDENCIES:$key" }
                 return item to values
             }
@@ -797,7 +1022,7 @@ internal data class UltraKernelManagerClaimPayload(
 
         private fun verifySuProvider(report: JsonObject, manifest: JsonObject, payload: JsonObject,
                                      reference: JsonObject, elf: ByteArray, mode: String, normalize: Boolean) {
-            if (report["schemaVersion"]?.jsonPrimitive?.intOrNull == 3) {
+            if (report["schemaVersion"]?.jsonPrimitive?.intOrNull in setOf(3, 4)) {
                 UltraKernelSuComponentMetadata.verify(report, manifest, payload, reference, elf, mode, normalize)
                 return
             }
@@ -949,7 +1174,7 @@ internal data class UltraKernelManagerClaimPayload(
             val config = report.getValue("config").jsonObject
             val configKeys = setOf("CONFIG_MULTIUSER", "CONFIG_PREEMPT_RCU", "CONFIG_TREE_RCU", "CONFIG_REFCOUNT_FULL", "CONFIG_DEBUG_SPINLOCK")
             require(config.isEmpty() && !complete || config.keys == configKeys && config.all { (key, value) ->
-                value.jsonPrimitive.content in setOf("y", "n") && value == reference.getValue("managementAbi").jsonObject.getValue("config").jsonObject[key]
+                value.jsonPrimitive.content in setOf("y", "n") && value == (reference.getValue("managementAbi").jsonObject.getValue("config").jsonObject[key] ?: JsonPrimitive("n"))
             }) { "ULTRA_KERNEL_SU_CONFIG" }
             if (config.isNotEmpty()) require(facts["configMultiuser"] == if (config.getValue("CONFIG_MULTIUSER").jsonPrimitive.content == "y") 1 else 0) {
                 "ULTRA_KERNEL_SU_MULTIUSER_FACT"
@@ -999,23 +1224,37 @@ internal data class UltraKernelManagerClaimPayload(
             val core = reference["coreLifecycleAbi"]?.jsonObject ?: return null
             val proof = core["sourceQualification"]?.jsonObject ?: return null
             fun flag(owner: JsonObject, name: String) = owner[name]?.jsonPrimitive?.booleanOrNull
-            fun identity(value: JsonElement?, empty: Boolean = false): JsonObject =
+            fun identity(value: JsonElement?): JsonObject =
                 (value?.jsonObject ?: error("ULTRA_KERNEL_SOURCE_QUALIFICATION_IDENTITY")).also {
                     val size = it["bytes"]?.jsonPrimitive?.longOrNull
                     require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() && size != null &&
-                        (if (empty) size >= 0 else size > 0) &&
+                        size > 0 &&
                         it["sha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true) {
                         "ULTRA_KERNEL_SOURCE_QUALIFICATION_IDENTITY"
                     }
                 }
+            fun dependencyIdentity(value: JsonElement): JsonObject = value.jsonObject.also {
+                if (it["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(it) else {
+                    val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
+                        it["sha256"]?.jsonPrimitive?.content == empty &&
+                        it["archivePath"]?.jsonPrimitive?.content == "build-dependencies/files/$empty.bin") {
+                        "ULTRA_KERNEL_SOURCE_QUALIFICATION_DEPENDENCY_IDENTITY"
+                    }
+                }
+            }
             fun same(a: JsonObject, b: JsonObject) = a["bytes"] == b["bytes"] && a["sha256"] == b["sha256"]
             fun basename(item: JsonObject) = item.getValue("path").jsonPrimitive.content.replace('\\', '/').substringAfterLast('/')
             val inputs = manifest.getValue("inputs").jsonObject
             fun selected(item: JsonObject) {
                 val path = item.getValue("path").jsonPrimitive.content.replace('\\', '/')
-                require(inputs.entries.any { (name, digest) ->
-                    (path == name.replace('\\', '/') || path.endsWith("/" + name.replace('\\', '/'))) && digest == item["sha256"]
-                }) { "ULTRA_KERNEL_SOURCE_QUALIFICATION_SELECTED" }
+                val matches = inputs.entries.filter { (name, _) ->
+                    path == name.replace('\\', '/') || path.endsWith("/" + name.replace('\\', '/'))
+                }
+                val longest = matches.maxOfOrNull { it.key.replace('\\', '/').length }
+                require(matches.singleOrNull { it.key.replace('\\', '/').length == longest }?.value == item["sha256"]) {
+                    "ULTRA_KERNEL_SOURCE_QUALIFICATION_SELECTED"
+                }
             }
             require(proof["schema"]?.jsonPrimitive?.content == "maplesu-runtime-source-qualification/1" &&
                 listOf("metadataComplete", "factoryBound", "providerBound", "lifecycleBound").all { flag(proof, it) == true } &&
@@ -1043,7 +1282,15 @@ internal data class UltraKernelManagerClaimPayload(
                 require(rows.isNotEmpty() && rows.map { it.getValue("logicalPath").jsonPrimitive.content }.distinct().size == rows.size) {
                     "ULTRA_KERNEL_SOURCE_QUALIFICATION_SELECTION_ROWS:$key"
                 }
-                rows.forEach { selected(identity(it["after"])) }
+                if (key == "host") rows.forEach { selected(identity(it["after"])) }
+                else for (row in rows) {
+                    for (role in listOf("rootCurrent", "coreSelectedBefore", "coreFrozenAfter", "mergedAfter"))
+                        row[role]?.takeUnless { it is JsonNull }?.let { selected(identity(it)) }
+                    require(row["coreFrozenAfter"] is JsonObject && row["mergedAfter"] is JsonObject &&
+                        (row["rootCurrent"] is JsonNull) == (row["coreSelectedBefore"] is JsonNull)) {
+                        "ULTRA_KERNEL_SOURCE_QUALIFICATION_RUNTIME_ROLES"
+                    }
+                }
             }
             val policy = proof.getValue("cfiPolicy").jsonObject
             require(flag(policy, "kcfiEnabled") == (mode == "kcfi") &&
@@ -1058,6 +1305,7 @@ internal data class UltraKernelManagerClaimPayload(
                 "manager_su_runtime_factory", "su_observed_install_source", "su_durable_authority", "su_durable_modern",
                 "su_install_registry", "su_profile_execution")
             require(objects.keys == objectNames) { "ULTRA_KERNEL_SOURCE_QUALIFICATION_OBJECTS" }
+            var kernelConfig = reference["taskProfileAbi"]?.jsonObject?.get("configIdentity")?.let(::identity)
             for ((name, value) in objects) {
                 val item = value.jsonObject
                 val source = identity(item["source"])
@@ -1076,10 +1324,18 @@ internal data class UltraKernelManagerClaimPayload(
                         "ULTRA_KERNEL_SOURCE_QUALIFICATION_OBJECT_GENERATION:$name:$key"
                     }
                 }
-                val deps = item.getValue("dependencies").jsonArray.map { identity(it, empty = true) }
-                require(deps.isNotEmpty() && deps.any { same(it, source) } && deps.any { same(it, config) }) {
+                val deps = item.getValue("dependencies").jsonArray.map(::dependencyIdentity)
+                val dependencyConfig = deps.singleOrNull { basename(it) == ".config" }?.let(::identity)
+                val expectedConfig = kernelConfig
+                require(deps.isNotEmpty() && deps.any { same(it, source) } && dependencyConfig != null &&
+                    dependencyConfig["archivePath"]?.jsonPrimitive?.content ==
+                        "build-dependencies/files/${dependencyConfig.getValue("sha256").jsonPrimitive.content}.bin" &&
+                    (expectedConfig == null || same(dependencyConfig, expectedConfig) &&
+                        dependencyConfig.getValue("path").jsonPrimitive.content.replace('\\', '/') ==
+                            expectedConfig.getValue("path").jsonPrimitive.content.replace('\\', '/'))) {
                     "ULTRA_KERNEL_SOURCE_QUALIFICATION_DEPENDENCIES:$name"
                 }
+                kernelConfig = dependencyConfig
                 require(item["dependencyCount"]?.jsonPrimitive?.intOrNull == deps.size) {
                     "ULTRA_KERNEL_SOURCE_QUALIFICATION_DEPENDENCY_COUNT:$name"
                 }
@@ -1128,20 +1384,51 @@ internal data class UltraKernelManagerClaimPayload(
                 "su_durable_authority" to setOf("msu_su_modern_authority_list", "msu_su_modern_authority_grant"),
                 "manager_management" to setOf("msu_uid_gateway_discard_host_unpublished", "commit_creds"))
             val relocations = proof.getValue("relocations").jsonObject
+            val retained = proof.getValue("retainedFunctions").jsonObject
+            val callbackOwners = mapOf("observedSourceCallbacks" to ("su_observed_install_source" to "msu_su_observed_create"),
+                "durableAuthorityCallbacks" to ("su_durable_authority" to "msu_su_durable_authority_create"))
+            fun callbackReference(row: JsonObject, symbol: String, name: String, named: Boolean): Boolean {
+                val owner = callbackOwners[name]?.first ?: return false
+                if (symbol !in edges.getValue(name)) return false
+                val target = retained[symbol]?.jsonObject ?: return false
+                val targetEntry = target.getValue("objectEntry").jsonObject
+                val targetOffset = targetEntry["offset"]?.jsonPrimitive?.longOrNull ?: return false
+                // The producer resolves STT_SECTION + addend to this exact retained function bucket.
+                if (target["object"]?.jsonPrimitive?.content != owner || targetOffset < 0 ||
+                    targetEntry["section"]?.jsonPrimitive?.content != ".text.$symbol" ||
+                    row["addend"]?.jsonPrimitive?.longOrNull != (if (named) 0L else targetOffset)) return false
+                val callers = row.getValue("callers").jsonArray
+                if (callers.isEmpty()) return row["section"]?.jsonPrimitive?.content == ".eh_frame" &&
+                    row["type"]?.jsonPrimitive?.intOrNull == 261
+                if (callers.size != 1) return false
+                val caller = retained[callers.single().jsonPrimitive.content]?.jsonObject ?: return false
+                val entry = caller.getValue("objectEntry").jsonObject
+                val start = entry["offset"]?.jsonPrimitive?.longOrNull ?: return false
+                val size = entry["bytes"]?.jsonPrimitive?.longOrNull ?: return false
+                val offset = row["offset"]?.jsonPrimitive?.longOrNull ?: return false
+                return caller["object"]?.jsonPrimitive?.content == owner && entry["section"] == row["section"] &&
+                    start >= 0 && size >= 4 && offset >= start && offset - start <= size - 4 && offset % 4 == 0L
+            }
             fun verifyRelocations(actual: JsonObject, symbols: Set<String>, name: String) {
                 require(actual.keys.containsAll(symbols)) { "ULTRA_KERNEL_SOURCE_QUALIFICATION_RELOCATIONS:$name" }
-                for (symbol in symbols) require(actual.getValue(symbol).jsonArray.isNotEmpty() &&
-                    actual.getValue(symbol).jsonArray.all { entry ->
+                for ((symbol, value) in actual) {
+                    val rows = value.jsonArray
+                    require(symbol.isNotBlank() && rows.isNotEmpty() && rows.all { entry ->
                         val row = entry.jsonObject
+                        val target = (row["symbol"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                         !row["section"]?.jsonPrimitive?.content.isNullOrBlank() &&
                             (row["offset"]?.jsonPrimitive?.longOrNull ?: -1) >= 0 &&
                             (row["type"]?.jsonPrimitive?.intOrNull ?: 0) > 0 &&
-                            !row["symbol"]?.jsonPrimitive?.content.isNullOrBlank() && row["addend"]?.jsonPrimitive?.longOrNull != null &&
-                            row.getValue("callers").jsonArray.all { it.jsonPrimitive.content.isNotBlank() }
-                    }) { "ULTRA_KERNEL_SOURCE_QUALIFICATION_RELOCATION:$name:$symbol" }
+                            row["addend"]?.jsonPrimitive?.longOrNull != null &&
+                            row.getValue("callers").jsonArray.all { it.jsonPrimitive.content.isNotBlank() } &&
+                            (target == symbol || target == "") &&
+                            (if (name in callbackOwners) callbackReference(row, symbol, name, target == symbol) else target == symbol)
+                    } && (callbackOwners[name]?.let { (_, creator) -> rows.any {
+                        creator in it.jsonObject.getValue("callers").jsonArray.map { caller -> caller.jsonPrimitive.content }
+                    } } ?: true)) { "ULTRA_KERNEL_SOURCE_QUALIFICATION_RELOCATION:$name:$symbol" }
+                }
             }
             for ((name, symbols) in edges) verifyRelocations(relocations.getValue(name).jsonObject, symbols, name)
-            val retained = proof.getValue("retainedFunctions").jsonObject
             val requiredFunctions = setOf("msu_manager_resident_init", "msu_manager_resident_discard", "msu_manager_resident_dispatch",
                 "msu_su_runtime_init", "msu_su_runtime_post_fs_data", "msu_su_runtime_close", "msu_su_runtime_discarded",
                 "msu_su_observed_create", "msu_su_observed_start", "msu_su_observed_close", "msu_su_durable_authority_create",
@@ -1237,15 +1524,25 @@ internal data class UltraKernelManagerClaimPayload(
 
         private fun verifyRuntimeProvenance(report: JsonObject, payload: JsonObject, elf: ByteArray,
             reference: ReferenceAbi?, requiredSources: Set<String>, sectionFlags: Long = 3) {
-            fun identity(value: JsonElement?, allowEmpty: Boolean = false): JsonObject =
+            fun identity(value: JsonElement?): JsonObject =
                 (value?.jsonObject ?: error("ULTRA_KERNEL_RUNTIME_LAYOUT_IDENTITY")).also {
                     val bytes = it["bytes"]?.jsonPrimitive?.longOrNull
                     require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() && bytes != null &&
-                        (if (allowEmpty) bytes >= 0 else bytes > 0) &&
+                        bytes > 0 &&
                         it["sha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true) {
                         "ULTRA_KERNEL_RUNTIME_LAYOUT_IDENTITY"
                     }
                 }
+            fun dependencyIdentity(value: JsonElement): JsonObject = value.jsonObject.also {
+                if (it["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(it) else {
+                    val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
+                        it["sha256"]?.jsonPrimitive?.content == empty &&
+                        it["archivePath"]?.jsonPrimitive?.content == "build-dependencies/files/$empty.bin") {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_DEPENDENCY_IDENTITY"
+                    }
+                }
+            }
             fun same(a: JsonObject, b: JsonObject) = a["bytes"] == b["bytes"] && a["sha256"] == b["sha256"]
             val digest = UltraKernelSpec.sha256(elf)
             require(reference != null && report["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 &&
@@ -1264,15 +1561,32 @@ internal data class UltraKernelManagerClaimPayload(
             val selectedSources = evolution.getValue("files").jsonArray.map { it.jsonObject }.associateBy {
                 it.getValue("logicalPath").jsonPrimitive.content
             }
+            val taskSuccessors = payload.getValue("referenceAbi").jsonObject["taskProfileAbi"]?.jsonObject
+                ?.get("implementation")?.jsonObject?.get("sourceSuccessor")?.jsonObject?.get("files")?.jsonArray
+                ?.map { it.jsonObject }?.associateBy { it.getValue("logicalPath").jsonPrimitive.content }.orEmpty()
             val sources = report.getValue("sourceIdentities").jsonObject.mapValues { identity(it.value) }
             require(sources.keys.containsAll(requiredSources)) { "ULTRA_KERNEL_RUNTIME_LAYOUT_SOURCES" }
-            for ((path, value) in sources) require(value.getValue("path").jsonPrimitive.content.replace('\\', '/')
-                .endsWith(path.substringAfterLast('/')) && same(value, identity(selectedSources[path]?.get("after")))) {
-                "ULTRA_KERNEL_RUNTIME_LAYOUT_SOURCE_PATH"
+            for ((path, value) in sources) {
+                val prior = identity(selectedSources[path]?.get("after"))
+                val successor = taskSuccessors[path]
+                val chosen = successor?.let {
+                    val before = identity(it["before"])
+                    require(same(before, prior) && before.getValue("path").jsonPrimitive.content.replace('\\', '/') ==
+                        prior.getValue("path").jsonPrimitive.content.replace('\\', '/')) {
+                        "ULTRA_KERNEL_RUNTIME_LAYOUT_SOURCE_SUCCESSOR:$path"
+                    }
+                    identity(it["after"])
+                } ?: prior
+                require(value.getValue("path").jsonPrimitive.content.replace('\\', '/')
+                    .endsWith(path.substringAfterLast('/')) && same(value, chosen) &&
+                    (successor == null || value.getValue("path").jsonPrimitive.content.replace('\\', '/') ==
+                        chosen.getValue("path").jsonPrimitive.content.replace('\\', '/'))) {
+                    "ULTRA_KERNEL_RUNTIME_LAYOUT_SOURCE_PATH"
+                }
             }
             for (key in listOf("objectIdentity", "commandIdentity", "dependencyReceiptIdentity", "configIdentity"))
                 identity(report[key])
-            val dependencies = report.getValue("dependencies").jsonArray.map { identity(it, allowEmpty = true) }
+            val dependencies = report.getValue("dependencies").jsonArray.map(::dependencyIdentity)
             require(dependencies.isNotEmpty() && (sources.values + identity(report["configIdentity"])).all { source ->
                 dependencies.any { same(it, source) }
             }) { "ULTRA_KERNEL_RUNTIME_LAYOUT_DEPENDENCIES" }
@@ -1461,6 +1775,159 @@ internal data class UltraKernelManagerClaimPayload(
                 operations.first, operations.second, callbacks, mode, normalized)
         }
 
+        private fun parseBootEventsAbi(report: JsonObject, payload: JsonObject, elf: ByteArray,
+            reference: ReferenceAbi?): BootEventsAbiFacts {
+            verifyRuntimeProvenance(report, payload, elf, reference, setOf(
+                "runtime/ultra/boot/init-bridge/boot_events.c", "runtime/ultra/boot/init-bridge/boot_events.h"), sectionFlags = 2)
+            return decodeBootEventsAbi(report)
+        }
+
+        internal fun decodeBootEventsAbi(report: JsonObject): BootEventsAbiFacts {
+            require(report["symbol"]?.jsonPrimitive?.content == "msu_boot_events_abi_words" &&
+                report["section"]?.jsonPrimitive?.content == ".msu.boot_events.abi" &&
+                report["sectionFlags"]?.jsonPrimitive?.longOrNull == 2L &&
+                report["schemaVersion"]?.jsonPrimitive?.intOrNull == 1) { "ULTRA_KERNEL_BOOT_EVENTS_ABI_MANIFEST" }
+            val offset = report.getValue("offset").jsonPrimitive.int
+            val bytes = report.getValue("bytes").jsonPrimitive.int
+            val digest = report.getValue("compiledSha256").jsonPrimitive.content
+            val words = report.getValue("values").jsonArray.map(::runtimeWord)
+            require(offset >= 0 && offset % 4 == 0 && bytes == 152 && words.size == 38 &&
+                words.take(4) == listOf(0x4d534245, 1, bytes, 1) && digest.matches(Regex("[0-9a-f]{64}"))) {
+                "ULTRA_KERNEL_BOOT_EVENTS_ABI_HEADER"
+            }
+            val definitions = linkedMapOf(
+                "file_operations" to (4 to linkedMapOf("owner" to 6, "read" to 8, "read_iter" to 10, "release" to 12)),
+                "kprobe" to (14 to linkedMapOf("symbol_name" to 16, "pre_handler" to 18)),
+                "kiocb" to (20 to linkedMapOf("ki_filp" to 22, "ki_pos" to 24, "ki_complete" to 26, "ki_flags" to 28)),
+                "iov_iter" to (30 to linkedMapOf("count" to 32)), "pt_regs" to (34 to linkedMapOf("regs" to 36)))
+            val layouts = report.getValue("layouts").jsonObject.mapValues { (type, element) ->
+                val definition = definitions[type] ?: error("ULTRA_KERNEL_BOOT_EVENTS_ABI_TYPE:$type")
+                val item = element.jsonObject
+                val size = item.getValue("bytes").jsonPrimitive.int
+                val alignment = item.getValue("alignment").jsonPrimitive.int
+                val signature = item.getValue("signature").jsonPrimitive.content
+                val members = item.getValue("members").jsonObject.mapValues { (_, field) ->
+                    field.jsonObject.let { UltraKernelResidentAbi.CompiledMember(it.getValue("offset").jsonPrimitive.int,
+                        it.getValue("bytes").jsonPrimitive.int, it.getValue("signature").jsonPrimitive.content) }
+                }
+                require(size > 0 && alignment in 1..4096 && alignment and (alignment - 1) == 0 && size % alignment == 0 &&
+                    size == words[definition.first] && alignment == words[definition.first + 1] &&
+                    signature.startsWith("s$type:$size{") && signature.length <= 65536 &&
+                    members.keys == definition.second.keys && members.all { (member, field) ->
+                        val at = definition.second.getValue(member)
+                        field.offset >= 0 && field.bytes > 0 && field.offset.toLong() + field.bytes <= size &&
+                            field.offset == words[at] && field.bytes == words[at + 1] &&
+                            field.signature.isNotEmpty() && field.signature.length <= 65536
+                    }) { "ULTRA_KERNEL_BOOT_EVENTS_ABI_COMPILED_TYPE:$type" }
+                UltraKernelResidentAbi.CompiledLayout(size, signature, members)
+            }
+            require(layouts.keys == definitions.keys) { "ULTRA_KERNEL_BOOT_EVENTS_ABI_TYPES" }
+            val policy = report.getValue("cfiPolicy").jsonObject
+            val mode = policy.getValue("mode").jsonPrimitive.content
+            val normalized = policy.getValue("normalizeIntegers").jsonPrimitive.boolean
+            require(mode in setOf("none", "kcfi")) { "ULTRA_KERNEL_BOOT_EVENTS_ABI_CFI_MODE" }
+            val expected = mapOf("boot_read" to "file_operations.read", "boot_read_iter" to "file_operations.read_iter",
+                "boot_release" to "file_operations.release", "boot_read_pre" to "kprobe.pre_handler")
+            fun typeid(value: JsonElement?): Int? = value?.takeUnless { it is JsonNull }?.jsonPrimitive?.long?.let {
+                require(it in 0..0xffffffffL) { "ULTRA_KERNEL_BOOT_EVENTS_ABI_CALLBACK_TYPEID" }; it.toInt()
+            }
+            val callbacks = report.getValue("callbacks").jsonObject.mapValues { (name, element) ->
+                val item = element.jsonObject
+                val callback = SessionCallback(item.getValue("symbol").jsonPrimitive.content,
+                    item.getValue("member").jsonPrimitive.content, item.getValue("signature").jsonPrimitive.content,
+                    item.getValue("offset").jsonPrimitive.int, typeid(item["kcfiPrefix"]), typeid(item["objectKcfiType"]))
+                require(name == callback.symbol && expected[name] == callback.member && callback.offset >= 0 &&
+                    callback.offset % 4 == 0 && callback.signature.startsWith("f") && callback.signature.length <= 65536 &&
+                    (if (mode == "kcfi") callback.kcfiPrefix != null && callback.kcfiPrefix == callback.objectKcfiType &&
+                        item["objectKcfiTypeSource"]?.jsonPrimitive?.content == "actual-object-entry-prefix"
+                    else callback.kcfiPrefix == null && callback.objectKcfiType == null) &&
+                    layouts.getValue(callback.member.substringBefore('.')).members
+                        .getValue(callback.member.substringAfter('.')).signature == "*" + callback.signature) {
+                    "ULTRA_KERNEL_BOOT_EVENTS_ABI_CALLBACK:$name"
+                }
+                callback
+            }
+            require(callbacks.keys == expected.keys) { "ULTRA_KERNEL_BOOT_EVENTS_ABI_CALLBACKS" }
+            return BootEventsAbiFacts(offset, bytes, digest, words, layouts, callbacks, mode, normalized)
+        }
+
+        private fun parseKsuCompatAbi(report: JsonObject, payload: JsonObject, elf: ByteArray,
+            reference: ReferenceAbi?): KsuCompatAbiFacts {
+            verifyRuntimeProvenance(report, payload, elf, reference, setOf(
+                "runtime/ultra/identity/kernel/manager_ksu_compat.c", "runtime/ultra/identity/kernel/manager_ksu_compat.h"), sectionFlags = 2)
+            return decodeKsuCompatAbi(report)
+        }
+
+        internal fun decodeKsuCompatAbi(report: JsonObject): KsuCompatAbiFacts {
+            require(report["symbol"]?.jsonPrimitive?.content == "msu_ksu_compat_layout" &&
+                report["section"]?.jsonPrimitive?.content == ".msu.ksu-compat.layout" &&
+                report["sectionFlags"]?.jsonPrimitive?.longOrNull == 2L &&
+                report["schemaVersion"]?.jsonPrimitive?.intOrNull == 1) { "ULTRA_KERNEL_KSU_COMPAT_ABI_MANIFEST" }
+            val offset = report.getValue("offset").jsonPrimitive.int
+            val bytes = report.getValue("bytes").jsonPrimitive.int
+            val digest = report.getValue("compiledSha256").jsonPrimitive.content
+            val words = report.getValue("values").jsonArray.map(::runtimeWord)
+            require(offset >= 0 && offset % 4 == 0 && bytes == 56 && words.size == 14 && words[0] == 1 &&
+                digest.matches(Regex("[0-9a-f]{64}"))) { "ULTRA_KERNEL_KSU_COMPAT_ABI_HEADER" }
+            val compat = words[7] != -1 || words[8] != 0
+            val fields = linkedMapOf("owner" to 3, "unlocked_ioctl" to 5, "release" to 9)
+            if (compat) fields["compat_ioctl"] = 7
+            val definitions = linkedMapOf("file_operations" to (1 to fields),
+                "callback_head" to (11 to linkedMapOf("func" to 12)))
+            val layouts = report.getValue("layouts").jsonObject.mapValues { (type, element) ->
+                val definition = definitions[type] ?: error("ULTRA_KERNEL_KSU_COMPAT_ABI_TYPE:$type")
+                val item = element.jsonObject
+                val size = item.getValue("bytes").jsonPrimitive.int
+                val signature = item.getValue("signature").jsonPrimitive.content
+                val members = item.getValue("members").jsonObject.mapValues { (_, field) ->
+                    field.jsonObject.let { UltraKernelResidentAbi.CompiledMember(it.getValue("offset").jsonPrimitive.int,
+                        it.getValue("bytes").jsonPrimitive.int, it.getValue("signature").jsonPrimitive.content) }
+                }
+                require(size > 0 && size == words[definition.first] && signature.startsWith("s$type:$size{") &&
+                    signature.length <= 65536 && members.keys == definition.second.keys && members.all { (member, field) ->
+                        val at = definition.second.getValue(member)
+                        field.offset >= 0 && field.bytes > 0 && field.offset.toLong() + field.bytes <= size &&
+                            field.offset == words[at] && field.bytes == words[at + 1] &&
+                            field.signature.isNotEmpty() && field.signature.length <= 65536
+                    }) { "ULTRA_KERNEL_KSU_COMPAT_ABI_COMPILED_TYPE:$type" }
+                if (type == "file_operations") {
+                    val alignment = item.getValue("alignment").jsonPrimitive.int
+                    require(alignment == words[2] && alignment in 1..4096 && alignment and (alignment - 1) == 0 &&
+                        size % alignment == 0) { "ULTRA_KERNEL_KSU_COMPAT_ABI_ALIGNMENT" }
+                }
+                UltraKernelResidentAbi.CompiledLayout(size, signature, members)
+            }
+            require(layouts.keys == definitions.keys) { "ULTRA_KERNEL_KSU_COMPAT_ABI_TYPES" }
+            val policy = report.getValue("cfiPolicy").jsonObject
+            val mode = policy.getValue("mode").jsonPrimitive.content
+            val normalized = policy.getValue("normalizeIntegers").jsonPrimitive.boolean
+            require(mode in setOf("none", "kcfi")) { "ULTRA_KERNEL_KSU_COMPAT_ABI_CFI_MODE" }
+            val expected = linkedMapOf("msu_ksu_ioctl" to "file_operations.unlocked_ioctl",
+                "msu_ksu_release" to "file_operations.release", "msu_ksu_install_resume" to "callback_head.func")
+            if (compat) expected["msu_ksu_compat_ioctl"] = "file_operations.compat_ioctl"
+            fun typeid(value: JsonElement?): Int? = value?.takeUnless { it is JsonNull }?.jsonPrimitive?.long?.let {
+                require(it in 0..0xffffffffL) { "ULTRA_KERNEL_KSU_COMPAT_ABI_CALLBACK_TYPEID" }; it.toInt()
+            }
+            val callbacks = report.getValue("callbacks").jsonObject.mapValues { (name, element) ->
+                val item = element.jsonObject
+                val callback = SessionCallback(item.getValue("symbol").jsonPrimitive.content,
+                    item.getValue("member").jsonPrimitive.content, item.getValue("signature").jsonPrimitive.content,
+                    item.getValue("offset").jsonPrimitive.int, typeid(item["kcfiPrefix"]), typeid(item["objectKcfiType"]))
+                require(name == callback.symbol && expected[name] == callback.member && callback.offset >= 0 && callback.offset % 4 == 0 &&
+                    callback.signature.startsWith("f") && callback.signature.length <= 65536 &&
+                    (if (mode == "kcfi") callback.kcfiPrefix != null && callback.kcfiPrefix == callback.objectKcfiType &&
+                        item["objectKcfiTypeSource"]?.jsonPrimitive?.content == "actual-object-entry-prefix"
+                    else callback.kcfiPrefix == null && callback.objectKcfiType == null) &&
+                    layouts.getValue(callback.member.substringBefore('.')).members
+                        .getValue(callback.member.substringAfter('.')).signature == "*" + callback.signature) {
+                    "ULTRA_KERNEL_KSU_COMPAT_ABI_CALLBACK:$name"
+                }
+                callback
+            }
+            require(callbacks.keys == expected.keys) { "ULTRA_KERNEL_KSU_COMPAT_ABI_CALLBACKS" }
+            return KsuCompatAbiFacts(offset, bytes, digest, words, layouts, callbacks, mode, normalized)
+        }
+
         private fun runtimeManifest(manifest: JsonObject, family: String, elf: ByteArray,
             read: (String, Int) -> ByteArray): JsonObject {
             val version = manifest["schemaVersion"]?.jsonPrimitive
@@ -1570,9 +2037,6 @@ internal data class UltraKernelManagerClaimPayload(
                         "ULTRA_KERNEL_RESIDENT_REFERENCE_IDENTITY"
                     }
                     val managementReport = abi["managementAbi"]?.jsonObject
-                    if (managementReport != null && managementReport["complete"]?.jsonPrimitive?.booleanOrNull != true)
-                        error("ULTRA_KERNEL_MANAGEMENT_REFERENCE_INCOMPLETE:" +
-                            managementReport["missing"]?.jsonArray?.firstOrNull().toString())
                     require(abi["complete"]?.jsonPrimitive?.booleanOrNull == true) { "ULTRA_KERNEL_RESIDENT_REFERENCE_IDENTITY" }
                     fun signatures(name: String) = abi.getValue(name).jsonObject.mapValues { it.value.jsonPrimitive.content }
                     val cfi = payload["callbackCfi"]?.jsonObject ?: error("ULTRA_KERNEL_RESIDENT_CFI_MISSING")
@@ -1601,7 +2065,12 @@ internal data class UltraKernelManagerClaimPayload(
                     val hostDeploymentInputs = managementReport?.get("upstreamSourceFreeze")?.jsonObject
                         ?.get("hostDeploymentEvolution")?.jsonObject?.let { evolution ->
                             require(coreInputs.isNotEmpty()) { "ULTRA_KERNEL_DEPLOYMENT_CORE_SOURCE_MISSING" }
-                            UltraKernelHostDeploymentMetadata.verify(evolution, manifest, coreInputs,
+                            val corePredecessors = coreInputs.mapValues { (_, row) ->
+                                row["previousRuntimeLayoutInput"]?.let { prior ->
+                                    JsonObject(row + mapOf("after" to prior, "nativeCopyIdentity" to prior))
+                                } ?: row
+                            }
+                            UltraKernelHostDeploymentMetadata.verify(evolution, manifest, corePredecessors,
                                 abi.getValue("coreLifecycleAbi").jsonObject.getValue("sourceSelection").jsonObject
                                     .getValue("identity").jsonObject)
                         }.orEmpty()
@@ -1615,9 +2084,15 @@ internal data class UltraKernelManagerClaimPayload(
                             facts["claimSha256"]?.jsonPrimitive?.content == UltraKernelSpec.sha256(elf)) {
                             "ULTRA_KERNEL_MANAGEMENT_REFERENCE_IDENTITY"
                         }
-                        require(facts["complete"]?.jsonPrimitive?.booleanOrNull == true) {
+                        // A verified source proof admits target ABI derivation; it is not target/device acceptance.
+                        require(if (sourceQualification == null) facts["complete"]?.jsonPrimitive?.booleanOrNull == true
+                            else facts["metadataComplete"]?.jsonPrimitive?.booleanOrNull == true &&
+                                facts["complete"]?.jsonPrimitive?.booleanOrNull == false &&
+                                facts["sourceFrozen"]?.jsonPrimitive?.booleanOrNull == false &&
+                                facts["targetQualified"]?.jsonPrimitive?.booleanOrNull == false &&
+                                facts["missing"]?.jsonArray?.isEmpty() == true) {
                             "ULTRA_KERNEL_MANAGEMENT_REFERENCE_INCOMPLETE:" +
-                                facts["missing"]?.jsonArray?.firstOrNull().toString()
+                                (facts["missing"]?.jsonArray?.firstOrNull()?.toString() ?: "source-metadata-or-qualification")
                         }
                         fun identity(value: JsonElement?): JsonObject {
                             val item = value?.jsonObject ?: error("ULTRA_KERNEL_MANAGEMENT_SOURCE_IDENTITY")
@@ -1664,7 +2139,9 @@ internal data class UltraKernelManagerClaimPayload(
                         fun packagedIdentity(value: JsonElement?) {
                             val item = identity(value)
                             val path = item.getValue("path").jsonPrimitive.content.replace('\\', '/')
-                            require(inputs.entries.singleOrNull { path == it.key || path.endsWith("/" + it.key) }?.value ==
+                            val matches = inputs.entries.filter { path == it.key || path.endsWith("/" + it.key) }
+                            val longest = matches.maxOfOrNull { it.key.length }
+                            require(matches.singleOrNull { it.key.length == longest }?.value ==
                                 item.getValue("sha256").jsonPrimitive.content) { "ULTRA_KERNEL_MANAGEMENT_PACKAGED_SOURCE" }
                         }
                         for (key in listOf("sourceFreezeIdentity", "baselineIdentity", "contactIdentity", "changeSetIdentity"))
@@ -1712,9 +2189,16 @@ internal data class UltraKernelManagerClaimPayload(
                                     (currentBytes == null || prior["bytes"] == currentBytes)) { "ULTRA_KERNEL_CORE_SOURCE_PREDECESSOR:$logical" }
                                 identity(it["after"])
                             }
-                            val after = hostDeploymentInputs[logical] ?: coreAfter ?: return logical to currentDigest
+                            val after = if (core?.get("previousRuntimeLayoutInput") != null) coreAfter
+                                else hostDeploymentInputs[logical] ?: coreAfter
+                            if (after == null) return logical to currentDigest
                             val actual = after.getValue("path").jsonPrimitive.content.replace('\\', '/')
-                            val selected = inputs.entries.single { actual == it.key || actual.endsWith("/" + it.key) }
+                            val matches = inputs.entries.filter { actual == it.key || actual.endsWith("/" + it.key) }
+                            val longest = matches.maxOfOrNull { it.key.length }
+                            val selected = matches.singleOrNull { it.key.length == longest }
+                            require(selected != null && selected.value == after.getValue("sha256").jsonPrimitive.content) {
+                                "ULTRA_KERNEL_MANAGEMENT_CURRENT_SOURCE:$logical"
+                            }
                             return selected.key to after.getValue("sha256").jsonPrimitive.content
                         }
                         fun verifyCurrent(item: JsonObject, code: String) {
@@ -1797,7 +2281,19 @@ internal data class UltraKernelManagerClaimPayload(
                         identity(facts["commandIdentity"])
                         val dependencies = facts.getValue("dependencies").jsonArray
                         require(dependencies.isNotEmpty()) { "ULTRA_KERNEL_MANAGEMENT_DEPENDENCIES" }
-                        dependencies.forEach { identity(it) }
+                        fun dependencyIdentity(value: JsonElement) {
+                            val item = value.jsonObject
+                            if (freeze["runtimeLayoutEvolution"] == null || item["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(value)
+                            else {
+                                val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                require(!item["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
+                                    item["sha256"]?.jsonPrimitive?.content == empty &&
+                                    item["archivePath"]?.jsonPrimitive?.content == "build-dependencies/files/$empty.bin") {
+                                    "ULTRA_KERNEL_MANAGEMENT_DEPENDENCY_IDENTITY"
+                                }
+                            }
+                        }
+                        dependencies.forEach(::dependencyIdentity)
                         require(facts["compiledLayoutSha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true) {
                             "ULTRA_KERNEL_MANAGEMENT_LAYOUT_IDENTITY"
                         }
@@ -1863,7 +2359,7 @@ internal data class UltraKernelManagerClaimPayload(
                                 identity(uid[key])
                             val inlineDependencies = uid.getValue("inlineDependencies").jsonArray
                             require(inlineDependencies.isNotEmpty()) { "ULTRA_KERNEL_UID_INLINE_DEPENDENCIES" }
-                            inlineDependencies.forEach { identity(it) }
+                            inlineDependencies.forEach(::dependencyIdentity)
                             val uidOrigins = uid.getValue("callbackOrigins").jsonObject.mapValues { (_, value) ->
                                 val origin = value.jsonObject
                                 UltraKernelResidentAbi.CallbackOrigin(origin.getValue("kind").jsonPrimitive.content,
@@ -1940,7 +2436,7 @@ internal data class UltraKernelManagerClaimPayload(
                                 for (name in listOf("objectIdentity", "commandIdentity", "dependencyReceiptIdentity")) identity(item[name])
                                 val dependencies = item.getValue("dependencies").jsonArray
                                 require(dependencies.isNotEmpty()) { "ULTRA_KERNEL_TASK_STATE_DEPENDENCIES" }
-                                dependencies.forEach { identity(it) }
+                                dependencies.forEach(::dependencyIdentity)
                                 val origin = callbackOrigins["msu_task_state_release_current.validate"]
                                     ?: error("ULTRA_KERNEL_TASK_STATE_VALIDATOR_PROOF")
                                 val proof = item.getValue("internalCallbackProof").jsonObject
@@ -1984,7 +2480,7 @@ internal data class UltraKernelManagerClaimPayload(
                             for (key in listOf("dependencies", "factsDependencies")) {
                                 val values = native.getValue(key).jsonArray
                                 require(values.isNotEmpty()) { "ULTRA_KERNEL_PROCATTR_DEPENDENCIES:$key" }
-                                values.forEach { identity(it) }
+                                values.forEach(::dependencyIdentity)
                             }
                             val section = native.getValue("layoutSection").jsonObject
                             require(section["name"]?.jsonPrimitive?.content == ".msu.procattr.layout" &&
@@ -2166,9 +2662,10 @@ internal data class UltraKernelManagerClaimPayload(
                         }
                         val sourceIdentity = item.getValue("sourceIdentity").jsonObject
                         val hostPath = "runtime/ultra/identity/kernel/manager_resident_host.c"
-                        val hostSource = hostDeploymentInputs[hostPath] ?: coreInputs[hostPath]?.let {
-                            (it["nativeCopyIdentity"] ?: it.getValue("after")).jsonObject
-                        }
+                        val hostCore = coreInputs[hostPath]
+                        val hostCoreSource = hostCore?.let { (it["nativeCopyIdentity"] ?: it.getValue("after")).jsonObject }
+                        val hostSource = if (hostCore?.get("previousRuntimeLayoutInput") != null) hostCoreSource
+                            else hostDeploymentInputs[hostPath] ?: hostCoreSource
                         require(if (hostSource != null) sourceIdentity["sha256"] == hostSource["sha256"] &&
                             sourceIdentity["bytes"] == hostSource["bytes"] else
                             sourceIdentity["sha256"] == manifest.getValue("inputs").jsonObject.entries.singleOrNull {
@@ -2248,7 +2745,11 @@ internal data class UltraKernelManagerClaimPayload(
                         policy["normalizeIntegers"]?.jsonPrimitive?.booleanOrNull == reference.cfi.normalizeIntegers &&
                         policy["normalizeIntegers"] == item["retirement"]?.jsonObject?.get("normalizeIntegers") &&
                         command.getValue("path").jsonPrimitive.content.replace('\\', '/').substringAfterLast('/') ==
-                            ".manager_host_runtime_types.o.cmd" && commands?.count { it == command } == 1) {
+                            ".manager_host_runtime_types.o.cmd" && commands?.count {
+                                val actual = supportIdentity(it)
+                                actual.getValue("path").jsonPrimitive.content.replace('\\', '/').substringAfterLast('/') ==
+                                    ".manager_host_runtime_types.o.cmd" && actual["bytes"] == command["bytes"] && actual["sha256"] == command["sha256"]
+                            } == 1) {
                         "ULTRA_KERNEL_RESIDENT_BOOTSTRAP_NATIVE_POLICY"
                     }
                 }
@@ -2312,8 +2813,24 @@ internal data class UltraKernelManagerClaimPayload(
             val sessionAbi = manifest?.get("payloads")?.jsonObject?.get(family)?.jsonObject?.let { payload ->
                 payload["sessionAbi"]?.jsonObject?.let { parseSessionAbi(it, payload, elf, reference) }
             }
+            val bootEventsAbi = manifest?.get("payloads")?.jsonObject?.get(family)?.jsonObject?.let { payload ->
+                payload["bootEventsAbi"]?.jsonObject?.let { parseBootEventsAbi(it, payload, elf, reference) }
+            }
+            val ksuCompatAbi = manifest?.get("payloads")?.jsonObject?.get(family)?.jsonObject?.let { payload ->
+                payload["ksuCompatAbi"]?.jsonObject?.let { parseKsuCompatAbi(it, payload, elf, reference) }
+            }
+            val materializer = read("materializer.bin", 65536)
+            if (manifest != null) {
+                val item = manifest["support"]?.jsonObject?.get("materializer")?.jsonObject
+                    ?: error("ULTRA_KERNEL_MANAGER_CLAIM_MATERIALIZER_IDENTITY")
+                require(item["protocolVersion"]?.jsonPrimitive?.intOrNull == 3 &&
+                    item["bytes"]?.jsonPrimitive?.intOrNull == materializer.size &&
+                    item["sha256"]?.jsonPrimitive?.content == UltraKernelSpec.sha256(materializer)) {
+                    "ULTRA_KERNEL_MANAGER_CLAIM_MATERIALIZER_IDENTITY"
+                }
+            }
             return UltraKernelManagerClaimPayload(bootstrap,
-                read("materializer.bin", 65536), elf, reference, permissions, bootEntry, deploymentEntry, runtimeLayout, runtimeProfiles, sessionAbi)
+                materializer, elf, reference, permissions, bootEntry, deploymentEntry, runtimeLayout, runtimeProfiles, sessionAbi, bootEventsAbi, ksuCompatAbi)
         }
     }
 }

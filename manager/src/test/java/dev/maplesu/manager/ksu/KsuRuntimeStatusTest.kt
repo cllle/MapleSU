@@ -2,13 +2,17 @@
 package dev.maplesu.manager.ksu
 
 import dev.maplesu.manager.workmode.ActivationSource
-import dev.maplesu.manager.workmode.ModeActivation
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
 import dev.maplesu.manager.workmode.backend.KsuBackendRegistry
+import dev.maplesu.manager.workmode.detect.DetectionGroup
+import dev.maplesu.manager.workmode.detect.DetectionResult
+import dev.maplesu.manager.workmode.detect.DetectionRules
 import dev.maplesu.manager.workmode.detect.ModeState
+import dev.maplesu.manager.workmode.detect.RecoveryReadiness
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -51,15 +55,22 @@ class KsuRuntimeStatusTest {
         clock = { KsuBootReceiptFixture.NOW },
     )
 
-    private fun activateLite() = ModeRuntime.overrideForTest(
-        ModeActivation.Active(
-            mode = WorkMode.LITE,
-            bootId = "boot-1",
-            source = ActivationSource.TEST_OVERRIDE,
-            detectedState = ModeState.MODE_A_ACTIVE,
-            activatedAtMillis = 0L,
-        ),
-    )
+    private fun activateLite() {
+        ModeRuntime.installBootIdProviderForTest { "boot-1" }
+        ModeRuntime.recordDetection(
+            DetectionResult(
+                state = ModeState.MODE_A_ACTIVE,
+                group = DetectionGroup.A_ACTIVE,
+                rule = DetectionRules.Rule.R5_A_HANDSHAKE,
+                bootId = "boot-1",
+                observedAtMillis = 0L,
+                trace = emptyList(),
+                recovery = RecoveryReadiness.NONE,
+                rootChannel = null,
+            ),
+        )
+        assertTrue(ModeRuntime.activate(WorkMode.LITE, "boot-1", ActivationSource.BOOT_DETECTION))
+    }
 
     // ── §9.4 断言 3：LITE 零探针 ────────────────────────────────────────
 

@@ -11,10 +11,11 @@ int main(int argc, char** argv) {
     assert(argc >= 2 && argc <= 6);
     assert(argc < 4 || !std::strcmp(argv[3], "0") || !std::strcmp(argv[3], "1"));
     assert(argc < 5 || !std::strcmp(argv[4], "0") || !std::strcmp(argv[4], "1"));
-    assert(argc < 6 || !std::strcmp(argv[5], "0") || !std::strcmp(argv[5], "1"));
+    assert(argc < 6 || !std::strcmp(argv[5], "0") || !std::strcmp(argv[5], "1") ||
+        !std::strcmp(argv[5], "2") || !std::strcmp(argv[5], "3"));
     const bool allow_inner_allocator = argc >= 4 && !std::strcmp(argv[3], "1");
     const bool allow_user_sampler = argc >= 5 && !std::strcmp(argv[4], "1");
-    const bool allow_segmented_allocator = argc == 6 && !std::strcmp(argv[5], "1");
+    const unsigned allow_segmented_allocator = argc == 6 ? static_cast<unsigned>(std::strtoul(argv[5], nullptr, 10)) : 0;
     const auto page = argc >= 3 ? static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10)) : 4096u;
     std::ifstream input(argv[1], std::ios::binary); assert(input);
     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});

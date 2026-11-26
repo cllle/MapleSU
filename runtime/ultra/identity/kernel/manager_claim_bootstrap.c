@@ -80,7 +80,8 @@ static int msu_resident_start(const struct msu_manager_claim_anchor *a,
             resident->append_offset > a->binding.image_bytes ||
             resident->append_bytes > a->binding.image_bytes - resident->append_offset ||
             (resident->append_bytes != MAPLESU_LEGACY_METADATA_V2_BYTES &&
-             resident->append_bytes != MAPLESU_LEGACY_METADATA_AUDIT_BYTES) ||
+             resident->append_bytes != MAPLESU_LEGACY_METADATA_AUDIT_BYTES &&
+             resident->append_bytes != MAPLESU_APPEND64_BYTES) ||
             resident->init_offset % 4 || resident->discard_offset % 4 || resident->dispatch_offset % 4 ||
             h->memory_bytes < 4 || resident->init_offset > h->memory_bytes - 4 ||
             resident->discard_offset > h->memory_bytes - 4 || resident->dispatch_offset > h->memory_bytes - 4)

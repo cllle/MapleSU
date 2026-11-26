@@ -4,9 +4,10 @@ import os
 import subprocess
 import tempfile
 import unittest
+import zipfile
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("MAPLESU_REMOVAL_SOURCE", Path(__file__).resolve().parents[2])).resolve()
 ASSETS = Path(os.environ.get("MAPLESU_TEST_MODULE_ASSETS", ROOT / "manager/src/main/assets/maplesu/modules"))
 BASH = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "/bin/bash"
 
@@ -28,10 +29,28 @@ class ModuleContractTest(unittest.TestCase):
                 self.env.pop(name)
         self.env["PATH"] = self.base + "/bin:/usr/bin:/bin"
         self.env["MAPLESU_BIN"] = self.base + "/adb/maplesu/bin"
+        # Platform substitute for ModuleTaskEnvironment.nonSdk(5, 2, 0, hook=false).
+        # Unknown driver/mode facts stay unknown; production shell validation still runs.
+        self.runtime_facts = {
+            "KSU": "true", "KSU_VER": "MapleSU 5.2.0", "KSU_VER_CODE": "50200",
+            "KSU_KERNEL_VER_CODE": "0", "KSU_UAPI_VER": "0",
+            "MAPLESU_KSU_COMPAT": "1", "KSU_FACT_SOURCE": "legacy",
+            "MAPLESU_RUNTIME_MODE": "unknown",
+        }
+        self.env.update(self.runtime_facts)
         for name in ("chown", "chcon"):
             self.write("bin/" + name, "#!/bin/bash\nexit 0\n")
         self.write("bin/chmod", '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_ROOT/permissions"\nexec /usr/bin/chmod "$@"\n')
         self.write("bin/getprop", "#!/bin/bash\necho 36\n")
+        self.write("bin/id", '''#!/bin/bash
+if [ "$*" = -u ]; then echo 0; else exec /usr/bin/id "$@"; fi
+''')
+        self.write("bin/stat", '''#!/bin/bash
+if [ "$#" = 3 ] && [ "$1" = -c ] && { [ "$2" = %u ] || [ "$2" = %g ]; }; then
+  case "$3" in "$TEST_ROOT"/*) echo 0; exit 0 ;; esac
+fi
+exec /usr/bin/stat "$@"
+''')
         self.write("bin/readlink", '''#!/bin/bash
 case "$*" in
  /proc/self/ns/mnt) echo "${FIXTURE_NS:-init}" ;;
@@ -43,7 +62,12 @@ esac
 case "$1" in
  sh) shift; exec /bin/bash "$@" ;;
  nsenter) echo nsenter >> "$TEST_ROOT/trace"; shift 5; export FIXTURE_NS=init; exec "$@" ;;
- unzip) echo bundled-unzip >> "$TEST_ROOT/trace"; exit 0 ;;
+ unzip)
+   shift
+   printf '%s\\n' "$*" >> "$TEST_ROOT/unzip-calls"
+   # Keep wrapper staging separate from module-issued tool calls in the original trace.
+   [ "${1:-}" = -oj ] || echo bundled-unzip >> "$TEST_ROOT/trace"
+   exec /usr/bin/unzip "$@" ;;
  *) command="$1"; shift; exec "$command" "$@" ;;
 esac
 ''')
@@ -53,7 +77,7 @@ esac
             text = text.replace("/system/bin/", "/usr/bin/")
             text = text.replace("/usr/bin/sh", "/bin/bash")
             text = text.replace("/data/adb", self.base + "/adb")
-            if name == "mount.sh":
+            if name in ("mount.sh", "run.sh"):
                 text = text.replace("/proc/sys/kernel/random/boot_id", self.base + "/boot_id")
                 text = text.replace("/proc/self/mountinfo", self.base + "/mountinfo")
             self.write(name, 'export PATH="$TEST_ROOT/bin:/usr/bin:/bin"\n' + text)
@@ -81,6 +105,15 @@ esac
             self.write("adb/metamodule/metauninstall.sh", uninstall)
 
     def install(self, code=0):
+        # The real caller keeps the original ZIP alongside the already prepared tree.
+        entries = {path.relative_to(self.module).as_posix(): path.read_bytes()
+                   for path in self.module.rglob("*") if path.is_file()
+                   and ".maplesu-tmp" not in path.relative_to(self.module).parts}
+        entries.setdefault("verify.sh", b":\n")
+        entries.setdefault("common/fixture", b"fixture\n")
+        with zipfile.ZipFile(self.root / "archive.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, data in entries.items():
+                archive.writestr(name, data)
         return self.run_shell("runner.sh", shell_path(self.module), "customize.sh",
                               self.base + "/archive.zip", self.base + "/legacy-install.sh", code=code)
 
@@ -94,6 +127,61 @@ esac
     def trace(self):
         path = self.root / "trace"
         return path.read_text().splitlines() if path.exists() else []
+
+    def test_legacy_bridge_sources_archive_and_flattens_common_into_tmpdir(self):
+        self.write("adb/modules/fixture/install.sh", "exit 86\n")
+        with zipfile.ZipFile(self.root / "archive.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("module.prop", "id=fixture\nversionCode=2\n")
+            archive.writestr("common/system.prop", "fixture.archive=1\n")
+            archive.writestr("install.sh", '''print_modname() { :; }
+PROPFILE=true
+on_install() {
+  test -f "$TMPDIR/install.sh" && test ! -e "$TMPDIR/common/system.prop" || exit 81
+  grep -q '^fixture.archive=1$' "$TMPDIR/system.prop" || exit 82
+  echo archive-callback >> "$TEST_ROOT/trace"
+}
+set_permissions() { :; }
+''')
+        self.run_shell("runner.sh", shell_path(self.module), "customize.sh",
+                       self.base + "/archive.zip", self.base + "/legacy-install.sh")
+        self.assertEqual(["archive-callback"], self.trace())
+        self.assertEqual("fixture.archive=1\n", (self.module / "system.prop").read_text())
+        self.assertIn("versionCode=2", (self.module / "module.prop").read_text())
+        self.assertTrue((self.root / "unzip-calls").read_text().startswith("-oj "))
+
+    def test_missing_or_invalid_runtime_facts_still_reject_all_script_entries(self):
+        self.write("adb/modules/fixture/install.sh", '''print_modname() { :; }
+on_install() { echo unexpected-installer >> "$TEST_ROOT/trace"; }
+set_permissions() { :; }
+''')
+        self.write("adb/modules/fixture/action.sh", 'echo unexpected-action >> "$TEST_ROOT/trace"\n')
+        baseline = self.env.copy()
+        invalid = [(None, None), ("KSU_VER_CODE", None), ("KSU_VER_CODE", "bad"),
+                   ("KSU_VER", ""), ("KSU_KERNEL_VER_CODE", "bad"), ("KSU_UAPI_VER", "bad"),
+                   ("KSU_FACT_SOURCE", "unobserved"), ("MAPLESU_RUNTIME_MODE", "lkm"),
+                   ("KSU_KERNEL_VER_CODE", "1"), ("KSU_RUNTIME_MODE", "lkm"),
+                   ("MAPLESU_KSU_COMPAT", None)]
+        entries = [("runner.sh", shell_path(self.module), "customize.sh", self.base + "/archive.zip",
+                    self.base + "/legacy-install.sh"),
+                   ("legacy-install.sh", shell_path(self.module), self.base + "/archive.zip"),
+                   ("run.sh", shell_path(self.module), "action")]
+        try:
+            for entry in entries:
+                for field, value in invalid:
+                    with self.subTest(entry=entry[0], field=field, value=value):
+                        self.env = baseline.copy()
+                        if field is None:
+                            for key in self.runtime_facts:
+                                self.env.pop(key, None)
+                        elif value is None:
+                            self.env.pop(field, None)
+                        else:
+                            self.env[field] = value
+                        result = self.run_shell(*entry, code=75)
+                        self.assertIn("authenticated KSU runtime facts missing or invalid", result.stderr)
+                        self.assertEqual([], self.trace())
+        finally:
+            self.env = baseline
 
     def test_no_modules_and_no_mount_ledger_performs_no_mutations(self):
         for name in ("mkdir", "chmod", "mount", "umount", "chcon", "setenforce"):

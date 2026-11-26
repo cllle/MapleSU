@@ -7,6 +7,8 @@ import dev.maplesu.manager.runtime.ultra.UltraInstallCredentialTransition
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -119,13 +121,39 @@ class UltraInitBootCredentialTest {
         val directory = temporary.newFolder()
         val helpers = Class.forName("dev.maplesu.image.UltraInitBootProducerTest")
         fun bytes(name: String, vararg args: Any): ByteArray {
-            val types = args.map { if (it is Boolean) java.lang.Boolean.TYPE else it.javaClass }.toTypedArray()
+            val types = args.map { when (it) {
+                is Boolean -> java.lang.Boolean.TYPE
+                is Int -> java.lang.Integer.TYPE
+                else -> it.javaClass
+            } }.toTypedArray()
             val method = helpers.getDeclaredMethod(name, *types).apply { isAccessible = true }
             return method.invoke(null, *args) as ByteArray
         }
-        val kernel = bytes("kernel")
+        val kernel = if (embedded) bytes("kernel") else {
+            val layout = UltraKernelKallsymsLayoutTest::class.java.getDeclaredMethod("fixture",
+                java.lang.Boolean.TYPE, java.lang.Integer.TYPE, java.lang.Integer.TYPE,
+                java.lang.Integer.TYPE, Map::class.java).apply { isAccessible = true }
+            (layout.invoke(UltraKernelKallsymsLayoutTest(), false, 1025, 0x5000, 0,
+                emptyMap<Int, Pair<String, Int>>()) as ByteArray).apply {
+                ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN).putLong(24, 2)
+                "Linux version 6.6.1-fixture (byte fixture)\n".toByteArray(Charsets.US_ASCII).copyInto(this, 0x9000)
+            }
+        }
+        val module = if (embedded) bytes("module").also {
+            val elf = ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN)
+            val symbols = elf.getLong(40).toInt() + 3 * elf.getShort(58).toInt()
+            elf.putInt(symbols + 40, 1).putLong(symbols + 56, 24)
+        } else bytes("parameterModule", 4096 - displacement).also {
+            val elf = ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN)
+            val section = elf.getLong(40).toInt() + 5 * elf.getShort(58).toInt()
+            val at = elf.getLong(section + 24).toInt()
+            val count = elf.getLong(section + 32).toInt()
+            val parameter = "parmtype=deployment_namespace:string\u0000".toByteArray(Charsets.US_ASCII)
+            parameter.copyInto(it, at + count)
+            elf.putLong(section + 32, (count + parameter.size).toLong())
+        }
         val files = mapOf("target-boot.img" to bytes("image", kernel, ByteArray(0)),
-            "ultra-init" to bytes("handoff"), "bridge.ko" to bytes("module").also { it[it.lastIndex] = variant.toByte() })
+            "ultra-init" to bytes("handoff"), "bridge.ko" to (module + variant.toByte()))
         files.forEach { (path, content) -> File(directory, path).writeBytes(content) }
         val manifest = File(directory, "manifest.json")
         manifest.writeText(buildJsonObject {

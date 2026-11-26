@@ -8,7 +8,10 @@ import com.maplesu.core.ui.webui.webUIApps
 import org.json.JSONArray
 import org.json.JSONObject
 
-class KsuPm internal constructor(private val pageCurrent: () -> Boolean) {
+class KsuPm internal constructor(
+    private val pageCurrent: () -> Boolean,
+    private val apps: () -> List<AppInfo> = ::webUIApps,
+) {
     private companion object {
         const val KSU_PM_VERSION = 1
     }
@@ -26,7 +29,7 @@ class KsuPm internal constructor(private val pageCurrent: () -> Boolean) {
     @JavascriptInterface
     fun listPackages(type: String): String {
         requireCurrentPage()
-        val packageNames = webUIApps()
+        val packageNames = apps()
             .filter { appInfo ->
                 if (appInfo.special) return@filter false
                 val flags = appInfo.packageInfo.applicationInfo?.flags ?: 0
@@ -53,7 +56,7 @@ class KsuPm internal constructor(private val pageCurrent: () -> Boolean) {
     fun getPackagesInfo(packageNamesJson: String): String {
         requireCurrentPage()
         val packageNames = JSONArray(packageNamesJson)
-        val appsByPackage = webUIApps()
+        val appsByPackage = apps()
             .filterNot { it.special }
             .groupBy { it.packageName }
         val jsonArray = JSONArray()

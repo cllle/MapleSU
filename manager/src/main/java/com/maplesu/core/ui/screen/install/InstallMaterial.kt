@@ -89,7 +89,7 @@ internal fun InstallScreenMaterial(
             }
 
             if (uiState.hasInstallSource) {
-                InstallTargetStepSection(state = uiState)
+                InstallTargetStepSection(state = uiState, onSelectInitBootKmi = actions.onSelectInitBootKmi)
             }
 
             InstallAdvancedOptions(uiState, actions)

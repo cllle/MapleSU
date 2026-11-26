@@ -9,7 +9,7 @@ struct msu_sdk_vm {
 static int msu_sdk_logical(unsigned int word, unsigned long *out)
 {
     unsigned int top = ((word >> 22 & 1) << 6) | (~(word >> 10) & 63);
-    unsigned int len = 0, width, ones, rotation;
+    unsigned int len = 0, width, ones, rotation, at;
     unsigned long mask, value;
     while (top >>= 1) ++len;
     if (len < 1 || len > 6) return -1;
@@ -20,17 +20,17 @@ static int msu_sdk_logical(unsigned int word, unsigned long *out)
     value = (1UL << (ones + 1)) - 1;
     if (rotation) value = ((value >> rotation) | (value << (width - rotation))) & mask;
     *out = 0;
-    for (unsigned int at = 0; at < 64; at += width) *out |= value << at;
+    for (at = 0; at < 64; at += width) *out |= value << at;
     return 0;
 }
 static inline int msu_sdk_vmalloc(const unsigned char *code, unsigned long address,
     unsigned long target, unsigned long base, unsigned long image_bytes, unsigned int profiled,
     struct msu_sdk_vm *result)
 {
-    unsigned int w[30], branch, adrp, flag, start, end, sm, em, align, gfp, prot, ph, ps;
+    unsigned int w[30], branch, adrp, flag, start, end, sm, em, align, gfp, prot, ph, ps, i;
     unsigned long extra, high, flag_address;
     long immediate, delta;
-    for (unsigned int i = 0; i < 30; ++i) w[i] = (unsigned int)msu_sdk_le(code + i * 4, 4);
+    for (i = 0; i < 30; ++i) w[i] = (unsigned int)msu_sdk_le(code + i * 4, 4);
     /* Native dynamic SCS may rewrite the architectural PAC entry/exit hints. */
     if (w[0] == 0xf800865e) w[0] = 0xd503233f;
     if (w[24] == 0xf85f8e5e) w[24] = 0xd50323bf;

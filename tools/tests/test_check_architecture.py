@@ -205,15 +205,6 @@ class CheckArchitectureTest(unittest.TestCase):
         problems = ca.rule_directory_readmes(self.repo()).problems
         self.assertEqual(["client/README.md: link target does not exist: ../docs/GONE.md"], problems)
 
-    def test_documented_renamed_paths_require_their_current_target(self):
-        old = "runtime/pro/bridge/NativeBridge.java"
-        target = ca.DOCUMENTED_PATH_ALIASES[old]
-        self.write("docs/ARCHITECTURE.md", f"`docs/` `manager/` `{old}`\n")
-        self.write(target, "class NativeBridge {}\n")
-        self.assertTrue(ca.rule_docs_paths(self.repo()).passed)
-        (self.root / target).unlink()
-        self.assertTrue(any(old in item for item in ca.rule_docs_paths(self.repo()).problems))
-
     def test_regression_tests_belong_in_scripts_tests(self):
         self.write("scripts/test-a.py", "")
         self.write("scripts/tests/test-b.py", "")
@@ -283,6 +274,122 @@ class CheckArchitectureTest(unittest.TestCase):
             problems = ca.rule_pinned_scripts(self.repo()).problems
         self.assertEqual(["scripts/repair-x.py: named by runtime/maplesu-sdk/SDK-RELEASE.json but missing"], problems)
 
+    def source_script_snapshot(self):
+        import hashlib
+        policy = {"public_scope": "work-in-progress-source-checkpoint",
+                  "native_input_manifest": "release/native-inputs.json",
+                  "release_blockers": [{"id": name, "resolved": False} for name in
+                                       ("complete-source-build", "maplesu-5.2.1-acceptance")]}
+        self.write("release/source-policy.json", json.dumps(policy))
+        inputs = []
+        for name in ca.PINNED_SCRIPT_DIGESTS:
+            data = b"print('current source')\n"
+            self.write(name, data)
+            inputs.append({"path": name, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+        self.write("release/native-inputs.json", json.dumps({"files": inputs}))
+        retained = []
+        for name in ("archive.a", "helper", "backend.so"):
+            data = ("retained " + name).encode()
+            path = "runtime/maplesu-sdk/" + name
+            self.write(path, data)
+            retained.append({"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+        sdk = {"archive": retained[0], "helper": retained[1], "environmentPolicyBoot": {"backend": retained[2]}}
+        self.write(ca.SDK_RECORD, json.dumps(sdk))
+        return policy, inputs, sdk
+
+    def test_wip_scripts_follow_current_path_bound_inputs(self):
+        self.source_script_snapshot()
+        result = ca.rule_pinned_scripts(self.repo())
+        self.assertTrue(result.passed, result.problems)
+        self.assertIn("artifact provenance and runtime acceptance remain unverified", result.notes[0])
+
+    def test_wip_current_script_edits_are_rejected(self):
+        self.source_script_snapshot()
+        self.write(ca.PINNED_SCRIPT_DIGESTS[0], "print('changed source')\n")
+        result = ca.rule_pinned_scripts(self.repo())
+        self.assertFalse(result.passed)
+        self.assertIn("digest or size mismatch", result.problems[0])
+
+    def test_wip_current_record_edits_are_rejected(self):
+        _, inputs, _ = self.source_script_snapshot()
+        inputs[0]["sha256"] = "0" * 64
+        self.write("release/native-inputs.json", json.dumps({"files": inputs}))
+        result = ca.rule_pinned_scripts(self.repo())
+        self.assertFalse(result.passed)
+        self.assertIn("digest or size mismatch", result.problems[0])
+
+    def test_wip_current_records_are_required_and_unambiguous(self):
+        _, inputs, _ = self.source_script_snapshot()
+        for entries in (inputs[1:], inputs + inputs[:1]):
+            with self.subTest(entries=len(entries)):
+                self.write("release/native-inputs.json", json.dumps({"files": entries}))
+                result = ca.rule_pinned_scripts(self.repo())
+                self.assertFalse(result.passed)
+                self.assertIn("exactly one current native-input record", result.problems[0])
+
+    def test_wip_registered_scripts_still_need_valid_python(self):
+        import hashlib
+        _, inputs, _ = self.source_script_snapshot()
+        data = b"def broken(:\n"
+        self.write(inputs[0]["path"], data)
+        inputs[0].update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+        self.write("release/native-inputs.json", json.dumps({"files": inputs}))
+        result = ca.rule_pinned_scripts(self.repo())
+        self.assertFalse(result.passed)
+        self.assertIn("invalid syntax", result.problems[0])
+
+    def test_wip_retained_archive_helper_and_backend_edits_are_rejected(self):
+        _, _, sdk = self.source_script_snapshot()
+        for item in (sdk["archive"], sdk["helper"], sdk["environmentPolicyBoot"]["backend"]):
+            with self.subTest(path=item["path"]):
+                original = (self.root / item["path"]).read_bytes()
+                self.write(item["path"], original + b"changed")
+                result = ca.rule_pinned_scripts(self.repo())
+                self.assertFalse(result.passed)
+                self.assertIn("retained input changed", result.problems[0])
+                self.write(item["path"], original)
+
+    def test_wip_with_a_resolved_blocker_fails_instead_of_falling_back(self):
+        policy, _, _ = self.source_script_snapshot()
+        for blocker in policy["release_blockers"]:
+            with self.subTest(blocker=blocker["id"]):
+                blocker["resolved"] = True
+                self.write("release/source-policy.json", json.dumps(policy))
+                result = ca.rule_pinned_scripts(self.repo())
+                self.assertFalse(result.passed)
+                self.assertIn("unresolved release blockers", result.problems[0])
+                blocker["resolved"] = False
+
+    def test_release_candidate_keeps_the_sdk_record_contract(self):
+        policy, _, _ = self.source_script_snapshot()
+        policy["public_scope"] = "release-candidate"
+        self.write("release/source-policy.json", json.dumps(policy))
+        result = ca.rule_pinned_scripts(self.repo())
+        self.assertFalse(result.passed)
+        self.assertEqual(len(ca.PINNED_SCRIPT_DIGESTS), len(result.problems))
+        self.assertTrue(all("the SDK records pin" in item for item in result.problems))
+        self.assertEqual([], result.notes)
+
+    def test_declared_source_policy_requires_the_sdk_receipt(self):
+        policy, _, _ = self.source_script_snapshot()
+        (self.root / ca.SDK_RECORD).unlink()
+        for scope in ("work-in-progress-source-checkpoint", "release-candidate"):
+            with self.subTest(scope=scope):
+                policy["public_scope"] = scope
+                self.write("release/source-policy.json", json.dumps(policy))
+                result = ca.rule_pinned_scripts(self.repo())
+                self.assertFalse(result.passed)
+                self.assertFalse(result.skipped)
+                self.assertIn("missing SDK receipt", result.problems[0])
+
+    def test_wip_manifest_path_stays_inside_the_tree(self):
+        policy, _, _ = self.source_script_snapshot()
+        policy["native_input_manifest"] = "../outside.json"
+        self.write("release/source-policy.json", json.dumps(policy))
+        result = ca.rule_pinned_scripts(self.repo())
+        self.assertFalse(result.passed)
+        self.assertIn("leaves candidate tree", result.problems[0])
+
     # -- portable-paths ---------------------------------------------------------------------------
 
     def test_a_maintainers_machine_must_not_appear_in_the_tree(self):
@@ -308,6 +415,63 @@ class CheckArchitectureTest(unittest.TestCase):
              "tools/e.sh:2: a device serial number: a261972a",
              "tools/f.sh:1: a pinned JDK or Python install directory: C:/Python314"],
             sorted(problems))
+
+    def test_retained_provenance_requires_exact_bytes(self):
+        import hashlib
+        from unittest import mock
+        name = "fixtures/receipt.json"
+        data = b'{"producer": "D:/Maple_Workflow/source"}\n'
+        self.write(name, data)
+        with mock.patch.object(ca, "LOCAL_PATH_RETAINED_PROVENANCE",
+                               {name: hashlib.sha256(data).hexdigest()}):
+            self.assertTrue(ca.rule_portable_paths(self.repo()).passed)
+            for changed in (data + b" ", b"\0" + data, data + b" " * 2_000_001):
+                with self.subTest(bytes=len(changed)):
+                    self.write(name, changed)
+                    self.assertTrue(any("retained provenance bytes changed" in p
+                                        for p in ca.rule_portable_paths(self.repo()).problems))
+
+    def test_retained_ir_only_exempts_source_metadata(self):
+        import hashlib
+        from unittest import mock
+        name = "fixtures/producer.ll"
+        metadata = (b"; ModuleID = 'D:/Maple_Workflow/source.bc'\r\n"
+                    b'source_filename = "C:/Users/Alice/source.cpp"\r\n')
+        for body, passes in ((b'define void @f() { ret void }\n', True),
+                             (b'@path = constant [1 x i8] c"D:/Maple_Workflow/data"\n', False)):
+            with self.subTest(body=body):
+                data = metadata + body
+                self.write(name, data)
+                with mock.patch.object(ca, "LOCAL_PATH_RETAINED_PROVENANCE",
+                                       {name: hashlib.sha256(data).hexdigest()}):
+                    self.assertEqual(passes, ca.rule_portable_paths(self.repo()).passed)
+
+    def test_retained_provenance_read_errors_fail(self):
+        import hashlib
+        from unittest import mock
+        name = "fixtures/receipt.json"
+        data = b'{"producer": "original"}\n'
+        self.write(name, data)
+        repo = self.repo()
+        with mock.patch.object(ca, "LOCAL_PATH_RETAINED_PROVENANCE",
+                               {name: hashlib.sha256(data).hexdigest()}), \
+                mock.patch.object(Path, "open", side_effect=PermissionError("read denied")):
+            problems = ca.rule_portable_paths(repo).problems
+            self.assertEqual(1, len(problems))
+            self.assertIn("retained provenance read failed", problems[0])
+
+    def test_retained_provenance_does_not_exempt_a_neighbor(self):
+        import hashlib
+        from unittest import mock
+        name = "fixtures/receipt.json"
+        data = b'{"producer": "D:/Maple_Workflow/source"}\n'
+        self.write(name, data)
+        self.write("fixtures/run.py", "ROOT = 'D:/Maple_Workflow/source'\n")
+        with mock.patch.object(ca, "LOCAL_PATH_RETAINED_PROVENANCE",
+                               {name: hashlib.sha256(data).hexdigest()}):
+            problems = ca.rule_portable_paths(self.repo()).problems
+            self.assertEqual(1, len(problems))
+            self.assertTrue(problems[0].startswith("fixtures/run.py:"))
 
     # -- origin report ---------------------------------------------------------------------------
 

@@ -646,7 +646,7 @@ KModErr get_mm_struct_arg_offset(uint32_t& arg_start_offset, uint32_t& arg_end_o
     asmjit::Label fail_label = a->newLabel();
     kernel_module::arm64_module_asm_func_start(a);
 
-    kernel_module::export_symbol::get_current(a, asmjit::a64::regs::x11);
+    RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, asmjit::a64::regs::x11));
     kernel_module::export_symbol::get_task_mm(a, err, asmjit::a64::regs::x11);
     if (is_failed(err)) {
         return err;
@@ -735,7 +735,7 @@ static KModErr snapshot_current_mm_struct(char* out_buf, int size) {
     KModErr err = get_kernel_shellcode_u64_result(
             [](asmjit::a64::Assembler* a, asmjit::a64::GpX& result) -> KModErr {
                 KModErr call_err = KModErr::ERR_MODULE_PARAM;
-                kernel_module::export_symbol::get_current(a, asmjit::a64::regs::x10);
+                RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
                 kernel_module::export_symbol::get_task_mm(a, call_err, asmjit::a64::regs::x10);
                 if (is_failed(call_err)) {
                     return call_err;
@@ -775,7 +775,7 @@ static KModErr find_pgd_offset_via_at_instruction(uint64_t pgd_phys, uint32_t& o
     err = get_kernel_shellcode_u64_result(
             [](asmjit::a64::Assembler* a, asmjit::a64::GpX& result) -> KModErr {
                 KModErr call_err = KModErr::ERR_MODULE_PARAM;
-                kernel_module::export_symbol::get_current(a, asmjit::a64::regs::x10);
+                RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
                 kernel_module::export_symbol::get_task_mm(a, call_err, asmjit::a64::regs::x10);
                 if (is_failed(call_err)) {
                     return call_err;

@@ -85,6 +85,16 @@ class HostPickerUiContractTest {
         assertTrue(screen.contains("state.failureRes"))
     }
 
+    @Test
+    fun cleanupFailureHasASpecificHumanReadableStepLabel() {
+        val page = requireNotNull(read(pagePath))
+        assertTrue(page.contains("HiddenDeactivateStep.CLEANUP_RECOVERY.wire -> R.string.lite_hidden_deactivate_step_cleanup"))
+        val zh = requireNotNull(read(zhPath))
+        assertTrue(zh.contains("<string name=\"lite_hidden_deactivate_step_cleanup\">清理恢复资料</string>"))
+        val en = requireNotNull(read("src/main/res/values/maplesu_litehidden.xml"))
+        assertTrue(en.contains("<string name=\"lite_hidden_deactivate_step_cleanup\">Clean recovery data</string>"))
+    }
+
     // 5
     @Test
     fun candidateFilteringRulesLiveInPurePolicy() {

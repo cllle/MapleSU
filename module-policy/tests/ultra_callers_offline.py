@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SHIM = "manager/src/main/assets/maplesu/modules/sepolicy.sh"
 CALLER = "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt"
 DEPLOYMENT = "manager/src/main/java/dev/maplesu/manager/modules/ModuleToolDeployment.kt"
+BOOT = "manager/src/main/assets/maplesu/modules/boot.sh"
 script = r'''
 import os
 from pathlib import Path
@@ -51,7 +52,7 @@ for route, command in routes:
                 env=dict(os.environ, FIXTURE_CODE=str(status)), capture_output=True, text=True)
             assert result.returncode == status, (route, command, form, result.stdout, result.stderr)
             arguments = (root/'arguments').read_text().splitlines()
-            expected = ['check', '--rules'] if command == 'check' else ['apply', '--require-boot-policy', '--rules']
+            expected = ['module-check', '--rules'] if command == 'check' else ['module-apply', '--require-boot-policy', '--rules']
             assert arguments[:-1] == expected, arguments
             assert (root/'rules').read_text().strip() == rule_text, (route, form)
             assert not Path(arguments[-1]).exists(), 'temporary rules leaked'
@@ -66,8 +67,30 @@ for route, command in routes:
         assert not list(root.glob('.module-rules-*')), 'invalid request leaked temporary rules'
         tests += 1
 caller = Path('/source/manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt').read_text()
-assert 'ModuleToolDeployment.policyPath())} apply --require-boot-policy $arguments' in caller
-print(f'PASS {tests} real sepolicy/magiskpolicy/ksud routes, rule content, errors and cleanup; Kotlin call-site inspected')
+assert 'ModuleToolDeployment.policyPath())} module-apply --require-boot-policy $arguments' in caller
+boot = Path('/source/manager/src/main/assets/maplesu/modules/boot.sh').read_text()
+assert boot.count('policies() {\n') == 1
+body = boot.split('policies() {\n')[1].split('\n}\n')[0]
+(root/'maplesu-policy').symlink_to('loader')
+modules = root/'modules'
+for name in ('active', 'disabled', 'linked'):
+    (modules/name).mkdir(parents=True)
+(modules/'active/sepolicy.rule').write_text(rule_text + '\n')
+(modules/'disabled/sepolicy.rule').write_text(rule_text + '\n')
+(modules/'disabled/disable').touch()
+(modules/'linked/sepolicy.rule').symlink_to(modules/'active/sepolicy.rule')
+(root/'boot-policy-route').write_text('#!/bin/sh\nmodules=/output/modules\nbin=/output\n'
+    'active() { [ ! -e "$1/disable" ]; }\nrecord() { printf "%s %s\\n" "$@" > /output/record; }\n'
+    'policies() {\n' + body + '\n}\npolicies\n')
+for status in (0, 75, 77):
+    result = subprocess.run(['sh', '/output/boot-policy-route'],
+        env=dict(os.environ, FIXTURE_CODE=str(status)), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (root/'arguments').read_text().splitlines() == [
+        'module-apply', '--require-boot-policy', '--rules', '/output/modules/active/sepolicy.rule']
+    assert (root/'record').read_text().strip() == f'{status} policy'
+    tests += 1
+print(f'PASS {tests} real sepolicy/magiskpolicy/ksud and boot policy routes, rule content, errors and cleanup; Kotlin call-site inspected')
 '''
 
 with tempfile.TemporaryDirectory(prefix="maplesu-ultra-policy-callers-") as output:
@@ -80,8 +103,8 @@ with tempfile.TemporaryDirectory(prefix="maplesu-ultra-policy-callers-") as outp
     result = subprocess.run(command, capture_output=True, text=True, timeout=30)
 report = dict(recordedAt=datetime.now(timezone.utc).isoformat(), exitCode=result.returncode,
     stdout=result.stdout, stderr=result.stderr,
-    sourceSha256={n: hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in (SHIM, CALLER, DEPLOYMENT)},
-    scope=__doc__ + " Kotlin routing is inspected, not instrumented on Android.", deviceAccess=False)
+    sourceSha256={n: hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in (SHIM, CALLER, DEPLOYMENT, BOOT)},
+    scope=__doc__ + " Real boot policies() runs with fixture active/record boundaries. Kotlin routing is inspected, not instrumented on Android.", deviceAccess=False)
 (ROOT/"work/ultra-module-policy-20261107/ultra-caller-routing.json").write_text(json.dumps(report, indent=2)+"\n")
 print(result.stdout or result.stderr)
 raise SystemExit(result.returncode)

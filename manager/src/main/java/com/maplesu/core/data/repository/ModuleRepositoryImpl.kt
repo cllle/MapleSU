@@ -94,7 +94,10 @@ class ModuleRepositoryImpl(
         ) else listOf(litePort),
     )
 
-    override suspend fun getModules(): Result<List<Module>> {
+    override suspend fun getModules(): Result<List<Module>> = getModules { }
+
+    /** Observe the existing identity fence; null means the read confirmed its context expired. */
+    internal suspend fun getModules(onReadScope: suspend (Any?) -> Unit): Result<List<Module>> {
         val requestedMode = mode()
         return withContext(Dispatchers.IO) {
             val requestedScope = try {
@@ -104,12 +107,18 @@ class ModuleRepositoryImpl(
             } catch (error: Exception) {
                 return@withContext Result.failure(error)
             }
-            listReads.readResult(requestedScope) {
+            onReadScope(requestedScope)
+            val result = listReads.readResult(requestedScope) {
                 check(listReadScope(mode()) == requestedScope) { "PAGE_QUERY_CONTEXT_CHANGED" }
                 val result = readModules()
                 check(listReadScope(mode()) == requestedScope) { "PAGE_QUERY_CONTEXT_CHANGED" }
                 result
             }
+            val error = result.exceptionOrNull()
+            if (error is IllegalStateException && error.message == "PAGE_QUERY_CONTEXT_CHANGED") {
+                onReadScope(null)
+            }
+            result
         }
     }
 

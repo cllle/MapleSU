@@ -56,6 +56,9 @@ internal class UltraKernelOriginalRecovery(private val assets: UltraKernelAssetS
         return reverse(currentBoot, receipt, output, Source.PINNED_SPEC_REVERSE)
     }
 
+    /** Component migration prefers a complete image-owned baseline over a kernel-only archive. */
+    fun recoverImageBoundExactInput(currentBoot: File, output: File): Recovered? = exactEmbedded(currentBoot, output)
+
     /** Inspect only a complete installed image with a verified reversible spec. */
     fun installedSpec(currentBoot: File, receiptsDirectory: File): UltraKernelSpec? = runCatching {
         val receipt = matchingReceipt(currentBoot, receiptsDirectory, generatedOnly = false)

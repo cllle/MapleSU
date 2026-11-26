@@ -59,10 +59,10 @@ class SelectedImageExportContractTest {
         }
     }
 
-    @Test fun missingPairingShowsAPairingTitleAndRetainsTheStableCode() {
+    @Test fun previewErrorsRetainTheStableCodeWithoutAskingForPairing() {
         val steps = ui("screen/install/InstallSteps.kt")
-        assertTrue(steps.contains("profile.stableCode == UltraKernelGenerateCodes.CREDENTIAL_REQUIRED"))
-        assertTrue(steps.contains("R.string.install_kernel_pairing_required_title"))
+        assertFalse(steps.contains("R.string.install_kernel_pairing_required"))
+        assertFalse(steps.contains("InstallPairedBootSection"))
         assertTrue(steps.contains("[\$stableCode]"))
     }
 

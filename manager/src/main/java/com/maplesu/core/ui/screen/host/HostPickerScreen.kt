@@ -6,12 +6,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,6 +41,8 @@ fun HostPickerPage(
 ) {
     if (!ui.visible) return
     val colors = hiddenFlowColors()
+    val listState = rememberLazyListState()
+    LaunchedEffect(ui.searchQuery) { listState.scrollToItem(0) }
     Dialog(
         onDismissRequest = { if (!ui.isRunning) actions.onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -66,23 +70,30 @@ fun HostPickerPage(
             }
             HiddenFlowText(stringResource(R.string.host_picker_subtitle), secondary = true)
             HiddenFlowText(stringResource(R.string.host_picker_risk), secondary = true)
+            if (ui.phase == HostPickerPhase.LIST) HiddenFlowSearch(ui.searchQuery, actions.onSearchQueryChange)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     ui.isLoading || ui.isRunning -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        HiddenFlowText(stringResource(if (ui.isRunning) R.string.host_picker_running else R.string.host_picker_loading), secondary = true)
+                        HiddenFlowProgress(ui.progress,
+                            if (ui.isRunning) R.string.host_picker_running else R.string.host_picker_loading)
                     }
                     ui.isEmpty -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                         HiddenFlowText(stringResource(R.string.host_picker_empty), secondary = true)
                         HiddenFlowButton(stringResource(R.string.host_picker_retry), actions.onRetryLoad)
                     }
-                    else -> LazyColumn(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(ui.candidates, key = { it.packageName }) { candidate ->
+                    ui.phase == HostPickerPhase.LIST && ui.filteredCandidates.isEmpty() ->
+                        HiddenFlowText(stringResource(R.string.host_picker_search_empty), Modifier.align(Alignment.Center), secondary = true)
+                    else -> LazyColumn(Modifier.selectableGroup(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(ui.filteredCandidates, key = { it.packageName }) { candidate ->
                             HostRow(candidate, candidate.packageName == ui.selected, iconFor(candidate.packageName),
                                 enabled = ui.phase == HostPickerPhase.LIST,
                                 onClick = { actions.onSelect(candidate.packageName) })
                         }
                     }
                 }
+            }
+            if (ui.phase == HostPickerPhase.LIST && ui.hasSelection) {
+                HiddenFlowText(stringResource(R.string.host_picker_selected, ui.selectedDisplayName), secondary = true, maxLines = 1)
             }
             if (ui.phase == HostPickerPhase.FAILED) {
                 ui.failureRes?.let { HiddenFlowText(stringResource(it), color = colors.error, secondary = true) }
@@ -146,5 +157,6 @@ fun hostStepLabelRes(wire: String): Int = when (wire) {
     HiddenDeactivateStep.RESTORE_HOST_SO.wire -> R.string.lite_hidden_deactivate_step_so
     HiddenDeactivateStep.REVOKE_SU_AUTH.wire -> R.string.lite_hidden_deactivate_step_su
     HiddenDeactivateStep.STOP_DAEMON.wire -> R.string.lite_hidden_deactivate_step_daemon
+    HiddenDeactivateStep.CLEANUP_RECOVERY.wire -> R.string.lite_hidden_deactivate_step_cleanup
     else -> R.string.lite_hidden_reason_unknown
 }

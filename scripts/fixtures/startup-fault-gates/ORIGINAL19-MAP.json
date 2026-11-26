@@ -1,0 +1,383 @@
+{
+  "kind": "I08_ORIGINAL19_TO_CURRENT_PRODUCTION_CONTRACT",
+  "originalMethodCount": 19,
+  "candidateMethodCount": 19,
+  "executedByAuthor": false,
+  "cases": [
+    {
+      "case": 1,
+      "originalMethod": "sameKeyAndBootFaultStopsBeforeAnyRestoreOrSdkCall",
+      "candidateMethod": "sameKeyAndBootFaultStopsBeforeAnyRestoreOrSdkCall",
+      "disposition": "preserved",
+      "expectation": "同Key/boot Fault先于所有恢复及SDK I/O。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityRecovery.kt",
+          "sha256": "da5d97e364b6ec770ac8ffd00ae6499c97216f5643bbe6b02f41085a2b2d0b1f",
+          "line": 135,
+          "quote": "if (UltraEnvironmentProbe.currentSnapshot(app).state == UltraEnvironmentProbe.State.Fault) return \"RECOVERY_SUSPENDED\""
+        }
+      ]
+    },
+    {
+      "case": 2,
+      "originalMethod": "faultAlsoStopsTheEarlyTemporarySessionBranch",
+      "candidateMethod": "faultAlsoStopsTheEarlyTemporarySessionBranch",
+      "disposition": "preserved",
+      "expectation": "Fault先于临时session分支。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityRecovery.kt",
+          "sha256": "da5d97e364b6ec770ac8ffd00ae6499c97216f5643bbe6b02f41085a2b2d0b1f",
+          "line": 136,
+          "quote": "if (UltraSdkSession.current(app) != null) {"
+        }
+      ]
+    },
+    {
+      "case": 3,
+      "originalMethod": "changedKeyDoesNotInheritAHistoricalFault",
+      "candidateMethod": "changedKeyDoesNotInheritAHistoricalFault",
+      "disposition": "preserved-strengthened",
+      "expectation": "变化Key不继承旧Fault；执行真实valid metadata候选及完整恢复，恢复root只使用当前Key。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 143,
+          "quote": "key != observedKey || bootId.isNullOrBlank() || bootId != observedBootId || suspended || hookActive -> Snapshot()"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityResolution.kt",
+          "sha256": "f9119c479d7849cd593af83640f2a58534d119cebad6fa9ff9be3452d1f34bc1",
+          "line": 50,
+          "quote": "tryKey(\"local\", original)?.let { return it }"
+        }
+      ]
+    },
+    {
+      "case": 4,
+      "originalMethod": "changedBootDoesNotInheritAHistoricalFault",
+      "candidateMethod": "changedBootDoesNotInheritAHistoricalFault",
+      "disposition": "preserved-strengthened",
+      "expectation": "变化boot不继承旧Fault，确实抵达当前恢复及临时session restore边界。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 143,
+          "quote": "key != observedKey || bootId.isNullOrBlank() || bootId != observedBootId || suspended || hookActive -> Snapshot()"
+        }
+      ]
+    },
+    {
+      "case": 5,
+      "originalMethod": "absentKeyStillReachesIdentityRecovery",
+      "candidateMethod": "absentKeyReachesRecoveryAndLiveOwnerProofShortCircuitsIt",
+      "disposition": "preserved-strengthened",
+      "expectation": "无Key仍完整恢复；当前fullUID owner及live root可直接完成，只有owner身份而无live root时不给Root。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityRecovery.kt",
+          "sha256": "da5d97e364b6ec770ac8ffd00ae6499c97216f5643bbe6b02f41085a2b2d0b1f",
+          "line": 142,
+          "quote": "return if (UltraSdkCredentials.read(app) == null) \"RECOVERY_OWNER_VERIFIED\""
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 391,
+          "quote": "kernelRootVerified = ownerIdentity != null && root.proof?.owner == ownerIdentity"
+        }
+      ]
+    },
+    {
+      "case": 6,
+      "originalMethod": "rootCandidateProofDoesNotWriteAPersistentLogPolicy",
+      "candidateMethod": "rootCandidateProofDoesNotWriteAPersistentLogPolicy",
+      "disposition": "preserved-strengthened",
+      "expectation": "实际resolution+uid执行null/1/0，只有0完成；accepted复用此root证明且不写日志。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityRecovery.kt",
+          "sha256": "da5d97e364b6ec770ac8ffd00ae6499c97216f5643bbe6b02f41085a2b2d0b1f",
+          "line": 207,
+          "quote": "internal fun uid(client: UltraRuntimeClient): Int? = client.runRootCommand(\"/system/bin/id -u\").let {"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityResolution.kt",
+          "sha256": "f9119c479d7849cd593af83640f2a58534d119cebad6fa9ff9be3452d1f34bc1",
+          "line": 42,
+          "quote": "if (uid != 0) return null"
+        }
+      ]
+    },
+    {
+      "case": 7,
+      "originalMethod": "historicalPairingDoesNotPermitLoggingWithUnknownOrFaultEvidence",
+      "candidateMethod": "historicalPairingDoesNotGrantRootOrCapabilitiesWithUnknownOrFaultEvidence",
+      "disposition": "replaced-obsolete-logging-expectation",
+      "expectation": "历史paired flag既不授Root也不令当前未配对warmup获得模块、版本、授权能力或maintenance；Unknown/Fault分别覆盖。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 464,
+          "quote": "liveEnvironmentReady = live.rootAvailable &&"
+        },
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 515,
+          "quote": "if (warmup.paired) stage(\"capabilities\") {"
+        }
+      ]
+    },
+    {
+      "case": 8,
+      "originalMethod": "successfulPairingWritesOnlyAfterTheScopedRootObservation",
+      "candidateMethod": "successfulPairingRequiresScopedRootObservationAndAllCurrentCapabilities",
+      "disposition": "replaced-obsolete-logging-order",
+      "expectation": "当前顺序live observation+root→pair→module/version/auth；逐项拒绝missing/error module/version/auth和key/boot/activation/marker/owner变化，ready=false。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 439,
+          "quote": "stage(\"live-observation\") {"
+        },
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 534,
+          "quote": "val ready = moduleReady && versionReady && authorization.ok && scopeCurrent"
+        }
+      ]
+    },
+    {
+      "case": 9,
+      "originalMethod": "verifiedKernelRootStillPermitsLoggingWhenTheHelperIsUnresolved",
+      "candidateMethod": "verifiedKernelRootRemainsIndependentOfHelperAndCapabilityReadiness",
+      "disposition": "replaced-obsolete-logging-permission",
+      "expectation": "Root独立于Unknown/NotInstalled helper而有效；模块未确认时完整startup仍报告capabilities unverified。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 60,
+          "quote": "val rootAvailable: Boolean get() = kernelRootVerified &&"
+        },
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 536,
+          "quote": "if (!ready) terminalReason = \"CAPABILITIES_UNVERIFIED\""
+        }
+      ]
+    },
+    {
+      "case": 10,
+      "originalMethod": "aTemporarySessionDoesNotWriteUsingTheHistoricalPermanentKey",
+      "candidateMethod": "aTemporarySessionNeverUsesTheHistoricalPermanentKey",
+      "disposition": "preserved-strengthened",
+      "expectation": "临时会话只以临时Key运行root，不配对/保存/维护旧永久Key；走resumeBootSdk及真实capability路径。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 544,
+          "quote": "if (warmup.paired && dev.maplesu.manager.runtime.ultra.UltraSdkSession.current(this) == null) {"
+        },
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 551,
+          "quote": "dev.maplesu.manager.runtime.RuntimeDeployment.resumeBootSdk(this)"
+        }
+      ]
+    },
+    {
+      "case": 11,
+      "originalMethod": "unsuccessfulWarmupDoesNotWriteEvenWithHistoricalRunningEvidence",
+      "candidateMethod": "unsuccessfulWarmupDoesNotGrantCapabilitiesFromHistoricalRunningEvidence",
+      "disposition": "preserved-strengthened",
+      "expectation": "历史Running但无root证明，失败warmup不给能力、maintenance或成功terminal。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraStartupWarmup.kt",
+          "sha256": "4eab2ade9bec6594ab8f68dba13d30b837947bcbbcd3f4f46980304d15e05781",
+          "line": 51,
+          "quote": "val recovered = recoverIdentity()"
+        },
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 515,
+          "quote": "if (warmup.paired) stage(\"capabilities\") {"
+        }
+      ]
+    },
+    {
+      "case": 12,
+      "originalMethod": "ksuOwnershipDoesNotWriteUsingHistoricalUltraEvidence",
+      "candidateMethod": "ksuOwnershipDoesNotStartSdkOrUseHistoricalUltraEvidence",
+      "disposition": "preserved",
+      "expectation": "KSU归属对旧Ultra观察仍不启动SDK/恢复/能力，terminal为MODE_KSU。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 306,
+          "quote": "ModeRuntime.active != WorkMode.KSU && UltraSdkCredentials.read(context) == key &&"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraStartupWarmup.kt",
+          "sha256": "4eab2ade9bec6594ab8f68dba13d30b837947bcbbcd3f4f46980304d15e05781",
+          "line": 39,
+          "quote": "if (input.activeMode == WorkMode.KSU) return Result(false, false, \"MODE_KSU\")"
+        }
+      ]
+    },
+    {
+      "case": 13,
+      "originalMethod": "unresolvedDetectionDoesNotWriteBeforeIdentityRecovery",
+      "candidateMethod": "unresolvedDetectionObservesAndRecoversBeforeItsConsumerWithoutAwaitingIt",
+      "disposition": "replaced-obsolete-await-detection",
+      "expectation": "当前live-first且不等待自身consumer：无root时先观察和恢复再返回DETECTION_PENDING；新live root时可配对并retry。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/com/maplesu/core/KernelSUApplication.kt",
+          "sha256": "e852b3c44b93f94a0ff911d4f3c41ed3a72091774405a45263abd6d29a210a62",
+          "line": 438,
+          "quote": "// here makes the identity/Root handshake depend on its own consumer."
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraStartupWarmup.kt",
+          "sha256": "4eab2ade9bec6594ab8f68dba13d30b837947bcbbcd3f4f46980304d15e05781",
+          "line": 55,
+          "quote": "if (!input.detectionSettled && !recovered) return Result(false, false, \"DETECTION_PENDING\")"
+        }
+      ]
+    },
+    {
+      "case": 14,
+      "originalMethod": "acceptedIdentityReusesTheValidSameKeyAndBootObservation",
+      "candidateMethod": "acceptedIdentityReusesTheValidSameKeyBootAndActivationObservation",
+      "disposition": "preserved-strengthened",
+      "expectation": "同Key/boot/activation fresh root证据连续接受无新SDK I/O；maintenance已属于Application后置，不在accepted执行。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityRecovery.kt",
+          "sha256": "da5d97e364b6ec770ac8ffd00ae6499c97216f5643bbe6b02f41085a2b2d0b1f",
+          "line": 194,
+          "quote": "UltraEnvironmentProbe.refreshRecoveredIdentity(app, key, recoveryBootId)"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 319,
+          "quote": "if (key != null) return snapshot.state"
+        }
+      ]
+    },
+    {
+      "case": 15,
+      "originalMethod": "acceptedIdentityWithAChangedKeyPerformsOneNewEnvironmentQuery",
+      "candidateMethod": "acceptedIdentityWithAChangedKeyPerformsOneNewEnvironmentQuery",
+      "disposition": "preserved-strengthened",
+      "expectation": "改变Key后首次accepted真实读取environment一次，复用recovered root而不重复uid，第二次复用。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 314,
+          "quote": "snapshot.modeActivation === requestActivation && snapshotKey == key &&"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 261,
+          "quote": "recoveryProof = null"
+        }
+      ]
+    },
+    {
+      "case": 16,
+      "originalMethod": "acceptedIdentityWithAChangedBootPerformsOneNewEnvironmentQuery",
+      "candidateMethod": "acceptedIdentityRejectsTheOldBootBeforeOneNewBootEnvironmentQuery",
+      "disposition": "preserved-strengthened",
+      "expectation": "旧recoveryBootId一律不继承新boot；新boot的新恢复证明首次environment一次，再复用。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 244,
+          "quote": "UltraEnvironmentAutoSetup.currentBootId() != bootId) return State.Unknown"
+        }
+      ]
+    },
+    {
+      "case": 17,
+      "originalMethod": "expiredEvidenceStillPerformsOneQueryBeforeItIsReused",
+      "candidateMethod": "expiredOrReactivatedEvidenceIsQueriedAndRecoveryProofIsSingleUse",
+      "disposition": "preserved-strengthened",
+      "expectation": "3000ms过期须environment一次；恢复proof只给首read，后续普通refresh重新uid；activation变化及在途Key变化不发布旧证据。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 299,
+          "quote": "(state != State.Unknown || kernelResolved) && age in 0 until CACHE_TTL_MS"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 261,
+          "quote": "recoveryProof = null"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 334,
+          "quote": "if (revision != requestRevision || !requestCurrent()) return@synchronized State.Unknown"
+        }
+      ]
+    },
+    {
+      "case": 18,
+      "originalMethod": "pairedFirstFrameReusesFreshEvidenceBeforeFullDetection",
+      "candidateMethod": "firstFrameReusesFreshValidIdentityAfterExplicitNegativeKsuEvidence",
+      "disposition": "preserved-strengthened",
+      "expectation": "明确S1=false+SDK metadata有效才能first-frame refresh；无需历史pairflag；S1未知/true不会走此捷径。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/workmode/boot/PairedStartupPolicy.kt",
+          "sha256": "36252f6cbc9a490fa64b417ebea069176dad233325798334a31e8b0fdc4c4b92",
+          "line": 16,
+          "quote": "if (modeResolved || ksuResponded != false) return false"
+        },
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/workmode/boot/ModeBootstrap.kt",
+          "sha256": "268dc937d08a4f078e8480c0c325b217b92d676736a97dec74d6474188079c72",
+          "line": 200,
+          "quote": "UltraKernelCredential.of(localKey).sdkMetadataValid &&"
+        }
+      ]
+    },
+    {
+      "case": 19,
+      "originalMethod": "pairedFirstFrameDoesNotInheritEvidenceFromAnotherKeyOrBoot",
+      "candidateMethod": "firstFrameDoesNotInheritAnotherKeyBootOrActivationObservation",
+      "disposition": "preserved-strengthened",
+      "expectation": "first-frame遇Key/boot/activation变化均实际重读environment和root，不继承旧scope。",
+      "currentProductionEvidence": [
+        {
+          "path": "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4",
+          "line": 314,
+          "quote": "val sameIdentity = snapshot.modeActivation === requestActivation && snapshotKey == key &&"
+        }
+      ]
+    }
+  ]
+}

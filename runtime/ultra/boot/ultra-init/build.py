@@ -77,7 +77,8 @@ def main():
         parser.error("build-dir must not contain the source directory")
     if build.exists():
         parser.error("build-dir must be new so a failed build retains no stale success receipt")
-    inputs = [source / name for name in ("CMakeLists.txt", "main.c", "handoff.c", "handoff.h", "build.py")]
+    inputs = [source / name for name in ("CMakeLists.txt", "main.c", "handoff.c", "handoff.h", "build.py",
+        "legacy_direct_bind.c", "legacy_direct_bind.h", "legacy_direct_loader.c", "legacy_direct_loader.h")]
     inputs += [source.parents[1] / "identity/kernel" / name for name in
                ("manager_deployment_namespace.h", "manager_claim_loader.h")]
     before = [identity(path) for path in inputs]

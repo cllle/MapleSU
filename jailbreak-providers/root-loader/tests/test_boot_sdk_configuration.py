@@ -27,11 +27,12 @@ class FallbackSourceTest(unittest.TestCase):
         tree = ast.parse(predicate, mode='eval')
         allowed = (ast.Expression, ast.BoolOp, ast.And, ast.Compare, ast.Eq,
             ast.Name, ast.Load, ast.Constant, ast.UnaryOp, ast.USub, ast.Not,
-            ast.BinOp, ast.BitAnd)
+            ast.BinOp, ast.BitAnd, ast.BitOr)
         for node in ast.walk(tree):
             self.assertIsInstance(node, allowed)
         names = {'status', 'stage', 'state', 'configured', 'kind',
-            'MSU_BS_CONFIG_CAPTURE', 'MSU_BOOT_SDK_EMPTY', 'MSU_BOOT_SDK_ALLOCATOR_INNER'}
+            'MSU_BS_CONFIG_CAPTURE', 'MSU_BOOT_SDK_EMPTY', 'MSU_BOOT_SDK_ALLOCATOR_INNER',
+            'MSU_BOOT_SDK_ALLOCATOR_SEGMENTED'}
         self.assertLessEqual({node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}, names)
         expression = compile(tree, '<actual CONFIGURE fallback predicate>', 'eval')
         checked = 0
@@ -39,16 +40,17 @@ class FallbackSourceTest(unittest.TestCase):
             for stage in ('CAPTURE', 'ARGUMENTS', 'ALLOCATE', 'PROBE'):
                 for state in ('EMPTY', 'READY', 'INITIALIZING', 'FAILED'):
                     for configured in (0, 1):
-                        for kind in range(8):
+                        for kind in range(16):
                             values = dict(status=status, stage=stage, state=state,
                                 configured=configured, kind=kind, MSU_BS_CONFIG_CAPTURE='CAPTURE',
-                                MSU_BOOT_SDK_EMPTY='EMPTY', MSU_BOOT_SDK_ALLOCATOR_INNER=2)
+                                MSU_BOOT_SDK_EMPTY='EMPTY', MSU_BOOT_SDK_ALLOCATOR_INNER=2,
+                                MSU_BOOT_SDK_ALLOCATOR_SEGMENTED=8)
                             expected = (status == -61 and stage == 'CAPTURE' and state == 'EMPTY'
-                                and configured == 0 and bool(kind & 2))
+                                and configured == 0 and bool(kind & 2) and not bool(kind & 8))
                             with self.subTest(**values):
                                 self.assertEqual(bool(eval(expression, {'__builtins__': {}}, values)), expected)
                             checked += 1
-        self.assertEqual(checked, 1280)
+        self.assertEqual(checked, 2560)
         self.assertEqual(' '.join(body.split()),
             'configuration.layout.allocator_noprof &= ~MSU_BOOT_SDK_ALLOCATOR_INNER; '
             'transact(MSU_BOOT_SDK_CONFIGURE);')
@@ -77,7 +79,7 @@ class ConfigurationTest(unittest.TestCase):
         cases = re.findall(r'^\s*\{"([^"\n]+)",', fixture.read_text(), re.MULTILINE)
         self.assertEqual(len(cases), len(set(cases)))
         self.assertGreater(len(cases), 40)
-        names = ('msu_boot_sdk_allocator_pre', 'sample_allocator', 'configure', 'msu_boot_sdk_control')
+        names = ('sdk_observation_entry', 'msu_boot_sdk_allocator_pre', 'sample_allocator', 'configure', 'msu_boot_sdk_control')
         functions = [definition(source, name) for name in names]
         for name, function in zip(names, functions):
             self.assertIsNotNone(function, name)

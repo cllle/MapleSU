@@ -42,8 +42,10 @@
 namespace {
 
 constexpr const char* kTag = "MapleSUParasite";
+constexpr const char* kRootAccepted = "PARASITE_ROOT_ACCEPTED\n";
 constexpr const char* kScriptCommand =
     "[ \"$(/system/bin/id -u)\" = 0 ] || exit 13; "
+    "printf 'PARASITE_ROOT_ACCEPTED\\n'; "
     "[ \"$(cat /data/adb/maplesu/lite_hidden 2>/dev/null)\" != 1 ] || "
     "[ ! -f /data/adb/maplesu/recovery/parasite-start.sh ] || "
     "exec /system/bin/sh /data/adb/maplesu/recovery/parasite-start.sh "
@@ -178,6 +180,9 @@ void* start_thread(void*) {
         __android_log_print(
             ANDROID_LOG_WARN, kTag, "PARASITE_SU_FAILED su=%s status=%d exec_errno=%d",
             candidate, status, exec_errno);
+        // Root already accepted this action. A script failure or timeout belongs to
+        // that action, rather than to entry discovery; another su would replay it.
+        if (strstr(output, kRootAccepted) != nullptr) return nullptr;
     }
     return nullptr;
 }

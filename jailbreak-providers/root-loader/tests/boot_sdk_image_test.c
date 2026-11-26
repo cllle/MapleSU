@@ -31,7 +31,8 @@ static int bootstrap_error, probe_installed, allocations, hooks, mode;
 static uptr kernel_base=0xffff800000000000UL, arena, native_execve=0xffff800000000100UL, avc_result;
 static unsigned char msu_sdk_call_template[4], notes[4]={1,2,3,4}, probe[64];
 static unsigned char *msu_sdk_call_template_end=msu_sdk_call_template+4, *msu_sdk_call_blr=msu_sdk_call_template;
-static char root_key[49];
+static char root_key[49], original_root_key[49];
+static struct msu_boot_sdk_layout sdk_layout;
 static struct msu_sdk_vm sdk_vm={MSU_BS_IMAGE_BYTES,0UL-MSU_BS_VM_START_MAG,0UL-MSU_BS_VM_END_MAG,
  MSU_BS_VM_ALIGN,MSU_BS_VM_GFP,MSU_BS_VM_PROT,MSU_BS_VM_PROT_SET,MSU_BS_VM_PROT_FLAG};
 static u32 sdk_kallsyms=MSU_BS_KALLSYMS;
@@ -52,6 +53,8 @@ static void *allocate_range(unsigned long a,unsigned long b,uptr c,uptr d,unsign
  struct sdk_pgprot f,unsigned long g,int h,const void *i) {
  (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;++allocations;return NULL;
 }
+static void *(*allocate_segmented_range)(unsigned long,unsigned long,unsigned int,unsigned int,
+ unsigned int,unsigned int,uptr,uptr,unsigned int,struct sdk_pgprot,unsigned long,int,const void *);
 static int memory_nx(uptr p,int n){(void)p;(void)n;return 0;}
 static int memory_rw(uptr p,int n){(void)p;(void)n;return 0;}
 static int memory_ro(uptr p,int n){(void)p;(void)n;return 0;}

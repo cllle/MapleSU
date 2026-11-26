@@ -5,6 +5,11 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <elf.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -32,6 +37,121 @@ static int deployment_open_error, deployment_read_error, deployment_interrupt, d
 static const char *loaded_parameters;
 static char **expected_argv, **expected_envp;
 
+
+static unsigned char bridge_image[2048];
+static size_t bridge_bytes, bridge_piece, bridge_reads;
+static int stat_error, bridge_read_error, bridge_eof, bridge_interrupt, allocation_error;
+static int direct_mode, init_calls, finit_calls, proc_mounted, proc_mounts, proc_unmounts;
+static int restore_error, lookup_error, setting_writes;
+static char setting_value[32], setting_input[32];
+static const char *symbol_input;
+static const char symbol_lines[] =
+    "ffffffc008100000 T file_open_root\nffffffc008100100 T getname_kernel\n"
+    "ffffffc008100200 T groups_alloc\nffffffc008100300 T putname\n";
+static size_t symbol_offset;
+
+static void make_bridge(int marked)
+{
+    static const char labels[] = "\0.shstrtab\0.strtab\0.symtab\0.text\0.rela.text\0.msu_direct_calls\0";
+    static const char names[] = "\0file_open_root\0getname_kernel\0groups_alloc\0putname\0ordinary_export\0";
+    static const char marker[] = "MAPLESU_DIRECT_V1\0file_open_root\0getname_kernel\0groups_alloc\0putname\0";
+    memset(bridge_image, 0, sizeof(bridge_image));
+    Elf64_Ehdr header = {0};
+    memcpy(header.e_ident, ELFMAG, SELFMAG);
+    header.e_ident[EI_CLASS] = ELFCLASS64; header.e_ident[EI_DATA] = ELFDATA2LSB;
+    header.e_ident[EI_VERSION] = EV_CURRENT; header.e_type = ET_REL;
+    header.e_machine = EM_AARCH64; header.e_version = EV_CURRENT;
+    header.e_ehsize = sizeof(header); header.e_shentsize = sizeof(Elf64_Shdr);
+    header.e_shnum = marked ? 7 : 2; header.e_shstrndx = 1; header.e_shoff = sizeof(header);
+    Elf64_Shdr sections[7] = {0};
+    size_t at = sizeof(header) + header.e_shnum * sizeof(Elf64_Shdr);
+    sections[1] = (Elf64_Shdr){.sh_name=1, .sh_type=SHT_STRTAB, .sh_offset=at, .sh_size=sizeof(labels)};
+    memcpy(bridge_image + at, labels, sizeof(labels)); at += sizeof(labels);
+    if (marked) {
+        sections[2] = (Elf64_Shdr){.sh_name=11, .sh_type=SHT_STRTAB, .sh_offset=at, .sh_size=sizeof(names)};
+        memcpy(bridge_image + at, names, sizeof(names)); at += sizeof(names);
+        at = (at + 7) & ~(size_t)7; symbol_offset = at;
+        sections[3] = (Elf64_Shdr){.sh_name=19, .sh_type=SHT_SYMTAB, .sh_offset=at,
+            .sh_size=6*sizeof(Elf64_Sym), .sh_link=2, .sh_info=1, .sh_entsize=sizeof(Elf64_Sym)};
+        const unsigned int positions[] = {1, 16, 31, 44, 52};
+        for (size_t index=0; index<5; ++index) {
+            Elf64_Sym symbol = {.st_name=positions[index], .st_info=ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE)};
+            memcpy(bridge_image + at + (index+1)*sizeof(symbol), &symbol, sizeof(symbol));
+        }
+        at += sections[3].sh_size;
+        sections[4] = (Elf64_Shdr){.sh_name=27, .sh_type=SHT_PROGBITS, .sh_flags=SHF_ALLOC|SHF_EXECINSTR,
+            .sh_offset=at, .sh_size=20};
+        for (size_t index=0; index<5; ++index) {
+            const uint32_t instruction=0x94000000U;
+            memcpy(bridge_image + at + index*4, &instruction, sizeof(instruction));
+        }
+        at += 20; at = (at + 7) & ~(size_t)7;
+        sections[5] = (Elf64_Shdr){.sh_name=33, .sh_type=SHT_RELA, .sh_offset=at,
+            .sh_size=5*sizeof(Elf64_Rela), .sh_link=3, .sh_info=4, .sh_entsize=sizeof(Elf64_Rela)};
+        for (size_t index=0; index<5; ++index) {
+            Elf64_Rela relocation = {.r_offset=index*4, .r_info=ELF64_R_INFO(index+1, 283)};
+            memcpy(bridge_image + at + index*sizeof(relocation), &relocation, sizeof(relocation));
+        }
+        at += sections[5].sh_size;
+        sections[6] = (Elf64_Shdr){.sh_name=44, .sh_type=SHT_PROGBITS, .sh_offset=at, .sh_size=sizeof(marker)};
+        memcpy(bridge_image + at, marker, sizeof(marker)); at += sizeof(marker);
+    }
+    memcpy(bridge_image, &header, sizeof(header));
+    memcpy(bridge_image + header.e_shoff, sections, header.e_shnum*sizeof(Elf64_Shdr));
+    bridge_bytes=at; direct_mode=marked;
+}
+
+int __wrap_fstat(int fd, struct stat *status)
+{
+    assert(fd == 7);
+    if (stat_error) { errno=stat_error; return -1; }
+    memset(status,0,sizeof(*status)); status->st_size=(off_t)bridge_bytes;
+    return 0;
+}
+ssize_t __wrap_pread(int fd, void *buffer, size_t bytes, off_t offset)
+{
+    assert(fd == 7 && offset >= 0 && (size_t)offset <= bridge_bytes); ++bridge_reads;
+    if (bridge_interrupt) { bridge_interrupt=0; errno=EINTR; return -1; }
+    if (bridge_read_error) { errno=bridge_read_error; return -1; }
+    if (bridge_eof) return 0;
+    size_t count=bridge_bytes-(size_t)offset;
+    if (count>bytes) count=bytes;
+    if (count>bridge_piece) count=bridge_piece;
+    memcpy(buffer,bridge_image+(size_t)offset,count); return (ssize_t)count;
+}
+void *__real_malloc(size_t bytes);
+void *__wrap_malloc(size_t bytes)
+{
+    if (allocation_error && bytes == bridge_bytes) { errno=ENOMEM; return NULL; }
+    return __real_malloc(bytes);
+}
+int __wrap_mkdir(const char *path, mode_t mode)
+{
+    assert(!strcmp(path,"/proc") && mode == 0755); errno=EEXIST; return -1;
+}
+int __wrap_rmdir(const char *path) { (void)path; assert(!"existing proc directory must be retained"); return -1; }
+int __wrap_mount(const char *from, const char *to, const char *type, unsigned long flags, const void *data)
+{
+    assert(!strcmp(from,"proc") && !strcmp(to,"/proc") && !strcmp(type,"proc") && !data);
+    assert(flags == (MS_NOSUID|MS_NODEV|MS_NOEXEC) && !proc_mounted);
+    proc_mounted=1; ++proc_mounts; return 0;
+}
+int __wrap_umount2(const char *path, int flags)
+{
+    assert(!strcmp(path,"/proc") && flags == MNT_DETACH && proc_mounted);
+    proc_mounted=0; ++proc_unmounts; return 0;
+}
+FILE *__wrap_fopen(const char *path, const char *mode)
+{
+    assert(proc_mounted && !strcmp(mode,"re"));
+    if (!strcmp(path,"/proc/sys/kernel/kptr_restrict")) {
+        strcpy(setting_input,setting_value); return fmemopen(setting_input,strlen(setting_input),"r");
+    }
+    assert(!strcmp(path,"/proc/kallsyms"));
+    if (lookup_error) { errno=lookup_error; return NULL; }
+    return fmemopen((void *)symbol_input,strlen(symbol_input),"r");
+}
+
 static void note(char step) {
     assert(steps + 1 < sizeof(trace));
     trace[steps++] = step;
@@ -48,6 +168,11 @@ int __wrap_rename(const char *from, const char *to) {
 }
 
 int __wrap_open(const char *path, int flags, ...) {
+    if (!strcmp(path,"/proc/sys/kernel/kptr_restrict")) {
+        assert(proc_mounted && flags == (O_WRONLY|O_CLOEXEC)); ++setting_writes;
+        if (setting_writes > 1 && restore_error) { errno=restore_error; return -1; }
+        return 55;
+    }
     if (strcmp(path, "/.maplesu_ultra/deployment") == 0) {
         assert(flags == (O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
         if (!deployment && !deployment_open_error) { errno = ENOENT; return -1; }
@@ -111,10 +236,24 @@ int __wrap_unlink(const char *path) {
 
 long __wrap_syscall(long number, ...) {
     note('L');
-    assert(number == SYS_finit_module);
+    assert(number == (direct_mode ? SYS_init_module : SYS_finit_module));
+    assert(!proc_mounted);
+    if (direct_mode) ++init_calls; else ++finit_calls;
     va_list args;
     va_start(args, number);
-    assert(va_arg(args, int) == 7);
+    if (direct_mode) {
+        const unsigned char *loaded = va_arg(args, const unsigned char *);
+        assert(va_arg(args, size_t) == bridge_bytes);
+        unsigned char expected[sizeof(bridge_image)]; memcpy(expected,bridge_image,bridge_bytes);
+        for (size_t index=0; index<4; ++index) {
+            Elf64_Sym symbol;
+            const size_t at=symbol_offset+(index+1)*sizeof(symbol);
+            memcpy(&symbol,expected+at,sizeof(symbol));
+            symbol.st_shndx=SHN_ABS; symbol.st_value=0xffffffc008100000ULL+index*0x100;
+            memcpy(expected+at,&symbol,sizeof(symbol));
+        }
+        assert(!memcmp(loaded,expected,bridge_bytes));
+    } else assert(va_arg(args, int) == 7);
     loaded_parameters = va_arg(args, const char *);
     char expected[128] = {0};
     if (credential) {
@@ -127,13 +266,14 @@ long __wrap_syscall(long number, ...) {
             used ? " " : "", 16, (const char *)deployment + 8);
     }
     assert(strcmp(loaded_parameters, expected) == 0);
-    assert(va_arg(args, int) == 0);
+    if (!direct_mode) assert(va_arg(args, int) == 0);
     va_end(args);
     errno = load_error;
     return load_error ? -1 : 0;
 }
 
 int __wrap_close(int fd) {
+    if (fd == 55) return 0;
     if (fd == 9) {
         note('n');
         errno = deployment_close_error;
@@ -176,6 +316,10 @@ int __wrap_write(int fd, const void *bytes, unsigned int size) {
 #else
 ssize_t __wrap_write(int fd, const void *bytes, size_t size) {
 #endif
+    if (fd == 55) {
+        assert(proc_mounted && size < sizeof(setting_value));
+        memcpy(setting_value,bytes,size); setting_value[size]=0; return (ssize_t)size;
+    }
     note('W');
     assert(fd == 2 && diagnostic_size + size < sizeof(diagnostic));
     memcpy(diagnostic + diagnostic_size, bytes, size);
@@ -185,6 +329,10 @@ ssize_t __wrap_write(int fd, const void *bytes, size_t size) {
 }
 
 static void reset(void) {
+    make_bridge(0); bridge_piece=sizeof(bridge_image); bridge_reads=0;
+    stat_error=bridge_read_error=bridge_eof=bridge_interrupt=allocation_error=0;
+    init_calls=finit_calls=proc_mounted=proc_mounts=proc_unmounts=0;
+    restore_error=lookup_error=setting_writes=0; strcpy(setting_value,"2\n"); symbol_input=symbol_lines;
     memset(trace, 0, sizeof(trace));
     memset(diagnostic, 0, sizeof(diagnostic));
     steps = diagnostic_size = 0;
@@ -222,13 +370,13 @@ int main(void) {
     assert(strstr(diagnostic, "open /.maplesu_ultra/bridge.ko failed errno=2") != NULL);
     reset(); load_error = ENOEXEC;
     expect_handoff("ROLCWE");
-    assert(strstr(diagnostic, "finit_module /.maplesu_ultra/bridge.ko failed errno=8") != NULL);
+    assert(strstr(diagnostic, "load_module /.maplesu_ultra/bridge.ko failed errno=8") != NULL);
     reset(); close_error = EIO;
     expect_handoff("ROLCWE");
     assert(strstr(diagnostic, "close /.maplesu_ultra/bridge.ko failed errno=5") != NULL);
     reset(); load_error = ENOEXEC; close_error = EIO;
     expect_handoff("ROLCWWE");
-    const char *load_message = strstr(diagnostic, "finit_module /.maplesu_ultra/bridge.ko failed errno=8");
+    const char *load_message = strstr(diagnostic, "load_module /.maplesu_ultra/bridge.ko failed errno=8");
     const char *close_message = strstr(diagnostic, "close /.maplesu_ultra/bridge.ko failed errno=5");
     assert(load_message && close_message && load_message < close_message);
     reset(); rename_error = EROFS;
@@ -237,7 +385,7 @@ int main(void) {
     reset(); rename_error = EROFS; load_error = ENOEXEC; close_error = EIO;
     expect_handoff("RWOLCWWE");
     const char *rename_message = strstr(diagnostic, "rename /init.maplesu.orig failed errno=30");
-    load_message = strstr(diagnostic, "finit_module /.maplesu_ultra/bridge.ko failed errno=8");
+    load_message = strstr(diagnostic, "load_module /.maplesu_ultra/bridge.ko failed errno=8");
     close_message = strstr(diagnostic, "close /.maplesu_ultra/bridge.ko failed errno=5");
     assert(rename_message && load_message && close_message &&
            rename_message < load_message && load_message < close_message);
@@ -334,6 +482,49 @@ int main(void) {
     expect_handoff("RONddnuLCWE");
     reset(); deployment = namespace_bytes; deployment_size = sizeof(record); rename_error = EROFS;
     expect_handoff("RWONddnuLCE");
+
+    reset(); stat_error=EIO;
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && !bridge_reads);
+    assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=5"));
+    reset(); bridge_bytes=0;
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls);
+    assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=22"));
+    reset(); allocation_error=1;
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && !bridge_reads);
+    assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=12"));
+    reset(); bridge_piece=17; bridge_interrupt=1;
+    expect_handoff("ROLCE"); assert(finit_calls == 1 && !init_calls && bridge_reads > 2);
+    assert(!proc_mounts && !proc_unmounts);
+    reset(); bridge_eof=1;
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls);
+    assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=5"));
+    reset(); bridge_read_error=EACCES; close_error=EIO;
+    expect_handoff("ROCWWE"); assert(!init_calls && !finit_calls);
+    load_message=strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=13");
+    close_message=strstr(diagnostic,"close /.maplesu_ultra/bridge.ko failed errno=5");
+    assert(load_message && close_message && load_message < close_message);
+    reset(); bridge_image[0]='X';
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && !proc_mounts);
+    reset(); make_bridge(1);
+    expect_handoff("ROLCE"); assert(init_calls == 1 && !finit_calls);
+    assert(proc_mounts == 1 && proc_unmounts == 1 && !strcmp(setting_value,"2\n"));
+    reset(); make_bridge(1); credential=key; credential_size=48; deployment=namespace_bytes; deployment_size=sizeof(record);
+    expect_handoff("ROKDDkUNddnuLCE"); assert(init_calls == 1 && !finit_calls && !diagnostic_size);
+    reset(); make_bridge(1); load_error=ENOEXEC;
+    expect_handoff("ROLCWE"); assert(init_calls == 1 && !finit_calls && !strcmp(setting_value,"2\n"));
+    assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=8"));
+    reset(); make_bridge(1); lookup_error=EACCES;
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1 && !strcmp(setting_value,"2\n"));
+    reset(); make_bridge(1); restore_error=EROFS;
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1 && !strcmp(setting_value,"1"));
+    assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=30"));
+    reset(); make_bridge(1); lookup_error=EACCES; restore_error=EROFS;
+    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1);
+    assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=13"));
+    reset(); make_bridge(1); rename_error=EROFS; load_error=ENOEXEC; close_error=EIO;
+    expect_handoff("RWOLCWWE"); assert(init_calls == 1 && !finit_calls);
+    puts("HANDOFF_DIRECT_NEW_CASES=14 original handoff cases retained; actual loader+file-read+binder linked");
+
     puts("PASS isolated first-stage handoff seam");
     return 0;
 }

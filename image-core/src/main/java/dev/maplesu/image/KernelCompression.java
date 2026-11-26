@@ -94,6 +94,7 @@ public final class KernelCompression {
         }
         int end = consumed[0];
         byte[] encoded = encode(raw, format);
+        if (end == original.length) return encoded;
         byte[] component = Arrays.copyOf(encoded, encoded.length + original.length - end);
         System.arraycopy(original, end, component, encoded.length, original.length - end);
         return component;

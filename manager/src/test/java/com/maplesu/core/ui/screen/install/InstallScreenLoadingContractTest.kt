@@ -89,30 +89,20 @@ class InstallScreenLoadingContractTest {
     }
 
     @Test
-    fun bootTargetDiscoveryIsCancelledWhenThePagePauses() {
+    fun pageResumeDoesNotPreparePartitionsAndPauseCancelsItsOwnReads() {
         val source = screen()
         val effect = source.substringAfter("LifecycleResumeEffect(context, detectionRevision, hiddenRevision) {")
             .substringBefore("val selectFileTip")
-        assertTrue(effect.contains("withContext(Dispatchers.IO)"))
-        assertTrue(effect.contains("StockInstallPreflight.discoverTarget(context, targetMode)"))
-        assertTrue(effect.contains("if (!hasRoot || !pageResumed || installMethod != InstallMethod.DirectInstall || !existingRootConflictAccepted) return@LaunchedEffect"))
-        val discoveryKeys = Regex("LaunchedEffect\\(([^)]*)\\)").findAll(effect)
-            .firstOrNull { it.groupValues[1].trimStart().startsWith("sourceRequest,") }
-            ?.groupValues?.get(1)?.split(',')?.map(String::trim)
-        assertEquals(listOf("sourceRequest", "installMethod", "targetMode", "pageResumed", "hasRoot",
-            "moduleChoice.show", "moduleChoice.busy"), discoveryKeys)
-        assertTrue(effect.contains("if (moduleChoice.show || moduleChoice.busy) return@LaunchedEffect"))
+        assertFalse(effect.contains("StockInstallPreflight"))
+        assertFalse(effect.contains("observeBootChain"))
+        assertFalse(effect.contains("installedCarrierPartition"))
         assertTrue(effect.contains("pageResumed = false"))
-        assertFalse("Pausing must not make the direct-install option blink", effect.contains("rootGranted = false"))
-        assertTrue(effect.contains("EnvironmentProbesAdapter(context).suPresent()"))
-        val rootCheck = effect.substringAfter("rootGranted = withContext(Dispatchers.IO)")
-            .substringBefore("if ((!rootGranted")
-        assertTrue(rootCheck.contains("managerRootAvailable("))
-        assertTrue(rootCheck.contains("RootExec.current()?.capability(forceRefresh = true) ?: RootExec.capability(context)"))
-        assertFalse(rootCheck.contains("UltraKeyPairedStore"))
-        assertFalse(rootCheck.contains("UltraRootKeyStore"))
-        assertTrue(effect.contains("catch (error: CancellationException)"))
-        assertTrue(effect.contains("throw error"))
+        assertFalse(effect.contains("rootGranted = false"))
+        assertFalse(effect.contains("EnvironmentProbesAdapter(context).suPresent()"))
+        assertFalse(effect.contains("managerRootAvailable("))
+        assertFalse(effect.contains("RootExec."))
+        assertFalse(effect.contains("UltraKeyPairedStore"))
+        assertFalse(effect.contains("UltraRootKeyStore"))
         assertTrue(effect.contains("onPauseOrDispose"))
         assertTrue(effect.contains("job.cancel()"))
     }
@@ -123,28 +113,28 @@ class InstallScreenLoadingContractTest {
         val action = source.substringAfter("val onInstall = onInstall@{").substringBefore("val selectImageLauncher")
         assertTrue(action.contains("if (!pageResumed || installInFlight || WorkModeSwitchSession.executing) return@onInstall"))
         assertTrue(action.contains("installMethodOptions.none { it::class == method::class }"))
-        assertTrue(action.contains("bootFlow?.target ?: return@onInstall"))
+        assertFalse(action.contains("bootFlow?.target ?: return@onInstall"))
+        assertFalse(action.contains("InstallTargetDispatch.decide("))
         assertTrue(action.contains("installInFlight = true"))
         assertTrue(action.indexOf("installInFlight = true") < action.indexOf("navigator.push(Route.Flash(request))"))
         // 步骤 ① 的选择在事务开始那一刻快照，之后改选择不影响本次事务。
         assertTrue(action.contains("val mode = targetMode"))
         assertTrue(action.contains("val selectedPartition = partition"))
-        assertTrue(action.contains("partition = selectedPartition.wire"))
+        assertTrue(action.contains("val requestedPartition = selectedPartition.wire"))
+        assertTrue(action.contains("partition = requestedPartition"))
     }
 
     @Test
     fun theNextButtonGatesOnTheVisibleSelectionsOfTheSelectedMode() {
         val state = uiState()
         val canInstall = state.substringAfter("val canInstall: Boolean")
-        assertTrue("步骤 ③ 必须先选出目标（Ultra）", canInstall.contains("bootFlow?.selectable == true"))
-        assertTrue("Normal 必须有 Ready 的分派结论", canInstall.contains("normalDecision is InstallTargetDecision.Ready"))
+        assertFalse("预览不作为实际生成结果", canInstall.contains("bootFlow?.selectable"))
+        assertFalse("Normal 执行按实际源镜像判断", canInstall.contains("normalDecision is InstallTargetDecision.Ready"))
         assertTrue("事务中下一步必须禁用", canInstall.contains("!targetSelectable"))
         assertTrue("下一步必须依赖已选择的可用来源", canInstall.contains("!hasInstallSource"))
         val source = state.substringAfter("val hasInstallSource: Boolean").substringBefore("val canInstall: Boolean")
         assertTrue("步骤 ② 必须选中一个现有来源", source.contains("installMethodOptions.any"))
         assertTrue("选文件来源必须有 uri", source.contains("method.uri != null"))
-        // 目标模式**参与**判据（Ultra 看 bootFlow，Normal 看 KMI × 分区），但判据本身仍是纯值。
-        assertTrue(state.contains("when (targetMode)"))
         assertFalse(state.contains("InstallTargetModeUi"))
     }
 

@@ -1,15 +1,15 @@
 """Execute both pinned ksud installer shells in disposable host fixtures."""
 from pathlib import Path
 import argparse
-import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
 import zipfile
+from selected_ksud_postimages import verify_source_postimages
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("MAPLESU_REMOVAL_SOURCE", Path(__file__).resolve().parents[2])).resolve()
 
 
 def bash_path():
@@ -149,23 +149,13 @@ set_permissions() { echo legacy-permissions >> "$TRACE"; }
             assert "update" in result["live"] and "disable" not in result["live"] and "remove" not in result["live"]
         records.append({"case": name, "identical": True, **values})
         print(name, "PASS", "exit=" + str(code))
-    sources = {}
-    for name in ["hot_install.rs", "metamodule.rs", "installer.sh", "init_event.rs", "defs.rs", "resetprop.rs",
-                 "sepolicy.rs", "preinit.rs", "module_config.rs"]:
-        paths = [ROOT / f"third_party/kernelsu/{tree}/userspace/ksud/src/{name}" for tree in ["upstream", "applied"]]
-        left, right = [p.read_bytes() for p in paths]
-        assert left == right, name
-        sources[name] = hashlib.sha256(left).hexdigest()
-    left, right = [(ROOT / f"third_party/kernelsu/{tree}/userspace/ksud/src/module.rs").read_bytes()
-                   for tree in ["upstream", "applied"]]
-    assert right.startswith(left)
+    source_postimages = verify_source_postimages(ROOT, out)
     (out / "verification.json").write_text(json.dumps({"scope": "ksud installer production shells with host platform substitutes",
         "passed": True, "deviceAccess": False, "fullKsudExecuted": False,
         "platformSubstitutes": ["fixture data/tmp paths", "mount_partitions no-op", "fixed Android API/ABI",
                                "recorded chown/chcon calls; no host SELinux labels"],
-        "staticScope": "Metamodule safety gates, hot-install swap/apply, and boot lifecycle are source identity checks, not Android execution",
-        "cases": records, "identicalSources": sources,
-        "moduleRsOriginalPrefixIdentical": True}, ensure_ascii=False, indent=2), encoding="utf-8")
+        "staticScope": "Metamodule safety gates, hot-install swap/apply, and boot lifecycle are exact selected-patch postimage checks, not Android execution",
+        "cases": records, "sourcePostimages": source_postimages}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

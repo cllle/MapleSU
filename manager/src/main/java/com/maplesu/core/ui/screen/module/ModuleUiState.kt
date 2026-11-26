@@ -120,11 +120,14 @@ internal fun ModuleUiState.withUltraSafety(safeMode: Boolean, mode: WorkMode?): 
 internal fun ModuleUiState.withModuleLoadResult(result: Result<List<Module>>): ModuleUiState =
     result.fold(
         onSuccess = {
+            val previous = modules.associateBy { module -> module.id }
+            val received = it.map { module ->
+                val toggled = toggleChanges[module.id]?.present(module) ?: module
+                val presented = removalChanges[module.id]?.present(toggled) ?: toggled
+                previous[module.id]?.takeIf { old -> old == presented } ?: presented
+            }
             copy(
-                modules = it.map { module ->
-                    val toggled = toggleChanges[module.id]?.present(module) ?: module
-                    removalChanges[module.id]?.present(toggled) ?: toggled
-                },
+                modules = if (received == modules) modules else received,
                 loadError = null,
                 hasLoaded = true,
                 pending = false,
@@ -143,6 +146,21 @@ internal fun ModuleUiState.withModuleLoadResult(result: Result<List<Module>>): M
             )
         },
     )
+
+/** Rows and update hints belong to one repository read identity, never to its successor. */
+internal fun ModuleUiState.withModuleReadContextReset(): ModuleUiState = copy(
+    modules = emptyList(),
+    moduleList = emptyList(),
+    searchResults = emptyList(),
+    updateInfo = emptyMap(),
+    removalChanges = emptyMap(),
+    toggleChanges = emptyMap(),
+    hasLoaded = false,
+    loadError = null,
+    pending = false,
+    pendingReason = null,
+    isRefreshing = true,
+)
 
 /**
  * T10：置"启动中"（等待运行环境接线）。

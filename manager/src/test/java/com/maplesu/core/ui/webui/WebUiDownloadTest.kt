@@ -13,12 +13,19 @@ class WebUiDownloadTest {
 
     @Test fun chunkedJsPassesTheReturnedFullUrlThroughAllNativeCalls() {
         val cache = Files.createTempDirectory("webui-chunk-").toFile()
-        val handler = newHandler()
+        val handler = BlobDownloadHandler()
         try {
             val url = handler.registerBlobDownload("test.bin", "application/octet-stream", cache)
             assertTrue("JS sends the returned URL to writeDownloadChunk", handler.writeChunk(url, "AQID"))
             assertTrue(handler.completeDownload(url))
-            val request = object : WebResourceRequest { override val url = Uri.parse(url) }
+            val request = object : WebResourceRequest {
+                override fun getUrl() = Uri.parse(url)
+                override fun isForMainFrame() = true
+                override fun isRedirect() = false
+                override fun hasGesture() = false
+                override fun getMethod() = "GET"
+                override fun getRequestHeaders() = emptyMap<String, String>()
+            }
             val response = handler.shouldInterceptRequest(request)!!
             assertEquals(200, response.statusCode)
             assertArrayEquals(byteArrayOf(1,2,3), response.data!!.use { it.readBytes() })

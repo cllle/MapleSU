@@ -156,6 +156,14 @@ class ReleaseApkTest(unittest.TestCase):
         self.repack()
         return path
 
+    def test_claim_release_version_matches_the_actual_sdk(self):
+        M.verify_claim_release_version(dict(appVersion='5.2.1', versionCode=50201), self.release)
+        for manifest in ({}, dict(appVersion='5.2.0', versionCode=50200),
+                         dict(appVersion='5.2.1', versionCode=50200),
+                         dict(appVersion='5.2.1', versionCode='50201')):
+            with self.subTest(manifest=manifest), self.assertRaisesRegex(ValueError, 'CLAIM_RELEASE_VERSION_MISMATCH'):
+                M.verify_claim_release_version(manifest, self.release)
+
     def test_optional_session_abi_and_all_eleven_inputs_pass(self):
         path = self.add_session_abi()
         code, receipt = self.execute()

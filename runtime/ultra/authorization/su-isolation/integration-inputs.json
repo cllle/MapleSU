@@ -1,0 +1,70 @@
+{
+  "coreArchive": "helper-su-isolation/stat-access/libkernel_module_kit_static.a",
+  "coreArchiveSha256": "4d26ba311afca62cd2fe43e0ae10e0a28ef64bb750fb7c637ffa9ee121d07e03",
+  "helperCandidate": "helper-su-isolation/candidate-v4",
+  "expectedChangedOrdinals": [
+    48,
+    52,
+    53,
+    81,
+    83,
+    84,
+    85,
+    255
+  ],
+  "extraMembers": {
+    "53": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/skroot_installer.o"
+  },
+  "errorHeader": "su-auth-isolation/module_err_def.h",
+  "extraSources": {
+    "runtime/pro/boot/bootstrap-readiness/build_v2.py": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/build_v2.py",
+    "runtime/pro/boot/bootstrap-readiness/result_channel.c": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/result_channel.c",
+    "runtime/pro/boot/bootstrap-readiness/skroot_installer.candidate.cpp": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/skroot_installer.candidate.cpp",
+    "runtime/pro/boot/bootstrap-readiness/skroot_installer.source.diff": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/skroot_installer.source.diff",
+    "runtime/pro/boot/bootstrap-readiness/m053.patched.ll": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/m053.patched.ll",
+    "runtime/pro/boot/bootstrap-readiness/REVIEW.md": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/REVIEW.md",
+    "runtime/pro/boot/bootstrap-readiness/test_v2.py": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/test_v2.py",
+    "runtime/pro/boot/bootstrap-readiness/result_test.c": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/result_test.c",
+    "runtime/pro/authorization/su-isolation/stat-access/stat_uid_path.cpp": "helper-su-isolation/stat-access/stat_uid_path.cpp",
+    "runtime/pro/authorization/su-isolation/stat-access/build_stat.py": "helper-su-isolation/stat-access/build_stat.py",
+    "runtime/pro/authorization/su-isolation/stat-access/m084.patched.ll": "helper-su-isolation/stat-access/m084.patched.ll",
+    "runtime/pro/authorization/su-isolation/stat-access/m085.patched.ll": "helper-su-isolation/stat-access/m085.patched.ll",
+    "runtime/pro/authorization/su-isolation/stat-access/replay_codegen.py": "helper-su-isolation/stat-access/replay_codegen.py",
+    "runtime/pro/authorization/su-isolation/stat-access/test_codegen.cpp": "helper-su-isolation/stat-access/test_codegen.cpp"
+  },
+  "hotloadRepair": {
+    "schemaVersion": 1,
+    "deviceAcceptance": false,
+    "memberOrdinal": 53,
+    "candidateSha256": "1521791a303d618ff9d6fc62fd85e44b55e87588a8d2c990b7fc95c1e73ce211",
+    "actualHostCases": 23,
+    "hostResultPath": "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/result-test.json",
+    "hostResultSha256": "1bcffb9c63e041bb652d6623e5e5c90d7791130cbc47aa8f1ab4b99d8bf2ad2d",
+    "beforeRestartResultRequired": true,
+    "completedAndSafeReceiptRequired": true
+  },
+  "backend": "helper-su-isolation/backend/runtime/libmaplesu_policy_boot.so",
+  "inputSha256": {
+    "helper-su-isolation/backend/runtime/libmaplesu_policy_boot.so": "004aaa7b7d71dd49785cbd7061d113077a8fd87c23dc41ea7423a55335521333",
+    "helper-su-isolation/candidate-v4/build.json": "cacb5956b74c794cfa92dfb5b51557879de3f71da9a4d1613ec65042c1b099be",
+    "helper-su-isolation/candidate-v4/candidate-helper.elf": "6d270d39bc65165c2dec54e8f6923b2a405325c5ffe63c958ce35e138bff7c31",
+    "helper-su-isolation/stat-access/build_stat.py": "0623c8d44ff7726397ccf48f050167c61a8d9070ab6c42c1747ac340e7485c15",
+    "helper-su-isolation/stat-access/libkernel_module_kit_static.a": "4d26ba311afca62cd2fe43e0ae10e0a28ef64bb750fb7c637ffa9ee121d07e03",
+    "helper-su-isolation/stat-access/m084.patched.ll": "6d5dfab0be8dfbfa0306124a36e7fa4ae077771bbf3785beac7a66eb07cb8ae1",
+    "helper-su-isolation/stat-access/m085.patched.ll": "ef195a242a8f76d95d7b1c52edcd42db26ee6af789812b37c4f51581889aeea3",
+    "helper-su-isolation/stat-access/replay_codegen.py": "fea8e52d239ec3284bfecdd7f2baccc7935ec4d887c87c52caf4fe0d7e45431a",
+    "helper-su-isolation/stat-access/stat_uid_path.cpp": "996774a4108b2dd5967a35622cf9b90171cd449e5a14b0a3fb8953397294f6c0",
+    "helper-su-isolation/stat-access/test_codegen.cpp": "b9501c24d3d303da0275ab0d3f357d981f0d7acf9be3cb53d21d3a3bd94d7d50",
+    "su-auth-isolation/module_err_def.h": "c3f4a61fc9a80de7e85b4a46764d348ce953dd326e2b48266ec2c35ca6bf6de9",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/REVIEW.md": "8c1bf3c459efa3756e39b70d47afda86cb203598ecef0dea79c3a3a988c120cf",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/build_v2.py": "4016cbb6f4909c5796f7c6ec42b7d69769f7bab09aa627520f5339a586e92465",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/m053.patched.ll": "7876faab55a70ecbb247e5d05b4188bd536dc2aed0d520f30069a6b5247638ed",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/result-test.json": "1bcffb9c63e041bb652d6623e5e5c90d7791130cbc47aa8f1ab4b99d8bf2ad2d",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/result_channel.c": "3faf137791906ec6453ab4b0970dfddfd972f91868092c3f81d16915c07f18a3",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/result_test.c": "a2d03ffc1a75e77c85ee288dbb8981d38c1d75dd6778333a83eebb78baacb63a",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/skroot_installer.candidate.cpp": "8e11010846536203fe203685dc573d5f3233c7282ff06d2b2600219be49e64d0",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/skroot_installer.o": "1521791a303d618ff9d6fc62fd85e44b55e87588a8d2c990b7fc95c1e73ce211",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/skroot_installer.source.diff": "6e34ce1f6a93a35ca2698122e7d3f597a862cd3a2e3c4f633e0881c32a12b9d1",
+    "workspace/work/su-entry-vivo-20261114-live/helper-launch-candidate/candidate-v2/test_v2.py": "b98ea0f3d678ce4668f5c487551a12e2f504855e7e8d596054108a5e6565ad72"
+  }
+}

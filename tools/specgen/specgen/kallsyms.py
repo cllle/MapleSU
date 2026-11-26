@@ -142,7 +142,6 @@ def decode(image: bytes) -> SymbolTable:
     names = probe.find_names(markers, token_table, element_size)
     num_syms, names, num_syms_at = probe.find_num_syms(names, markers, token_table, element_size)
     tokens = probe.read_tokens(token_table)
-    symbol_names = probe.read_names(names, num_syms, tokens)
     try:
         offsets_at, relative_base, base_relative = probe.find_offsets(
             num_syms, token_index_end, element_size, token_table)
@@ -151,7 +150,18 @@ def decode(image: bytes) -> SymbolTable:
         # index. Same structures, different order; retry with the older anchor before failing.
         offsets_at, relative_base, base_relative = probe.find_offsets_legacy(
             num_syms, num_syms_at, element_size)
+    if relative_base == 0:
+        if names != (num_syms_at + 4 + 7) & ~7:
+            raise KallsymsError("KALLSYMS_NUM_SYMS_ALIGNMENT")
+        marker_end = markers + (num_syms + 255) // 256 * element_size
+        if token_table != (marker_end + 7) & ~7:
+            raise KallsymsError("KALLSYMS_MARKER_TABLE_MISMATCH")
+    symbol_names = probe.read_names(names, num_syms, tokens,
+                                   (markers, element_size) if relative_base == 0 else None)
     addresses = probe.read_addresses(offsets_at, num_syms, relative_base, base_relative)
+    if relative_base == 0 and not any(name[1:] == "_text" and address == 0
+                                     for address, name in zip(addresses, symbol_names)):
+        raise KallsymsError("KALLSYMS_IMAGE_RELATIVE_TEXT_MISMATCH")
     first_text = next(
         (address for address, name in zip(addresses, symbol_names) if name[:1].upper() == "T"), 0)
     if base_relative and relative_base < first_text:
@@ -345,19 +355,32 @@ class _Probe:
                 continue
             return num_syms, names, needle
 
-    def read_names(self, names: int, num_syms: int, tokens: list[str]) -> list[str]:
+    def read_names(self, names: int, num_syms: int, tokens: list[str],
+                   markers: tuple[int, int] | None = None) -> list[str]:
         out, position = [], names
-        for _ in range(num_syms):
+        limit = markers[0] if markers is not None else self.size
+        for index in range(num_syms):
+            if markers is not None and index % 256 == 0:
+                marker_at = markers[0] + index // 256 * markers[1]
+                if int.from_bytes(self.image[marker_at:marker_at + markers[1]], "little") != position - names:
+                    raise KallsymsError("KALLSYMS_NAMES_MARKER_MISMATCH:%d" % index)
+            if position >= limit:
+                raise KallsymsError("KALLSYMS_NAMES_CORRUPT")
             length = self.image[position]
             position += 1
             if length & 0x80:
+                if position >= limit:
+                    raise KallsymsError("KALLSYMS_NAMES_CORRUPT")
                 length = (length & 0x7F) | (self.image[position] << 7)
                 position += 1
-            if not 0 < length < 0x4000 or position + length > self.size:
+            if not 0 < length < 0x4000 or position + length > limit:
                 raise KallsymsError("KALLSYMS_NAMES_CORRUPT")
             name = "".join(tokens[self.image[position + index]] for index in range(length))
             position += length
             out.append(name)
+        if markers is not None and (markers[0] != (position + 7) & ~7 or
+                                    any(self.image[position:markers[0]])):
+            raise KallsymsError("KALLSYMS_NAMES_MARKER_END_MISMATCH")
         return out
 
     # -- address table ----------------------------------------------------------------------
@@ -386,15 +409,15 @@ class _Probe:
         """Kernel < 6.4: ``kallsyms_relative_base`` precedes ``kallsyms_num_syms``."""
         address_size = 8
         offset_size = min(4, element_size)
-        position = num_syms_at
-        while position > address_size and \
-                self.image[position - address_size:position] == b"\0" * address_size:
-            position -= address_size
-        base_at = position - address_size
+        # A complete zero base slot is data in a raw relocatable Image, not padding.
+        base_at = num_syms_at - address_size
         if base_at <= 0:
             raise KallsymsError("KALLSYMS_RELATIVE_BASE_NOT_FOUND")
         relative_base = int.from_bytes(self.image[base_at:base_at + address_size], "little")
-        if not (0xFFFF000000000000 <= relative_base < (1 << 64)):
+        if relative_base == 0:
+            if num_syms_at % address_size or self.image[num_syms_at + 4:num_syms_at + 8] != b"\0" * 4:
+                raise KallsymsError("KALLSYMS_NUM_SYMS_ALIGNMENT")
+        elif not (0xFFFF000000000000 <= relative_base < (1 << 64)):
             raise KallsymsError("KALLSYMS_RELATIVE_BASE_IMPLAUSIBLE:0x%X" % relative_base)
         # Each label is eight-byte aligned; zero offsets are data, not padding.
         table_bytes = num_syms * offset_size

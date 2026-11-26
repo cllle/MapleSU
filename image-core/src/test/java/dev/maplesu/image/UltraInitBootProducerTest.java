@@ -314,10 +314,25 @@ public final class UltraInitBootProducerTest {
         check(KernelIdentity.sha256(maximum).equals(UltraInitBootProducer.readArtifact(manifest.toFile())
                 .targetInputSha256.get("taskProfileAbi")), "exact 1 MiB sidecar remains admitted");
         Files.write(sidecar, proof);
-        for (String name : new String[]{"sessionAbi", "bundleSources"}) {
-            Files.writeString(manifest, json.replace("taskProfileAbi", name));
-            check(KernelIdentity.sha256(proof).equals(UltraInitBootProducer.readArtifact(manifest.toFile())
-                    .targetInputSha256.get(name)), "pre-existing " + name + " binding stays strict and valid");
+        for (String name : new String[]{"sessionAbi", "bundleSources", "abiEvidence"}) {
+            String selected = json.replace("taskProfileAbi", name);
+            Files.writeString(manifest, selected);
+            var retained = UltraInitBootProducer.readArtifact(manifest.toFile());
+            check(KernelIdentity.sha256(proof).equals(retained.targetInputSha256.get(name)),
+                    name + " binds the selected bytes");
+            check(retained.withCredential(ascii("A".repeat(48))).targetInputSha256.equals(retained.targetInputSha256),
+                    name + " survives credential binding");
+            if (name.equals("abiEvidence")) {
+                rejectedManifest(manifest, selected.replace(",\"abiEvidenceSha256\":\"" + KernelIdentity.sha256(proof) + "\"", ""), "FIELDS");
+                rejectedManifest(manifest, selected.replace("\"abiEvidence\":\"task-profile-abi.json\",", ""), "FIELDS");
+                rejectedManifest(manifest, selected.replace(KernelIdentity.sha256(proof), "0".repeat(64)), "HASH:abiEvidence");
+                rejectedManifest(manifest, selected.replace(KernelIdentity.sha256(proof), "not-a-hash"), "HASH:abiEvidence");
+                rejectedManifest(manifest, selected.replace("\"abiEvidence\":\"task-profile-abi.json\"", "\"abiEvidence\":{}"), "JSON");
+                rejectedManifest(manifest, selected.replace("\"abiEvidence\":\"task-profile-abi.json\"",
+                        "\"abiEvidence\":\"task-profile-abi.json\",\"abiEvidence\":\"task-profile-abi.json\""), "FIELDS");
+                check(Files.readAllBytes(sidecar).length == proof.length && Arrays.equals(proof, Files.readAllBytes(sidecar)),
+                        "rejected ABI evidence leaves the original sidecar intact");
+            }
         }
         Path link = work.resolve("task-profile-link.json");
         Files.createSymbolicLink(link, sidecar.getFileName());
@@ -745,9 +760,119 @@ public final class UltraInitBootProducerTest {
         Arrays.fill(credential, (byte) 0);
     }
 
+    private static java.util.Map<String, byte[]> kmiBundle() throws Exception {
+        return kmiBundle("6.6.1-android15-1-fixture");
+    }
+
+    private static java.util.Map<String, byte[]> kmiBundle(String release) throws Exception {
+        byte[] bridge = parameterModule(32);
+        byte[] info = ascii("vermagic=" + release + " SMP\0parmtype=credential:string\0" +
+                "parmtype=deployment_namespace:string\0maplesu_runtime_facts=1\0");
+        int infoAt = bridge.length;
+        bridge = Arrays.copyOf(bridge, infoAt + info.length);
+        System.arraycopy(info, 0, bridge, infoAt, info.length);
+        ByteBuffer.wrap(bridge).order(ByteOrder.LITTLE_ENDIAN).putLong(64 + 5 * 64 + 24, infoAt)
+                .putLong(64 + 5 * 64 + 32, info.length);
+        String json = "{\"schemaVersion\":2,\"kind\":\"kmi-component\",\"kmi\":\"android15-6.6\"," +
+                "\"architecture\":\"arm64\",\"pageSize\":4096,\"cfiMode\":\"kcfi\"," +
+                "\"kernelRelease\":\"" + release + "\",\"credentialMode\":\"module-parameter\"," +
+                "\"metadataDisplacement\":4064,\"runtimeFactsAbi\":\"maplesu-runtime-facts/1\"," +
+                "\"sourceGenerationSha256\":\"" + "a".repeat(64) + "\",\"handoff\":\"handoff.bin\"," +
+                "\"handoffSha256\":\"" + KernelIdentity.sha256(handoff()) + "\",\"bridge\":\"bridge.ko\"," +
+                "\"bridgeSha256\":\"" + KernelIdentity.sha256(bridge) + "\"}";
+        return java.util.Map.of("bridge.ko", bridge, "handoff.bin", handoff(), "manifest.json", ascii(json));
+    }
+
+    private static void kmiComponent(Path work) throws Exception {
+        var files = kmiBundle();
+        for (var file : files.entrySet()) Files.write(work.resolve(file.getKey()), file.getValue());
+        byte[] bridge = files.get("bridge.ko");
+        int marker = new String(bridge, StandardCharsets.ISO_8859_1).indexOf("maplesu_runtime_facts=1");
+        String json = new String(files.get("manifest.json"), StandardCharsets.US_ASCII);
+        Path manifest = work.resolve("manifest.json");
+        var component = UltraInitBootProducer.readArtifact(manifest.toFile());
+        check(component.isKmiComponent && component.componentKmi.equals("android15-6.6") &&
+                component.component.pageSize == 4096 && component.component.cfiMode.equals("kcfi"), "component exposes its build ABI separately");
+        check(component.targetBoot == null && component.targetBootSha256.isEmpty() && component.kernelSha256.isEmpty() &&
+                component.targetInputSha256.isEmpty(), "KMI component carries no invented target input or proof");
+        byte[] baseline = image(new byte[0], KernelCompression.encode(stock(true, false), "GZIP"));
+        Path source = work.resolve("init_boot.img"), output = work.resolve("patched.img"),
+                repeated = work.resolve("repeated.img"), restored = work.resolve("restored.img");
+        Files.write(source, baseline);
+        var bound = component.withCredential(ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"))
+                .withDeploymentNamespace(namespaceRecord("DeploySpace123ab"));
+        var produced = UltraInitBootProducer.produce(source.toFile(), output.toFile(), bound);
+        check(UltraInitBootProducer.recognizes(output.toFile()), "single-file component uses the real owned recovery envelope");
+        Path record = work.resolve("record.bin");
+        check(BootImageRebuilder.extractRecoveryRecord(output.toFile(), record.toFile(), BootImageRebuilder.OutputPolicy.STRICT) &&
+                produced.recoveryRecordBytes == Files.size(record) && produced.originalRamdiskBytes == BootImageInspector.inspect(source.toFile()).ramdiskSize &&
+                produced.installedRamdiskBytes == BootImageInspector.inspect(output.toFile()).ramdiskSize, "reported capacity uses exact published bytes");
+        UltraInitBootProducer.produce(output.toFile(), repeated.toFile(), bound);
+        check(Arrays.equals(Files.readAllBytes(output), Files.readAllBytes(repeated)), "single-file KMI repatch is byte idempotent");
+        UltraInitBootProducer.restore(output.toFile(), restored.toFile());
+        check(Arrays.equals(baseline, Files.readAllBytes(restored)), "single-file KMI restores the exact input");
+        rejectedManifest(manifest, json.replace("android15-6.6", "not-a-kmi"), "KMI");
+        rejectedManifest(manifest, json.replace("\"kcfi\"", "\"guess\""), "CFI_MODE");
+        rejectedManifest(manifest, json.replace("\"pageSize\":4096", "\"pageSize\":8192"), "PAGE_SIZE");
+        rejectedManifest(manifest, json.replace("\"kind\"", "\"targetBoot\":\"absent.img\",\"kind\""), "COMPONENT_FIELDS");
+        byte[] noRuntime = bridge.clone(); noRuntime[marker + "maplesu_runtime_facts=".length()] = '0';
+        Files.write(work.resolve("bridge.ko"), noRuntime);
+        rejectedManifest(manifest, json.replace(KernelIdentity.sha256(bridge), KernelIdentity.sha256(noRuntime)), "BRIDGE_RUNTIME_FACTS");
+        check(Arrays.equals(baseline, Files.readAllBytes(source)), "all component success and failure paths preserve the source");
+        Path untagged = Files.createDirectory(work.resolve("untagged-release"));
+        for (var file : kmiBundle("6.6.127-4k-g46a034eca005-dirty").entrySet())
+            Files.write(untagged.resolve(file.getKey()), file.getValue());
+        var ddkComponent = UltraInitBootProducer.readArtifact(untagged.resolve("manifest.json").toFile());
+        check(ddkComponent.isKmiComponent && ddkComponent.componentKmi.equals("android15-6.6") &&
+                ddkComponent.kernelRelease.equals("6.6.127-4k-g46a034eca005-dirty"),
+                "actual DDK release need not carry an Android tag");
+        kmiCapacity(Files.createDirectory(work.resolve("capacity")), files);
+    }
+
+    private static void kmiCapacity(Path work, java.util.Map<String, byte[]> files) throws Exception {
+        byte[] bridge = Arrays.copyOf(files.get("bridge.ko"), 4 * 1024 * 1024);
+        byte[] noise = new byte[2 * 1024 * 1024];
+        new java.util.Random(1729).nextBytes(noise);
+        System.arraycopy(noise, 0, bridge, files.get("bridge.ko").length, noise.length);
+        System.arraycopy(noise, 0, bridge, bridge.length - noise.length, noise.length);
+        String json = new String(files.get("manifest.json"), StandardCharsets.US_ASCII)
+                .replace(KernelIdentity.sha256(files.get("bridge.ko")), KernelIdentity.sha256(bridge));
+        Files.write(work.resolve("bridge.ko"), bridge); Files.write(work.resolve("handoff.bin"), files.get("handoff.bin"));
+        Files.writeString(work.resolve("manifest.json"), json);
+        byte[] original = KernelCompression.encode(join(entry("bulk", 0100644, noise, false), stock(false, false)), "GZIP");
+        byte[] body = image(new byte[0], original), baseline = Arrays.copyOf(body, 8 * 1024 * 1024);
+        ByteBuffer.wrap(baseline).put(body.length, ascii("AVB0"));
+        int footerAt = baseline.length - 64;
+        ByteBuffer footer = ByteBuffer.wrap(baseline).order(ByteOrder.BIG_ENDIAN);
+        footer.put(footerAt, ascii("AVBf")).putInt(footerAt + 4, 1).putLong(footerAt + 12, body.length)
+                .putLong(footerAt + 20, body.length).putLong(footerAt + 28, 256);
+        Path source = work.resolve("init_boot.img"), output = work.resolve("patched.img"), snapshot = work.resolve("snapshot.bin");
+        Files.write(source, baseline);
+        var artifact = UltraInitBootProducer.readArtifact(work.resolve("manifest.json").toFile())
+                .withCredential(ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"))
+                .withDeploymentNamespace(namespaceRecord("DeploySpace123ab"));
+        byte[] cpio = KernelCompression.decode(original, "GZIP", 8 * 1024 * 1024);
+        byte[] installed = KernelCompression.encode(UltraInitRamdisk.install(cpio, handoff(), bridge, null,
+                ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"), namespaceRecord("DeploySpace123ab")), "GZIP");
+        BootImageRecovery.capture(source.toFile(), BootImageRecovery.Component.RAMDISK, snapshot.toFile(), BootImageRebuilder.OutputPolicy.STRICT);
+        long recordBytes = 64 + Files.size(snapshot) + original.length + 32;
+        check(4096L + align(installed.length) + 4096 < baseline.length, "component alone fits the eight MiB container");
+        check(4096L + align(installed.length) + align(Math.toIntExact(56 + recordBytes)) + 4096 > baseline.length,
+                "complete first-input recovery makes the actual eight MiB layout overflow");
+        fails("AVB_PARTITION_SIZE_LIMIT", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), artifact));
+        check(!Files.exists(output) && Arrays.equals(baseline, Files.readAllBytes(source)), "capacity failure keeps exact recovery protection and preserves input");
+        System.out.println("8MiB capacity fixture: originalRamdisk=" + original.length + ", installedRamdisk=" + installed.length +
+                ", recoveryRecord=" + recordBytes + ", container=8388608; rejected with complete recovery retained");
+    }
+
     public static void main(String[] args) throws Exception {
         Path work = Files.createTempDirectory("maplesu-init-producer-fixture-");
         try {
+            if (args.length == 1 && args[0].equals("kmi-component")) {
+                kmiComponent(work);
+                System.out.println("PASS " + checks + " single-file KMI component checks; no module/device execution");
+                return;
+            }
             if (args.length == 1 && args[0].equals("artifact-sidecars")) {
                 artifactSidecars(work);
                 System.out.println("PASS " + checks + " bounded artifact sidecar checks; no ABI/module/device execution");
@@ -778,6 +903,7 @@ public final class UltraInitBootProducerTest {
                 System.out.println("PASS " + checks + " runtime credential container checks; no boot/bridge/SDK execution");
                 return;
             }
+            kmiComponent(Files.createDirectory(work.resolve("kmi-component")));
             artifactSidecars(Files.createDirectory(work.resolve("artifact-sidecars")));
             runtimeCredential(Files.createDirectory(work.resolve("runtime-credential")));
             artifactMetadata(Files.createDirectory(work.resolve("artifact-metadata")));
@@ -791,6 +917,14 @@ public final class UltraInitBootProducerTest {
             UltraInitBootProducer.Artifact artifact = new UltraInitBootProducer.Artifact(target.toFile(),
                     KernelIdentity.sha256(targetBytes), KernelIdentity.releaseOf(raw), KernelIdentity.sha256(raw),
                     KernelIdentity.sha256(ascii("fixture-credential")), handoff(), ascii("opaque module fixture"));
+            for (byte[] emptyKernel : new byte[][]{new byte[0], raw}) {
+                byte[] emptyRamdiskImage = image(emptyKernel, new byte[0]); Files.write(source, emptyRamdiskImage);
+                fails("ULTRA_INIT_BOOT_CONTAINER", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), artifact));
+                fails("ULTRA_INIT_BOOT_RAMDISK_SIZE", () -> UltraInitBootProducer.component(source.toFile(),
+                        BootImageInspector.inspect(source.toFile())));
+                check(!Files.exists(output) && Arrays.equals(emptyRamdiskImage, Files.readAllBytes(source)),
+                        "Init injection keeps the nonempty ramdisk guard for boot and init_boot");
+            }
             manifest(work, artifact);
             for (boolean crc : new boolean[]{false, true}) for (boolean symlink : new boolean[]{false, true}) {
                 byte[] cpio = stock(crc, symlink), edited = UltraInitRamdisk.install(cpio, handoff(), artifact.bridge);

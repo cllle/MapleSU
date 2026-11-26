@@ -77,8 +77,10 @@ class InstallBootFlowContractTest {
     }
 
     @Test
-    fun theStepThreeTargetTravelsIntoThePatchEntryPoint() {
-        assertTrue(installScreen().contains("variantId = variantSnapshot"))
+    fun theStepThreeKmiTravelsIntoThePatchEntryPoint() {
+        assertTrue(installScreen().contains("initBootKmi?.let { LkmSelection.KmiString(it) } ?: LkmSelection.KmiNone"))
+        assertTrue(installScreen().contains("lkm = selectedLkm"))
+        assertFalse(installScreen().contains("variantId = variantSnapshot"))
         val flashIt = source("src/main/java/com/maplesu/core/ui/screen/flash/FlashUtils.kt")
         assertTrue(flashIt.contains("val variantId: String? = null"))
         assertTrue(flashIt.contains("variantId = flashIt.variantId"))
@@ -150,12 +152,14 @@ class InstallBootFlowContractTest {
     }
 
     @Test
-    fun bothInstallEntriesGoThroughTheSameGeneratedPreparation() {
+    fun bothInstallEntriesUseTheTargetPreparationAndTheirOwnSource() {
         val install = ultraInstall()
-        assertTrue(install.contains("ultraGeneratedPreparation(flow, source, release"))
-        assertTrue(install.contains("ultraGeneratedPreparation(flow, backup, observed.kernelRelease"))
-        assertTrue(install.contains("flow.prepare(base, credential, onStdout)"))
-        assertTrue(install.contains("install_boot_generate_notice"))
+        assertTrue(install.contains("flow.prepareTarget(source, UltraInstallCredentials.forCandidate(ksuApp, imageOnly), variantId,"))
+        assertTrue(install.contains("artifact, recoveredDeployment, onStdout)"))
+        assertTrue(install.contains("flow.prepareTarget(backup, UltraInstallCredentials.forCandidate(ksuApp), variantId, onStdout)"))
+        assertFalse(install.contains("flow.prepare(base, credential, onStdout)"))
+        assertTrue(install.contains("repository.withCurrentImage(sourceSha256)"))
+        assertTrue(install.contains("val backup = flow.backupCurrentBoot()"))
     }
 
     @Test
@@ -172,10 +176,8 @@ class InstallBootFlowContractTest {
     }
 
     @Test
-    fun theOnDeviceGenerationIsStillDisclosedOnTheResultPage() {
-        // 一句话的事实（不是诊断面板）：本机生成档从未在设备上启动过。
-        assertTrue(installScreen().contains("val generatedOnDevice = target != null && target.generatedOnDevice"))
-        assertTrue(installScreen().contains("generatedOnDevice = generatedOnDevice"))
+    fun thePreviewDoesNotClaimThatItGeneratedTheCandidate() {
+        assertFalse(installScreen().contains("generatedOnDevice = generatedOnDevice"))
         val flashIt = source("src/main/java/com/maplesu/core/ui/screen/flash/FlashUtils.kt")
         assertTrue(flashIt.contains("val generatedOnDevice: Boolean = false"))
         assertTrue(flashScreen().contains("generatedOnDevice = (flashIt as? FlashIt.FlashBoot)?.generatedOnDevice == true"))
@@ -239,8 +241,9 @@ class InstallBootFlowContractTest {
         assertTrue("迁移入口可指定本次安装目标", screen.contains("mutableStateOf(initialTarget)"))
         assertTrue("必须能选到 Normal", screen.contains("InstallTargetMode.NORMAL"))
         // 分区选择贯通到修补请求（不是只画一个没有消费者的选择器）。
-        assertTrue(screen.contains("InstallPartitionSelection.effective("))
-        assertTrue(screen.contains("partition = selectedPartition.wire"))
+        assertTrue(screen.contains("installMethod is InstallMethod.SelectFile && imagePartition != null"))
+        assertTrue(screen.contains("val requestedPartition = selectedPartition.wire"))
+        assertTrue(screen.contains("partition = requestedPartition"))
         assertTrue(screen.contains("targetMode = mode"))
         // 选择与"当前已激活模式"无关，也不持久化（每次打开都是默认 Ultra）。
         assertFalse("安装页不得持久化目标模式", screen.contains("targetModeStore"))
@@ -255,11 +258,13 @@ class InstallBootFlowContractTest {
 
     @Test
     fun thePartitionPolicyIsTheOnlyPlaceThatDecidesFixedOrSelectable() {
-        // 固定 / 可选 / 锁定的语义只在纯层（InstallPartitionPolicy + InstallPartitionSelection）。
+        // Ultra 使用实际选项；Normal 使用既有分区策略。值模型行为由 availability 测试覆盖。
         val state = source("src/main/java/com/maplesu/core/ui/screen/install/InstallUiState.kt")
         assertTrue(
-            state.contains("val partitionFixed: Boolean get() = InstallPartitionPolicy.isFixed(targetMode)"),
+            state.contains("val partitionFixed: Boolean get() = if (targetMode == InstallTargetMode.ULTRA)"),
         )
+        assertTrue(state.contains("partitionOptions.size <= 1"))
+        assertTrue(state.contains("else InstallPartitionPolicy.isFixed(targetMode)"))
         val steps = installSteps()
         assertTrue("步骤 ① 的分区区块必须按 state.partitionFixed 决定能否操作", steps.contains("state.partitionFixed"))
         assertTrue(steps.contains("onSelectPartition"))
@@ -333,9 +338,15 @@ class InstallBootFlowContractTest {
         assertTrue(flashState().contains("val onSaveBoot: () -> Unit"))
         assertTrue(flashScreen().contains("UltraKernelBootExport.save("))
         listOf(flashMaterial(), flashMiuix()).forEach { skin ->
-            assertTrue(skin.contains("R.string.install_boot_action_save"))
-            assertTrue(skin.contains("FloatingActionButton(onClick = actions.onReboot"))
-            assertTrue("两个动作只在有交付物时出现", skin.contains("state.canSaveBoot"))
+            val actions = skin.substringAfter("private fun DirectInstallActions(")
+                .substringBefore("private fun FlashResultActions(")
+            assertTrue(skin.contains("DirectInstallActions(state, actions, Modifier.align(Alignment.BottomCenter))"))
+            assertTrue(actions.contains("R.string.install_boot_action_save"))
+            assertTrue(actions.contains("actions.onSaveBoot"))
+            assertTrue(actions.contains("if (state.canSaveBoot)"))
+            assertTrue(actions.contains("FloatingActionButton("))
+            assertTrue(actions.contains("if (!state.actionInProgress)"))
+            assertTrue(actions.contains("if (state.showRebootAction) actions.onReboot() else actions.onClose()"))
         }
         // 「保存 boot」导出的必须是**通过回读校验**的那一份：
         // 文件摘要和尺寸要与本次提交候选相等，导出本身再回读一次。
@@ -353,9 +364,13 @@ class InstallBootFlowContractTest {
     fun theInstallFlowStillAsksExactlyOnce() {
         assertFalse(flashScreen().contains("confirmContinue"))
         val vm = source("src/main/java/dev/maplesu/manager/installer/InstallerFlashViewModel.kt")
-        assertTrue(vm.contains("autoContinued"))
-        assertTrue(vm.contains("InstallerServiceClient.continueInstallation(context, taskId)"))
-        assertTrue(vm.contains("INSTALLER_PREPARED_NOT_COMMITTED"))
+        val attach = vm.substringAfter("fun attach(").substringBefore("fun continueModeSwitch(")
+        assertTrue(attach.contains("if (attachedTask == taskId) return"))
+        assertTrue(attach.contains("attachedTask = taskId"))
+        assertEquals(1, Regex("val result = execute").findAll(attach).count())
+        assertTrue(attach.contains("resume && transactional) observe(context.applicationContext, taskId)"))
+        assertFalse(vm.contains("InstallerServiceClient.continueInstallation("))
+        assertTrue(vm.contains("InstallerServiceClient.cancelInstallation(context, taskId)"))
     }
 
     // ── 文案：两个 locale 都在，且不再出现开发者话术 ─────────────────────────────

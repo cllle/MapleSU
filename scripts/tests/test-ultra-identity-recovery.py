@@ -4,12 +4,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from native_toolchain import android_jar
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from native_toolchain import android_jar, jdk_tool
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -47,11 +47,11 @@ def main():
     android = android_jar()
     cp = os.pathsep.join(map(str, [classes, product, android, *dependencies]))
     commands = [
-        [shutil.which("javac"), "--release", "17", "-d", str(classes), *map(str, java_sources)],
-        [shutil.which("java"), "-Xmx768m", "-cp", os.pathsep.join(map(str, [compiler, *dependencies])),
+        [str(jdk_tool("javac")), "--release", "17", "-d", str(classes), *map(str, java_sources)],
+        [str(jdk_tool()), "-Xmx768m", "-cp", os.pathsep.join(map(str, [compiler, *dependencies])),
          "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect", "-jvm-target", "21",
          f"-Xfriend-paths={product}", "-classpath", cp, "-d", str(classes), *map(str, sources)],
-        [shutil.which("java"), "-Xmx768m", f"-Dmaplesu.test.recovery.image={args.image.resolve()}", "-cp", cp,
+        [str(jdk_tool()), "-Xmx768m", f"-Dmaplesu.test.recovery.image={args.image.resolve()}", "-cp", cp,
          "org.junit.runner.JUnitCore", *[f"dev.maplesu.manager.runtime.ultra.{name}" for name in tests]]]
     product_hash = hashlib.sha256()
     for file in sorted(product.rglob("*.class")):

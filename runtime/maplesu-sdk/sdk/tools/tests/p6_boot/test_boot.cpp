@@ -115,16 +115,18 @@ int main() {
     ops.renameat = rename_at; ops.unlinkat = unlink_at;
     ops.read_self_path = self_path; ops.read_boot_id = boot_id; ops.execve = execute; ops.log_line = log_line;
     fs::create_directories(fs::path(self).parent_path());
+    put(std::string(fs::path(self).parent_path()) + "/install.mode", "boot");
     fs::create_directories("/data/adb/maplesu/bin");
     fs::create_directories("/system/bin");
     fs::create_symlink("/bin/sh", "/system/bin/sh");
     const std::string dispatcher = "/data/adb/maplesu/bin/module-boot.sh";
-    put(dispatcher, "#!/bin/sh\nprintf '%s\\n' \"$1\" >> /tmp/helper-events\nprintf 'post-fs-data\\n' >> /tmp/native-init\nexit 17\n");
+    put(dispatcher, "#!/bin/sh\nprintf '%s\\n' \"$1\" >> /tmp/helper-events\nprintf 'post-fs-data\\n' >> /tmp/native-init\nprintf '%s|%s|%s|%s' \"$KSU\" \"$KSU_VER_CODE\" \"$KSU_RUNTIME_MODE\" \"$MAPLESU_RUNTIME_MODE\" > /tmp/helper-mode\nexit 17\n");
     chmod(dispatcher.c_str(), 0755);
     char* args[] = {const_cast<char*>(self), const_cast<char*>("--boot-event"), const_cast<char*>("post-fs-data"), nullptr};
     check(helper_run_boot(&ops, 3, args, nullptr) == 17, "event preserves dispatcher exit code");
     check(get(std::string(self) + HELPER_SUFFIX_SAFE_FLAG) == "2", "script nonzero does not turn SDK bootstrap into protection");
     check(get("/tmp/native-init") == "core\npost-fs-data\nmodules\n", "actual early dispatcher completes before native modules");
+    check(get("/tmp/helper-mode") == "true|50200|lkm|boot", "early dispatcher receives actual persisted boot mode and SDK facts");
     put(dispatcher, "#!/bin/sh\nprintf '%s\\n' \"$1\" >> /tmp/helper-events\nexit 0\n");
     args[2] = const_cast<char*>("service");
     check(helper_run_boot(&ops, 3, args, nullptr) == 0, "late event reaches persistent dispatcher");
@@ -149,6 +151,7 @@ int main() {
     // admits the explicit EarlyHelper mode before either child is created.
     self = "/data/fedcba9876543210/init";
     fs::create_directories(fs::path(self).parent_path());
+    put(std::string(fs::path(self).parent_path()) + "/install.mode", "boot");
     fs::remove(dispatcher);
     put(dispatcher, "#!/bin/sh\nprintf '%s\\n' \"$1\" >> /tmp/helper-events\nexit 0\n");
     args[0] = const_cast<char*>(self);

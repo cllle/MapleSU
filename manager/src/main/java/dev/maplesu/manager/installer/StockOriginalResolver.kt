@@ -26,7 +26,8 @@ internal class StockOriginalResolver(
                           val ownershipSource: String = "")
 
     fun resolveForRestore(snapshot: InstallerSnapshot, live: Map<String, File>, output: File,
-                          targets: Set<String>?, selectedManager: String = "", userId: Int = 0): Resolution {
+                          targets: Set<String>?, selectedManager: String = "", userId: Int = 0,
+                          requireSignedOwnedRestore: Boolean = true): Resolution {
         try {
             return resolve(snapshot, live, output, selectedManager, userId, restoreTargets = targets)
         } catch (error: IllegalStateException) {
@@ -41,7 +42,7 @@ internal class StockOriginalResolver(
                         check(isDirectory || mkdirs()) { "INSTALLER_STOCK_BACKUP_MISMATCH" }
                     }
                     val restored = dev.maplesu.image.UltraInitBootProducer.restore(current, File(directory, "restored.img"))
-                    if (AvbFooter.parse(current).present) {
+                    if (requireSignedOwnedRestore && AvbFooter.parse(current).present) {
                         val main = live["vbmeta"] ?: error("LENOVO_AVB_IMAGE_REQUIRED_vbmeta")
                         check(UltraKernelSpec.sha256(main) == snapshot.partitions["vbmeta"]?.sha256) {
                             "INSTALLER_IMAGE_CHANGED"
@@ -71,7 +72,7 @@ internal class StockOriginalResolver(
             if (recovered.source !in setOf(UltraKernelOriginalRecovery.Source.IMAGE_BOUND_KERNEL_REVERSE,
                 UltraKernelOriginalRecovery.Source.ARCHIVED_KERNEL_REVERSE,
                 UltraKernelOriginalRecovery.Source.IMAGE_BOUND_EXACT_INPUT)) throw error
-            val signed = AvbFooter.parse(boot).present
+            val signed = requireSignedOwnedRestore && AvbFooter.parse(boot).present
             val signingDirectory = File(output, "owned-recovery-signed")
             try {
                 var image = recovered.image

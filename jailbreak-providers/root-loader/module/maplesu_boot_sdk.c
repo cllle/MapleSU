@@ -30,8 +30,10 @@
 #endif
 
 typedef unsigned long uptr;
+#ifndef MSU_BOOT_SDK_NATIVE
 typedef unsigned int u32;
 typedef unsigned long long u64;
+#endif
 struct kprobe;
 struct pt_regs;
 #ifdef MSU_BOOT_SDK_NATIVE
@@ -89,6 +91,14 @@ static void (*volatile msu_sdk_legacy_call)(uptr, const void *, void *) = msu_sd
 #endif
 
 static uptr (*lookup_name)(const char *);
+static MSU_PH_NOCFI uptr sdk_observation_entry(const char *name)
+{
+#if defined(MSU_BOOT_SDK_NATIVE) && MSU_INIT_BRIDGE_CFI_LEGACY
+    return msu_init_bridge_observation_entry(name);
+#else
+    return lookup_name(name);
+#endif
+}
 static int (*root_subject)(void);
 static int (*root_handover)(void);
 static long (*copy_in)(void *, const void *, unsigned long);
@@ -103,6 +113,9 @@ struct sdk_pgprot { uptr pgprot; };
 #define MSU_SDK_PGPROT struct sdk_pgprot
 #endif
 static void *(*allocate_range)(unsigned long, unsigned long, uptr, uptr,
+    unsigned int, MSU_SDK_PGPROT, unsigned long, int, const void *);
+static void *(*allocate_segmented_range)(unsigned long, unsigned long,
+    unsigned int, unsigned int, unsigned int, unsigned int, uptr, uptr,
     unsigned int, MSU_SDK_PGPROT, unsigned long, int, const void *);
 static void (*release)(const void *);
 #ifndef MSU_BOOT_SDK_NATIVE
@@ -128,6 +141,7 @@ static uptr native_avc;
 #endif
 static unsigned char probe[MSU_BOOT_SDK_PROBE_BYTES] __attribute__((aligned(8)));
 static char root_key[MSU_BOOT_SDK_KEY_BYTES + 1];
+static char original_root_key[MSU_BOOT_SDK_KEY_BYTES + 1];
 static u32 state, control_busy, stage_busy;
 #ifdef MSU_BOOT_SDK_NATIVE
 static char native_credential[MSU_BOOT_SDK_KEY_BYTES + 1];
@@ -654,6 +668,8 @@ static MSU_PH_NOCFI __attribute__((__noinline__)) long sdk_execve(const void *ar
     const uptr *syscall = args;
     uptr filename = syscall[0];
     unsigned char packet[MSU_BOOT_SDK_PACKET_BYTES];
+    unsigned int n, bound_difference = 0, original_difference = 0;
+    const char *packet_key;
     u64 result;
     int matched;
 #ifndef MSU_BOOT_SDK_NATIVE
@@ -695,10 +711,15 @@ static MSU_PH_NOCFI __attribute__((__noinline__)) long sdk_execve(const void *ar
         copy_in(packet, (const void *)filename, MSU_BOOT_SDK_KEY_BYTES))
         return msu_sdk_call_original(native_execve, args);
     /* Do not require an 85-byte readable range for a native pathname. */
-    for (unsigned int n = 0; n < MSU_BOOT_SDK_KEY_BYTES; ++n)
-        if (packet[n] != (unsigned char)root_key[n]) return msu_sdk_call_original(native_execve, args);
+    for (n = 0; n < MSU_BOOT_SDK_KEY_BYTES; ++n) {
+        bound_difference |= packet[n] ^ (unsigned char)root_key[n];
+        original_difference |= packet[n] ^ (unsigned char)original_root_key[n];
+    }
+    if (!bound_difference) packet_key = root_key;
+    else if (!original_difference) packet_key = original_root_key;
+    else return msu_sdk_call_original(native_execve, args);
     if (copy_in(packet + 48, (const void *)(filename + 48), sizeof packet - 48)) return -14;
-    matched = msu_sdk_decode(packet, root_key);
+    matched = msu_sdk_decode(packet, packet_key);
     if (matched != 1) return -22;
     if (packet[66] == MAPLESU_REQUEST_SELECTOR_FLAG && packet[67] == MAPLESU_REQUEST_SELECTOR_SUB) {
         uptr request_user = (uptr)msu_sdk_le(packet + 76, 8);
@@ -742,9 +763,10 @@ static MSU_PH_NOCFI int sdk_image_qualified(void)
     static const unsigned char expected[] = MSU_BS_KERNEL_NOTES;
     unsigned char observed[MSU_BS_KERNEL_NOTES_BYTES];
     uptr begin = lookup_name("__start_notes"), end = lookup_name("__stop_notes");
+    unsigned int n;
     if (!begin || end <= begin || end - begin != sizeof(expected) ||
         read_kernel(observed, (const void *)begin, sizeof(observed))) return 0;
-    for (unsigned int n = 0; n < sizeof(expected); ++n)
+    for (n = 0; n < sizeof(expected); ++n)
         if (observed[n] != expected[n]) return 0;
     return 1;
 #else
@@ -758,20 +780,21 @@ MSU_PH_NOCFI __attribute__((__noinline__)) int msu_boot_sdk_allocator_pre(struct
 {
     const uptr *args = (const void *)regs;
     uptr owner = __atomic_load_n(&sdk_allocator_owner, __ATOMIC_ACQUIRE);
+    unsigned int n;
     (void)p;
     if (!owner || owner != sdk_current_task() || !args || args[0] != MSU_BS_PAGE_BYTES) return 0;
     if (__atomic_add_fetch(&sdk_allocator_hits, 1, __ATOMIC_RELAXED) == 1) {
-        for (unsigned int n = 0; n < 8; ++n) sdk_allocator_args[n] = args[n];
+        for (n = 0; n < 8; ++n) sdk_allocator_args[n] = args[n];
         if (sdk_allocator_segmented) {
             uptr stack[4];
-            /* BTF qualifies this 13-argument ABI and pt_regs.sp at slot 31.
-             * Observe a whole one-page allocation; never call this vendor ABI. */
+            /* The qualified 13-argument ABI has pt_regs.sp at slot 31.
+             * Observe a whole one-page allocation before the arena call. */
             if (args[2] || args[3] != 1 || args[4] || args[5] != 1 ||
                 !args[31] || read_kernel(stack, (const void *)args[31], sizeof stack)) {
                 sdk_allocator_args[1] = 0;
             } else {
                 sdk_allocator_args[2] = args[6]; sdk_allocator_args[3] = args[7];
-                for (unsigned int n = 0; n < 4; ++n) sdk_allocator_args[n + 4] = stack[n];
+                for (n = 0; n < 4; ++n) sdk_allocator_args[n + 4] = stack[n];
             }
         }
     }
@@ -868,8 +891,10 @@ static MSU_PH_NOCFI int configure(const struct msu_boot_sdk_layout *layout)
      * allocator directly. The helper qualifies its ABI before setting this bit. */
     sampler = layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_USER_SAMPLE ?
         lookup_name(layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_NOPROF ? "vmalloc_user_noprof" : "vmalloc_user") : allocator;
-    observe_range = layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_SEGMENTED ?
-        lookup_name(layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_NOPROF ? "___vmalloc_node_range_noprof" : "___vmalloc_node_range") : range;
+    observe_range = sdk_observation_entry(layout->allocator_noprof &
+        (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED) ?
+        (layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_NOPROF ? "___vmalloc_node_range_noprof" : "___vmalloc_node_range") :
+        (layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_NOPROF ? "__vmalloc_node_range_noprof" : "__vmalloc_node_range"));
     if (!allocator || !sampler || !range || !observe_range) return -95;
     sdk_config_stage = MSU_BS_CONFIG_IMAGE_READ;
     if (read_kernel(header, (const void *)kernel_base, sizeof header)) return -14;
@@ -900,7 +925,15 @@ static MSU_PH_NOCFI int configure(const struct msu_boot_sdk_layout *layout)
     }
 #endif
     sdk_layout = *layout; sdk_vm = vm; sdk_kallsyms = kallsyms;
-    allocate = (void *)allocator; allocate_range = (void *)range;
+    allocate = (void *)allocator;
+    if ((layout->allocator_noprof & (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED)) ==
+        (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED)) {
+        allocate_segmented_range = (void *)range;
+        allocate_range = 0;
+    } else {
+        allocate_range = (void *)range;
+        allocate_segmented_range = 0;
+    }
     sdk_config_stage = MSU_BS_CONFIG_NONE;
     sdk_dynamic_ready = 1;
     return 0;
@@ -964,8 +997,15 @@ static MSU_PH_NOCFI int bootstrap(void)
         error = -14; goto failed;
     }
     prot.pgprot = prot_flag ? sdk_vm.prot_set : sdk_vm.prot;
-    arena = (uptr)allocate_range(MSU_BS_PAGE_BYTES * (unsigned long)MSU_BS_ARENA_PAGES, sdk_vm.align,
-        start, end, sdk_vm.gfp, prot, 0, -1, (const void *)bootstrap);
+    if ((sdk_layout.allocator_noprof & (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED)) ==
+        (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED)) {
+        arena = (uptr)allocate_segmented_range(MSU_BS_PAGE_BYTES * (unsigned long)MSU_BS_ARENA_PAGES,
+            sdk_vm.align, 0, MSU_BS_ARENA_PAGES, 0, MSU_BS_ARENA_PAGES,
+            start, end, sdk_vm.gfp, prot, 0, -1, (const void *)bootstrap);
+    } else {
+        arena = (uptr)allocate_range(MSU_BS_PAGE_BYTES * (unsigned long)MSU_BS_ARENA_PAGES, sdk_vm.align,
+            start, end, sdk_vm.gfp, prot, 0, -1, (const void *)bootstrap);
+    }
     if (!arena) { error = -12; goto failed; }
 #endif
     metadata = (void *)(arena + MSU_BS_PAGE_BYTES);
@@ -983,9 +1023,10 @@ static MSU_PH_NOCFI int bootstrap(void)
     for (n = 0; n < sizeof random; ++n) root_key[n] = alphabet[random[n] % 62];
     zero(random, sizeof random);
 #endif
+    for (n = 0; n < sizeof original_root_key; ++n) original_root_key[n] = root_key[n];
     if (msu_sdk_bind_key(root_key, delta)) { error = -22; goto failed; }
 #ifdef MSU_BOOT_SDK_NATIVE
-    if (memcmp(root_key, native_credential, MSU_BOOT_SDK_KEY_BYTES)) {
+    if (memcmp(original_root_key, native_credential, MSU_BOOT_SDK_KEY_BYTES)) {
         error = -22; goto failed;
     }
 #endif
@@ -1045,6 +1086,14 @@ static MSU_PH_NOCFI int bootstrap(void)
         avc_result = arena + avc_at + (msu_sdk_avc_result - msu_sdk_avc_template);
         msu_sdk_store(metadata + 36, sdk_execve_offset, 4);
         metadata[40] = MSU_BS_EXECVE_REG; metadata[41] = MSU_BS_EXECVE_CHAR;
+#ifdef MSU_BOOT_SDK_NATIVE
+        {
+            unsigned int filename;
+            error = msu_init_bridge_environment_filename(&filename);
+            if (error) goto failed;
+            metadata[41] = filename;
+        }
+#endif
         msu_sdk_store(metadata + 42, offset, 4);
         msu_sdk_store(metadata + 46, (branch_delta + 4) / 4, 2);
         msu_sdk_store(metadata + 48, sdk_filldir_offset, 4);
@@ -1082,9 +1131,17 @@ static MSU_PH_NOCFI int bootstrap(void)
     if (error) goto failed;
     probe_installed = 1;
 #if defined(MSU_BOOT_SDK_NATIVE) && MSU_INIT_BRIDGE_CFI_LEGACY
-    /* kprobe exposes an implementation PC; native_execve stays canonical. */
-    if (!msu_legacy_probe_matches(native_execve, *(uptr *)(probe + MSU_BS_KP_ADDR))) {
-        error = -ESTALE; goto failed;
+    /* Keep the kernel probe identity separate from the compiler-owned typed
+     * callable entry stored in native_execve. Accept only the exact body/BTI. */
+    {
+        uptr entry = sdk_observation_entry("__arm64_sys_execve");
+        uptr probed = *(uptr *)(probe + MSU_BS_KP_ADDR);
+        u32 instruction;
+        if (!entry || (probed != entry && (probed != entry + 4 ||
+            read_kernel(&instruction, (const void *)entry, sizeof instruction) ||
+            (instruction != 0xd503245fU && instruction != 0xd50324dfU)))) {
+            error = -ESTALE; goto failed;
+        }
     }
 #else
     if (*(uptr *)(probe + MSU_BS_KP_ADDR) != native_execve &&
@@ -1119,6 +1176,7 @@ failed:
     }
     avc_result = 0;
     zero(root_key, sizeof root_key);
+    zero(original_root_key, sizeof original_root_key);
     bootstrap_error = error;
     __atomic_store_n(&state, MSU_BOOT_SDK_FAILED, __ATOMIC_RELEASE);
     return error;
@@ -1128,6 +1186,7 @@ MSU_PH_NOCFI long msu_boot_sdk_control(uptr user)
 {
     struct msu_boot_sdk_request request;
     struct msu_boot_sdk_layout layout;
+    unsigned int n;
     int error;
     if (!root_subject || !root_subject()) return -1;
     if (!take(&control_busy)) return -16;
@@ -1135,7 +1194,7 @@ MSU_PH_NOCFI long msu_boot_sdk_control(uptr user)
     if (error) goto out;
     if (request.version != MSU_BOOT_SDK_VERSION || request.reserved ||
         request.command > MSU_BOOT_SDK_CONFIGURE) error = -22;
-    for (unsigned int n = 0; n < sizeof request.padding; ++n)
+    for (n = 0; n < sizeof request.padding; ++n)
         if (request.padding[n]) error = -22;
     if (!error && request.command == MSU_BOOT_SDK_CONFIGURE) {
         if (copy_in(&layout, (const void *)(user + sizeof request), sizeof layout)) error = -14;
@@ -1159,9 +1218,9 @@ MSU_PH_NOCFI long msu_boot_sdk_control(uptr user)
     request.padding[3] = (unsigned char)sdk_config_stage;
     request.padding[4] = 1; /* qualified inner allocator variant selection */
     request.padding[5] = 1; /* qualified vmalloc_user sampler selection */
-    request.padding[6] = 1; /* BTF-qualified 13-argument segmented observer */
+    request.padding[6] = MSU_BOOT_SDK_SEGMENTED_OBSERVER | MSU_BOOT_SDK_SEGMENTED_CALLABLE;
     if (!error && request.state == MSU_BOOT_SDK_READY)
-        for (unsigned int n = 0; n < sizeof root_key; ++n) request.key[n] = root_key[n];
+        for (n = 0; n < sizeof root_key; ++n) request.key[n] = root_key[n];
     error = copy_out((void *)user, &request, sizeof request) ? -14 : 0;
     zero(&request, sizeof request);
 out:
@@ -1182,12 +1241,21 @@ MSU_PH_NOCFI int msu_boot_sdk_init(uptr (*lookup)(const char *), int (*subject)(
     RESOLVE(allocate, "vmalloc");
     RESOLVE(allocate_range, "__vmalloc_node_range");
 #endif
+#if MSU_BS_STATIC_BOOTSTRAP
     if (!allocate || !allocate_range) {
         RESOLVE(allocate, "vmalloc"); RESOLVE(allocate_range, "__vmalloc_node_range");
         if (!allocate || !allocate_range) {
             RESOLVE(allocate, "vmalloc_noprof"); RESOLVE(allocate_range, "__vmalloc_node_range_noprof");
         }
     }
+#else
+    /* CONFIGURE selects and qualifies the callable range ABI. A target with
+     * only the segmented inner entry has no nine-argument range to bind here. */
+    if (!allocate) {
+        RESOLVE(allocate, "vmalloc");
+        if (!allocate) RESOLVE(allocate, "vmalloc_noprof");
+    }
+#endif
     RESOLVE(release, "vfree");
 #ifndef MSU_BOOT_SDK_NATIVE
     RESOLVE(random_bytes, "get_random_bytes");
@@ -1212,7 +1280,7 @@ MSU_PH_NOCFI int msu_boot_sdk_init(uptr (*lookup)(const char *), int (*subject)(
     }
 #if MSU_BS_ENVIRONMENT
     native_avc = lookup_name("avc_denied");
-#if MSU_BS_EXECMEM_FREE
+#if defined(MSU_BS_EXECMEM_FREE) && MSU_BS_EXECMEM_FREE
     RESOLVE(release_module, "execmem_free");
 #else
     RESOLVE(release_module, "module_memfree");
@@ -1221,7 +1289,10 @@ MSU_PH_NOCFI int msu_boot_sdk_init(uptr (*lookup)(const char *), int (*subject)(
     if (!release_module) RESOLVE(release_module, "module_memfree");
 #endif
 #undef RESOLVE
-    if (!copy_in || !copy_out || !read_kernel || !write_kernel || !allocate || !allocate_range || !release ||
+    if (!copy_in || !copy_out || !read_kernel || !write_kernel || !allocate || !release ||
+#if MSU_BS_STATIC_BOOTSTRAP
+        !allocate_range ||
+#endif
         !memory_ro || !memory_rw || !memory_x || !memory_nx || !flush_code ||
         !prepare_cred || !commit_cred || !hold_cred || !drop_cred || !native_execve || !kernel_base
 #ifndef MSU_BOOT_SDK_NATIVE

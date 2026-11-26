@@ -573,6 +573,8 @@ interface LiteWebBackend {
      * 默认 `Unavailable`：没有实现就明确回 501 + 原因，绝不假装「文件不存在」。
      * 生产实现见 `AndroidLiteWebBackend.moduleWebFile`（root 进程内读模块 webroot）。
      */
+    fun moduleBridgePort(): LiteWebModuleBridgePort = UnavailableModuleBridgePort
+
     fun moduleWebFile(moduleId: String, relativePath: String): LiteWebModuleWeb =
         LiteWebModuleWeb.Unavailable("MODULE_WEB_BACKEND_UNAVAILABLE")
 

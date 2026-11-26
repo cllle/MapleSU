@@ -3,6 +3,7 @@
 #define MAPLESU_MANAGER_SU_RUNTIME_FACTORY_H
 #include "manager_deployment_namespace.h"
 #include "request_protocol.h"
+#include "su_install_registry.h"
 struct msu_su_gate_frame;
 struct msu_su_observed_sync_receipt;
 struct msu_su_runtime_readback;
@@ -24,6 +25,9 @@ struct msu_su_runtime_status {
     u32 target_qualified, installation_flags;
 };
 extern u32 msu_su_runtime_target_facts[9];
+struct msu_runtime_btf_field;
+/* Boot-only native accessor. A measured allocation extent is not type sizeof. */
+int msu_su_runtime_filename_field(struct msu_runtime_btf_field *output);
 /* Boot-only normal LKM provider; no user addresses or generic helper authority. */
 int msu_su_runtime_target_bind(unsigned long (*lookup)(const char *),
     int (*resolve_cfi)(const char *, const void *, unsigned long *));
@@ -35,6 +39,7 @@ int msu_su_runtime_status_get(const maplesu_host_instance *host,
 enum msu_su_hook_kind {
     MSU_SU_EXEC = 1, MSU_SU_STAT, MSU_SU_ACCESS,
     MSU_SU_SETRESUID, MSU_SU_SETRESUID16,
+    MSU_SU_KSU_REBOOT,
 };
 /* Built only from this target's actually selected native declarations and
  * instruction readback, not a Manager-created plan or an accepted user pointer. */
@@ -45,6 +50,13 @@ struct msu_su_runtime_hook {
     bool syscall_frame, optional;
 };
 int msu_su_runtime_target_hooks(struct msu_su_runtime_hook *hooks, u32 *count);
+/* Read-only KSU daemon interface. The opaque fence comes only from this real
+ * installation runtime. Every query reacquires its current registry and drains
+ * its user reference before returning; no descriptor retains a grant. */
+int msu_su_runtime_ksu_fence(u64 *fence);
+int msu_su_runtime_ksu_validate(u64 fence);
+int msu_su_runtime_ksu_query(u64 fence, u32 full_uid, bool *granted,
+    enum msu_su_non_root_umount_policy *policy);
 int msu_su_runtime_init(const maplesu_host_instance *host,
     const struct msu_deployment_namespace_record *deployment);
 /* Existing authenticated helper post-fs-data event, never a Manager resume.

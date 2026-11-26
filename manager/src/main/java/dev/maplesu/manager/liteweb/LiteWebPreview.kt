@@ -19,6 +19,10 @@ data class LiteWebPreviewConfig(val token: String, val port: Int) {
     fun url(): String = LiteWebUrls.url(port, token)
 }
 
+/** Bind a root-only port change to the config that the manager actually read, without exposing its token. */
+internal fun liteWebPortIdentity(port: Int, token: String): String =
+    dev.maplesu.manager.workmode.Hashes.sha256Hex("$port:$token")
+
 sealed interface LiteWebPreviewResult {
     data class Ok(val info: LiteWebUrlInfo) : LiteWebPreviewResult
 
@@ -55,8 +59,8 @@ object UnavailableLiteWebPreviewStore : LiteWebPreviewStore {
 }
 
 /**
- * 纯协调器：只碰配置（token/port），**没有** startDaemon/ping/listen 等方法，
- * 从接口上保证预览不启动监听、不写 hidden、不备份、不卸载。
+ * 普通预览只读/创建配置；显式改口委托已有监听的 owner，并核对持久回读。
+ * 本层不写 hidden、不备份、不卸载，也不自行重启监听。
  */
 class LiteWebPreviewCoordinator(
     private val store: LiteWebPreviewStore,
@@ -66,12 +70,29 @@ class LiteWebPreviewCoordinator(
     @Volatile
     private var cached: LiteWebPreviewConfig? = null
 
-    /** 确保配置存在（必要时生成 token 并持久化），返回完整 loopback URL。 */
-    fun preparePreviewUrl(): LiteWebPreviewResult {
+    /** Existing ports change through the live owner; only a missing config is created here. */
+    fun preparePreviewUrl(
+        requestedPort: Int? = null,
+        applyPort: (LiteWebPreviewConfig, Int) -> LiteWebPreviewResult.Failed? = { _, _ ->
+            LiteWebPreviewResult.Failed("LITEWEB_PORT_APPLY_UNAVAILABLE")
+        },
+    ): LiteWebPreviewResult {
         cached = null
+        if (requestedPort != null && !validPort(requestedPort)) {
+            return LiteWebPreviewResult.Failed(LiteWebPreviewCodes.PORT_INVALID)
+        }
         val existing = runCatching { store.read() }.getOrNull()
         val config = when {
-            existing != null && validPort(existing.port) -> existing
+            existing != null && validPort(existing.port) -> {
+                if (requestedPort == null || requestedPort == existing.port) existing else {
+                    applyPort(existing, requestedPort)?.let { return it }
+                    val readback = runCatching { store.read() }.getOrNull()
+                    if (readback != existing.copy(port = requestedPort)) {
+                        return LiteWebPreviewResult.Failed(LiteWebPreviewCodes.READBACK_FAILED)
+                    }
+                    readback
+                }
+            }
             // 配置**存在但暂时读不到**（root 通道未就绪/读失败）→ 绝不能生成新 token 覆盖它：
             // 那会让 daemon 已使用的 token 失效、恢复链接全部作废（真机实测）。
             runCatching { store.exists() }.getOrDefault(true) -> {
@@ -81,7 +102,7 @@ class LiteWebPreviewCoordinator(
             }
             else -> {
                 val created = runCatching {
-                    LiteWebPreviewConfig(token = tokenGenerator(), port = defaultPort)
+                    LiteWebPreviewConfig(token = tokenGenerator(), port = requestedPort ?: defaultPort)
                 }.getOrElse {
                     return LiteWebPreviewResult.Failed(
                         LiteWebPreviewCodes.CONFIG_UNAVAILABLE, it.message.orEmpty(),
@@ -96,7 +117,7 @@ class LiteWebPreviewCoordinator(
                     ?: return LiteWebPreviewResult.Failed(
                         LiteWebPreviewCodes.READBACK_FAILED, "webui.conf readback failed",
                     )
-                if (!validPort(readback.port) || !LiteWebToken.isValid(readback.token)) {
+                if (readback != created) {
                     return LiteWebPreviewResult.Failed(
                         LiteWebPreviewCodes.READBACK_FAILED, "webui.conf readback invalid",
                     )

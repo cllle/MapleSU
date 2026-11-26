@@ -31,7 +31,7 @@ public final class NativeBridge {
     public static native String queryManagerOwnerIdentity();
     public static native String probeManagerOwnerRoot();
     public static native String runRootCmd(String rootKey, String cmd);
-    public static native String readInstalledHelper(String rootKey, String helperPath, long keySlotOffset);
+    public static native String readInstalledHelper(String rootKey, String helperPath, long keySlotOffset, int timeoutMillis);
 
     public static native String addSuAuth(String rootKey, String appPackageName);
     public static native String refreshSuAuthList(String rootKey);

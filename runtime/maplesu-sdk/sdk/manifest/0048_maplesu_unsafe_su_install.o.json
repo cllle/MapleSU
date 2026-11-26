@@ -33,33 +33,12 @@
       ]
     },
     {
-      "step": "compile-executable-publisher-tu",
-      "tool": "clang++",
-      "cwd": "<repo root>",
-      "input": "src/maplesu/install/executable_publish.cpp",
-      "output": "runtime/maplesu-sdk/sdk/build/obj/compose-m048/tu2.o",
-      "argv": [
-        "--target=aarch64-linux-android21",
-        "-std=c++17",
-        "-Oz",
-        "-fPIC",
-        "-fvisibility=hidden",
-        "-I",
-        "runtime/maplesu-sdk/include",
-        "-c",
-        "runtime/maplesu-sdk/sdk/src/maplesu/install/executable_publish.cpp",
-        "-o",
-        "runtime/maplesu-sdk/sdk/build/obj/compose-m048/tu2.o"
-      ]
-    },
-    {
       "step": "partial-link",
       "tool": "ld.lld",
       "cwd": "<repo root>",
       "argv": [
         "-r",
         "runtime/maplesu-sdk/sdk/build/obj/compose-m048/tu1.o",
-        "runtime/maplesu-sdk/sdk/build/obj/compose-m048/tu2.o",
         "-o",
         "runtime/maplesu-sdk/sdk/build/obj/m0048/maplesu_unsafe_su_install.o"
       ]
@@ -84,7 +63,7 @@
     "runtime/upstream-pro/sdk/build/p1-installer-48/report.json",
     "docs/dual-mode/impl/_work/2026-11-15-p1/IR-EXIT-PLAN.md"
   ],
-  "notes": "实际构建输入已切换为可维护 C++；生成头必须由 build.py 以 MAPLESU_PAYLOAD_ASSETS=1 和候选 assets-gen 路径接入，负载与生成头 hash 在 payload_inputs 记录。原 IR 保留为历史行为参照；C++ 与 IR 的同一 fixture 已核对返回码、调用顺序、完整文件字节、mode/xattr 和失败状态，设备验收仍待完成。 su分别发布到 system17 与 kernel16 目录，保留原子发布、0700 与两份副本契约；publisher仍为同一C++ TU，经ld.lld -r合成。",
+  "notes": "实际构建输入已切换为可维护 C++；生成头必须由 build.py 以 MAPLESU_PAYLOAD_ASSETS=1 和候选 assets-gen 路径接入，负载与生成头 hash 在 payload_inputs 记录。原 IR 保留为历史行为参照；C++ 与 IR 的同一 fixture 已核对返回码、调用顺序、完整文件字节、mode/xattr 和失败状态，设备验收仍待完成。 su分别发布到 system17 与 kernel16 目录，保留原子发布、0700 与两份副本契约；publisher的同一可维护C++ TU归入m055；本成员按build.py单TU分支编译。",
   "historicalIrSelfCheck": {
     "tDiff": [],
     "uDiff": [],

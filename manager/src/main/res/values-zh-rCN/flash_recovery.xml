@@ -2,4 +2,11 @@
 <resources>
     <string name="flash_restore_pre_install_message">还原本次安装前的启动镜像，回到之前的工作环境。此操作不是恢复原厂镜像，已保存的原厂镜像备份会继续保留。</string>
     <string name="flash_restore_pre_install">恢复安装前状态</string>
+    <string name="installer_recovery_query">查询原安装任务</string>
+    <string name="installer_recovery_querying">正在查询原安装任务…</string>
+    <string name="installer_recovery_return">返回准备页</string>
+    <string name="installer_recovery_unknown">暂未取得原安装任务的状态。恢复 Root 权限或服务连接后，请查询此任务，再开始下一次安装。</string>
+    <string name="installer_recovery_retry_hint">本次任务没有待处理的分区写入。可返回准备页重试，或选择镜像进行免 Root 修补并导出。</string>
+    <string name="installer_recovery_active">原安装任务仍在执行。请继续查询此任务，页面会保留原任务，不重复提交安装。</string>
+    <string name="installer_recovery_restore_hint">可恢复本次安装前保存的镜像，或再次查询原安装任务。</string>
 </resources>

@@ -82,7 +82,8 @@ class UltraKernelManagerClaimCarrierTest {
         assertArrayEquals(originalElf, binary)
         val patched = applied(image, result)
         val descriptor = result.descriptorOffset
-        assertEquals(2, word(patched, descriptor + 4))
+        assertEquals(3, word(patched, descriptor + 4))
+        assertEquals(image.size, word(patched, descriptor + 44))
         assertEquals(3, word(patched, descriptor + 24))
         assertEquals(1, word(patched, descriptor + 32))
         assertEquals(2, word(patched, descriptor + 36))
@@ -144,6 +145,107 @@ class UltraKernelManagerClaimCarrierTest {
             assertEquals(1, word(bytes, imports + 4 + 4))
             assertEquals(2, word(bytes, imports + 4 + 16 + 4))
         }
+    }
+
+    private fun dataImage() = kernel().apply {
+        val b = ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN)
+        b.putLong(16, 20480); b.putInt(24, 2); b.putInt(56, 0x644d5241)
+        val names = "\u0000word\u0000kernel_import\u0000".toByteArray()
+        val body = intArrayOf(1, 1 shl 24, 8, 64, 0, 3 shl 24, 0, 1, 1, 2,
+            6, 14 shl 24, 2, 1)
+        intArrayOf(0x0001eb9f, 24, 0, body.size * 4, body.size * 4, names.size)
+            .forEachIndexed { i, value -> b.putInt(64 + i * 4, value) }
+        body.forEachIndexed { i, value -> b.putInt(88 + i * 4, value) }
+        names.copyInto(this, 88 + body.size * 4)
+    }
+
+    private fun memorySymbols(offsets: List<Int> = listOf(16416),
+        boundaries: Map<String, Int> = emptyMap()): UltraKernelSymbols {
+        val base = symbols()
+        val memory = mapOf("_text" to 0, "_end" to 20480,
+            "__bss_start" to 16384, "__bss_stop" to 16432) + boundaries
+        return object : UltraKernelSymbols by base {
+            override fun offsetOf(name: String) = when (name) {
+                "kernel_import" -> offsets.singleOrNull()?.takeIf { it in 0 until imageSize }
+                "__start_BTF" -> 64
+                else -> base.offsetOf(name)
+            }
+            override fun offsetsOf(name: String) = listOfNotNull(offsetOf(name))
+            override fun memoryOffsetsOf(name: String) = when (name) {
+                "kernel_import" -> offsets
+                else -> listOfNotNull(memory[name] ?: offsetOf(name))
+            }
+        }
+    }
+
+    private fun dataPlan(image: ByteArray = dataImage(), binary: ByteArray = elf(),
+        table: UltraKernelSymbols = memorySymbols(), signature: String = "a2:i8:64") =
+        UltraKernelManagerClaimCarrier.plan(image, table, emptyList(), binary, ByteArray(64), ByteArray(1964),
+            dataSignatures = mapOf("kernel_import" to signature))
+
+    @Test fun targetBtfObjectUsesTheCompleteBssRangeAndTheSeparateMemoryExtent() {
+        for (type in listOf(0, 1)) {
+            val image = dataImage()
+            val before = image.copyOf()
+            val binary = elf().apply { this[628] = type.toByte() }
+            val result = dataPlan(image, binary)
+            val bytes = applied(image, result)
+            assertEquals(20480, word(bytes, result.descriptorOffset + 44))
+            assertEquals(16416, word(bytes, result.descriptorOffset + 52 + 3 * 16))
+            assertEquals(image.size, word(bytes, result.bindingOffset))
+            assertArrayEquals(before, image)
+        }
+    }
+
+    @Test fun omittedVariableRecordsUseTheExactActualObjectTypeNotANameOrEstimatedSize() {
+        val image = dataImage().apply {
+            // Remove only the VAR record; preserve the actual 2 x u64 array type.
+            putInt(this, 64 + 12, 40)
+            putInt(this, 64 + 16, 56)
+        }
+        val result = dataPlan(image)
+        val bytes = applied(image, result)
+        assertEquals(16416, word(bytes, result.descriptorOffset + 52 + 3 * 16))
+        assertThrows(UltraKernelGenerateException::class.java) { dataPlan(image, signature = "a1:i8:64") }
+        val oversized = image.copyOf().apply { putInt(this, 88 + 9 * 4, 3) }
+        assertThrows(UltraKernelGenerateException::class.java) { dataPlan(oversized) }
+    }
+
+    @Test fun aConflictingVariableRecordIsNotHiddenByAMatchingTypeElsewhere() {
+        val image = dataImage().apply { putInt(this, 88 + 12 * 4, 1) }
+        assertThrows(UltraKernelGenerateException::class.java) { dataPlan(image) }
+    }
+
+    @Test fun aBssAddressAloneDoesNotMakeAFunctionOrUnknownElfTypeADataImport() {
+        assertThrows(IllegalStateException::class.java) { plan(dataImage(), elf(), memorySymbols()) }
+        for (type in listOf(2, 3, 4, 10, 15)) assertThrows(IllegalArgumentException::class.java) {
+            dataPlan(binary = elf().apply { this[628] = type.toByte() })
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            plan(binary = elf().apply { this[628] = 1 })
+        }
+    }
+
+    @Test fun bssTailCrossingNonBssAndAmbiguousDataAreRejectedBeforeWrites() {
+        for (offsets in listOf(listOf(16420), listOf(16380), listOf(18000),
+            listOf(20480), listOf(16416, 16400), listOf(-4))) {
+            val image = dataImage()
+            val before = image.copyOf()
+            assertThrows(RuntimeException::class.java) { dataPlan(image, table = memorySymbols(offsets)) }
+            assertArrayEquals(before, image)
+        }
+    }
+
+    @Test fun onlyTargetHeaderAndUniqueLinkerBoundariesEstablishTheMemoryExtent() {
+        for ((at, value) in listOf(16 to 16384, 20 to 1, 24 to 3, 56 to 0)) {
+            val image = dataImage().apply { putInt(this, at, value) }
+            assertThrows(IllegalArgumentException::class.java) { dataPlan(image) }
+        }
+        for (facts in listOf(mapOf("_text" to 4), mapOf("_end" to 20484),
+            mapOf("__bss_stop" to 20484), mapOf("__bss_start" to 16432))) {
+            assertThrows(IllegalArgumentException::class.java) { dataPlan(table = memorySymbols(boundaries = facts)) }
+        }
+        assertThrows(UltraKernelGenerateException::class.java) { dataPlan(signature = "a1:i8:64") }
     }
 
     @Test fun invalidHeadersSectionsSymbolsRelocationsAndMissingImportsStopBeforeWrites() {

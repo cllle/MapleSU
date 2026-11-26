@@ -192,6 +192,8 @@ data class FlashResult(
     val imagesRequired: SwitchOutcome.ImagesRequired? = null,
     /** Module receipts remain authoritative when an answer is pending, regardless of legacy [code]. */
     val moduleOutcome: dev.maplesu.manager.runtime.ultra.UltraOutcome? = null,
+    /** False only when this installation has not called prepare; null retains unknown/other paths. */
+    val installationSubmitted: Boolean? = null,
 ) {
     constructor(result: Shell.Result, showReboot: Boolean) : this(result.code, result.err.joinToString("\n"), showReboot)
     constructor(result: Shell.Result) : this(result, result.isSuccess)
@@ -885,6 +887,9 @@ fun installBoot(
     ultraInitBootArtifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null,
     forceRepatch: Boolean = false,
     pairedBootSnapshot: android.os.Bundle? = null,
+    pairedBootUri: Uri? = null,
+    pairedSourceSha256: String? = null,
+    pairedBootSha256: String? = null,
 ): FlashResult {
     // ══════════════════════════════════════════════════════════════════════
     // 目标工作模式分派（D-新）。**唯一**分派点是纯函数
@@ -906,48 +911,46 @@ fun installBoot(
         ksuApp.contentResolver.openInputStream(uri)?.use(
             dev.maplesu.manager.installer.InstallPartitionPolicy::imagePartition)
     }.getOrNull() }
-    val discoveredTarget = if (bootUri == null &&
-        (partition.isNullOrBlank() || requestedTarget == InstallTargetMode.ULTRA)) {
+    // Explicit targets reach the transaction without a separate discovery/root-token session.
+    val discoveredTarget = if (bootUri == null && partition.isNullOrBlank() &&
+        requestedTarget == InstallTargetMode.NORMAL) {
         dev.maplesu.manager.installer.StockInstallPreflight.discoverTarget(ksuApp, requestedTarget)
     } else null
     val availablePartitions = discoveredTarget?.availablePartitions
-    val observedChain = if (discoveredTarget != null && requestedTarget == InstallTargetMode.ULTRA) {
-        InstallerServiceClient.observeBootChain(ksuApp).also { observed ->
-            check(discoveredTarget.slotSuffix == observed.slotSuffix &&
-                discoveredTarget.availablePartitions.all { it in observed.partitions }) {
-                "INSTALLER_DEVICE_CHANGED"
-            }
-        }
-    } else null
-    val installedCarrier = observedChain?.let {
-        InstallerServiceClient.installedCarrierPartition(ksuApp, it)
-    }
-    val artifactCandidate = if (observedChain != null && installedCarrier == null &&
-        "init_boot" in availablePartitions.orEmpty()) {
-        val boot = observedChain.partitions["boot"] ?: error("ULTRA_INIT_PAIRED_BOOT_REQUIRED")
-        val paired = InstallerServiceClient.capturePairedBoot(ksuApp, observedChain,
-            File(ksuApp.filesDir, "ultra-init-paired-${boot.sha256}.img"))
-        val template = ultraInitBootArtifact
-        if (template != null) dev.maplesu.manager.ultrakernel.UltraInitBootTargetResolver.resolve(template, paired,
-            dev.maplesu.manager.ultrakernel.UltraKernelContextAssets(ksuApp))
-        else dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, paired)
-    } else null
-    val automaticArtifact = artifactCandidate?.also { artifact ->
-        val boot = observedChain?.partitions?.get("boot") ?: error("ULTRA_INIT_PAIRED_BOOT_REQUIRED")
-        check(artifact.targetBoot.isFile && artifact.targetBoot.length() == boot.size &&
-            artifact.targetBootSha256.equals(boot.sha256, ignoreCase = true) &&
-            dev.maplesu.manager.workmode.Hashes.sha256(artifact.targetBoot)
-                .equals(artifact.targetBootSha256, ignoreCase = true)) { "ULTRA_INIT_PAIRED_BOOT_CHANGED" }
-    }
     val partitionResolution = dev.maplesu.manager.installer.InstallPartitionPolicy.resolve(
-        requestedTarget, imageCarrier?.wire ?: partition?.takeIf(String::isNotBlank) ?: installedCarrier
-            ?: automaticArtifact?.let { "init_boot" }, availablePartitions,
+        requestedTarget, imageCarrier?.wire ?: partition?.takeIf(String::isNotBlank),
+        availablePartitions,
         dev.maplesu.manager.workmode.switch.ModeSwitchKmi.parse(release))
     val resolvedPartition = (partitionResolution as? dev.maplesu.manager.installer.InstallPartitionResolution.Ready)
         ?.partition?.wire ?: imageCarrier?.wire ?: partition
+    // This is an optional shortcut, never an installation precondition. Read the protected
+    // receipt first; only a same-target completed install needs a live digest observation.
+    val installedCarrier = if (bootUri == null && requestedTarget == InstallTargetMode.ULTRA &&
+        ModeRuntime.active == dev.maplesu.manager.workmode.WorkMode.LITE && !forceRepatch) {
+        try {
+            InstallerServiceClient.withService(ksuApp, persistent = true, rootTarget = requestedTarget) { service ->
+                val receipt = service.getBootInstall("")
+                if (receipt.getString("targetMode") != "LITE" || receipt.getString("operation") != "INSTALL" ||
+                    receipt.getString("partition") != resolvedPartition || receipt.getBoolean("operationActive") ||
+                    receipt.getString("state") !in setOf("REBOOT_REQUIRED", "REBOOT_REQUESTED", "BOOT_IMAGE_VERIFIED", "VERIFIED", "BOOT_VERIFIED")) null
+                else {
+                    val observed = InstallerServiceClient.decodeSnapshot(service.observeBootChain())
+                    resolvedPartition?.takeIf {
+                        val current = observed.partitions[it]
+                        current != null && receipt.getString("slotSuffix") == observed.slotSuffix &&
+                            receipt.getString("partitionSha256") == current.sha256
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            dev.maplesu.manager.installer.rethrowInstallerCancellation(error)
+            Log.w(TAG, "Optional environment carrier verification failed; preparing installation", error)
+            null
+        }
+    } else null
     val changesUltraCarrier = requestedTarget == InstallTargetMode.ULTRA &&
-        source == InstallSourceKind.CURRENT_PARTITION && installedCarrier != null &&
-        resolvedPartition != null && installedCarrier != resolvedPartition
+        source == InstallSourceKind.CURRENT_PARTITION && resolvedPartition != null &&
+        installedCarrier != resolvedPartition
     var directRequest = UltraDirectInstallRequest(
         activeMode = ModeRuntime.active, target = requestedTarget, source = source, partition = resolvedPartition,
         signing = lenovoSigning.enabled,
@@ -1058,7 +1061,7 @@ fun installBoot(
         }
     }
 
-    if (ota || lkm !is LkmSelection.KmiNone ||
+    if (ota || lkm !is LkmSelection.KmiNone && !(resolvedPartition == "init_boot" && lkm is LkmSelection.KmiString) ||
         allowShell || enableAdb || forceBackup || blockModules.isNotBlank()) {
         Log.w(TAG, "MAPLESU_INSTALL_REQUEST_UNSUPPORTED")
         val message = ksuApp.getString(R.string.install_image_required)
@@ -1070,14 +1073,18 @@ fun installBoot(
     // ══════════════════════════════════════════════════════════════════════
     return installStockTarget(
         requestedTarget, requireNotNull(resolvedPartition), bootUri, installationTaskId,
-        restoreOriginalImage || changesUltraCarrier,
+        restoreOriginalImage,
         originalManagerPackage, existingRootConflictAccepted, variantId, null, null,
         onStdout, onStderr, onStage, selectedImageOnly = !downloaded,
         lenovoSigning = lenovoSigning,
         vivoInputs = vivoInputs,
         preservedCredential = kernelCredentialToPreserve,
-        initBootArtifact = ultraInitBootArtifact ?: automaticArtifact,
+        initBootArtifact = ultraInitBootArtifact,
+        initBootKmi = (lkm as? LkmSelection.KmiString)?.value,
         pairedBootSnapshot = pairedBootSnapshot,
+        pairedBootUri = pairedBootUri,
+        pairedSourceSha256 = pairedSourceSha256,
+        pairedBootSha256 = pairedBootSha256,
     )
 }
 
@@ -1120,15 +1127,44 @@ private fun installStockTarget(
     vivoInputs: dev.maplesu.manager.installer.VivoCompatibilityInputs = dev.maplesu.manager.installer.VivoCompatibilityInputs(),
     preservedCredential: dev.maplesu.manager.ultrakernel.UltraKernelCredential? = null,
     initBootArtifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null,
+    initBootKmi: String? = null,
     pairedBootSnapshot: android.os.Bundle? = null,
+    pairedBootUri: Uri? = null,
+    pairedSourceSha256: String? = null,
+    pairedBootSha256: String? = null,
 ): FlashResult {
+    check(pairedBootUri == null || target == InstallTargetMode.ULTRA && partition == "init_boot" &&
+        bootUri != null && selectedImageOnly && pairedBootSnapshot == null &&
+        (pairedSourceSha256 == null) == (pairedBootSha256 == null)) { "ULTRA_INIT_SELECTED_PAIR_MODE" }
     val id = taskId ?: java.util.UUID.randomUUID().toString()
     return dev.maplesu.manager.installer.LenovoSigningSession(ksuApp, lenovoSigning, target, id,
         bootUri != null && selectedImageOnly, onStdout).use { signing ->
     var exportOnly = false
     var bootCandidate: InstallCandidateImage? = null
+    var preparedRestoreOriginal = restoreOriginal
+    var nativePrepareSubmitted: Boolean? = null
+    var preparedBridgeArtifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null
+    val componentArtifact by lazy {
+        if (target == InstallTargetMode.ULTRA && partition == "init_boot" && pairedBootUri == null &&
+            initBootArtifact?.isKmiComponent != false) {
+            val kmi = initBootKmi ?: initBootArtifact?.componentKmi?.takeIf(String::isNotBlank)
+                ?: dev.maplesu.manager.installer.KmiRule.parse(deviceKernelRelease().orEmpty())
+                ?: error("ULTRA_INIT_TARGET_KMI_REQUIRED")
+            (initBootArtifact ?: requireNotNull(dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, kmi)) {
+                if (dev.maplesu.manager.ultrakernel.UltraKernelFlow.availableInitBootKmis(ksuApp).isEmpty()) {
+                    "ULTRA_INIT_COMPONENT_UNAVAILABLE: " + ksuApp.getString(R.string.ultra_init_components_unavailable)
+                } else {
+                    "ULTRA_INIT_KMI_COMPONENT_MISSING:$kmi"
+                }
+            }).also {
+                check(it.isKmiComponent && it.componentKmi == kmi) { "ULTRA_INIT_TARGET_COMPONENT_KMI:$kmi:${it.componentKmi}" }
+            }
+        } else null
+    }
     val bridgeArtifact by lazy {
-        if (target == InstallTargetMode.ULTRA && partition == "init_boot") {
+        if (componentArtifact != null) componentArtifact
+        else if (bootUri == null && (ModeRuntime.active == null || ModeRuntime.active == target.workMode)) preparedBridgeArtifact
+        else if (target == InstallTargetMode.ULTRA && partition == "init_boot") {
             if (bootUri == null || pairedBootSnapshot != null) {
                 val observed = InstallerServiceClient.observeBootChain(ksuApp)
                 pairedBootSnapshot?.let { encoded ->
@@ -1144,7 +1180,7 @@ private fun installStockTarget(
                 initBootArtifact?.let { dev.maplesu.manager.ultrakernel.UltraInitBootTargetResolver.resolve(it, paired,
                     dev.maplesu.manager.ultrakernel.UltraKernelContextAssets(ksuApp)) }
                     ?: dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, paired)
-            } else requireNotNull(initBootArtifact) { "ULTRA_INIT_PAIRED_BOOT_REQUIRED" }
+            } else requireNotNull(initBootArtifact) { "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED" }
         } else null
     }
     fun written(): FlashResult {
@@ -1158,17 +1194,33 @@ private fun installStockTarget(
         return FlashResult(0, "", true, FlashOutcome.WRITTEN, bootCandidate = bootCandidate)
     }
     fun buildPatched(source: File,
-        recoveredDeployment: dev.maplesu.manager.ultrakernel.UltraKernelDeploymentNamespace? = null): InstallCandidateImage {
+        recoveredDeployment: dev.maplesu.manager.ultrakernel.UltraKernelDeploymentNamespace? = null,
+        explicitArtifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null): InstallCandidateImage {
+        if (pairedBootUri != null && explicitArtifact == null) {
+            val input = ksuApp.contentResolver.openInputStream(pairedBootUri) ?: error("BOOT_SOURCE_READ_FAILED")
+            val expected = pairedSourceSha256?.let { sourceSha ->
+                dev.maplesu.manager.installer.SelectedBootPairInput.Identity(sourceSha, requireNotNull(pairedBootSha256))
+            }
+            return dev.maplesu.manager.installer.SelectedBootPairInput.use(source, input, ksuApp.cacheDir,
+                dev.maplesu.manager.ImageRepository.MAX_IMAGE_BYTES, expected) { paired, _ ->
+                val artifact = requireNotNull(dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, paired)) {
+                    "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED"
+                }
+                buildPatched(source, recoveredDeployment, artifact)
+            }
+        }
         onStage(InstallStage.PATCHING)
         if (target == InstallTargetMode.ULTRA) {
-            val pairedDeployment = if (partition == "init_boot" && bootUri != null && pairedBootSnapshot != null) {
+            val selectedArtifact = explicitArtifact ?: bridgeArtifact
+            val pairedDeployment = if (selectedArtifact?.isKmiComponent != true && explicitArtifact == null &&
+                partition == "init_boot" && bootUri != null && pairedBootSnapshot != null) {
                 val expected = InstallerServiceClient.decodeSnapshot(pairedBootSnapshot)
                 InstallerServiceClient.verifyInitBootSource(ksuApp, expected, source)
             } else null
             val repository = dev.maplesu.manager.ImageRepository(ksuApp)
             val imported = repository.import(Uri.fromFile(source))
             val built = ultraImageBuildCandidate(repository, imported.report.sha256, onStdout, variantId,
-                imageOnly = exportOnly, initBootArtifact = bridgeArtifact,
+                imageOnly = exportOnly, initBootArtifact = selectedArtifact,
                 recoveredDeployment = pairedDeployment ?: recoveredDeployment)
             return when (built) {
                 is UltraImageBuild.Candidate, is UltraImageBuild.AlreadyPatched -> {
@@ -1176,7 +1228,7 @@ private fun installStockTarget(
                         onStdout("镜像已修补，继续安装")
                         (built as UltraImageBuild.AlreadyPatched).candidate
                     }
-                    val artifact = bridgeArtifact
+                    val artifact = selectedArtifact
                     val expectedCredential = if (result.partition == "init_boot" &&
                         artifact?.credentialMode == "module-parameter") {
                         preservedCredential?.withMetadataDisplacement(artifact.metadataDisplacement)
@@ -1271,6 +1323,7 @@ private fun installStockTarget(
                 if (stop.result.code == 0) onStdout(stop.result.err) else onStderr(stop.result.err)
                 return stop.result
             } catch (error: Exception) {
+                dev.maplesu.manager.installer.rethrowInstallerCancellation(error)
                 Log.w(TAG, "Selected image patch/export failed", error)
                 val message = ksuApp.getString(R.string.install_image_patch_failed) + " ${error.message.orEmpty()}"
                 onStderr(message)
@@ -1348,9 +1401,11 @@ private fun installStockTarget(
             } finally { source.delete() }
         }
         // First install and same-mode updates use the same root-owned stock/PRE transaction.
+        nativePrepareSubmitted = false
         val result = StockInstallFlow.install(
             ksuApp, id, target, partition, bootUri, restoreOriginal, originalManager, conflictAccepted,
             onPrepared = { prepared ->
+                preparedRestoreOriginal = prepared.getBoolean("restoreOriginal")
                 prepared.getString("baselineDirectory")?.takeIf(String::isNotBlank)?.let {
                     onStdout(ksuApp.getString(R.string.install_originals_saved, it))
                 }
@@ -1361,12 +1416,20 @@ private fun installStockTarget(
             produce = ::buildPatched,
             onWriting = {
                 onStage(InstallStage.WRITING)
-                onStdout(ksuApp.getString(if (restoreOriginal) R.string.install_stock_restoring else R.string.install_image_writing))
+                onStdout(ksuApp.getString(if (preparedRestoreOriginal) R.string.install_stock_restoring else R.string.install_image_writing))
             },
             signingOptions = lenovoSigning,
             signing = signing,
             log = onStdout,
-            initBootArtifact = bridgeArtifact,
+            initBootArtifact = if (bootUri == null) componentArtifact else bridgeArtifact,
+            onPrepareSubmitted = { nativePrepareSubmitted = true },
+            resolveInitBootArtifact = if (bootUri != null) null else { paired ->
+                (initBootArtifact?.let {
+                    dev.maplesu.manager.ultrakernel.UltraInitBootTargetResolver.resolve(it, paired,
+                        dev.maplesu.manager.ultrakernel.UltraKernelContextAssets(ksuApp))
+                } ?: dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, paired))
+                    .also { preparedBridgeArtifact = it }
+            },
         )
         if (result.getString("state") == "REBOOT_REQUIRED" && result.getBoolean("rebootRequired")) return written()
         val recovered = installerTaskResult(result.getString("state").orEmpty(),
@@ -1381,59 +1444,36 @@ private fun installStockTarget(
     } catch (stop: InstallBuildStopped) {
         if (stop.result.code == 0) onStdout(stop.result.err) else onStderr(stop.result.err)
         return stop.result
-    } catch (error: InstallerServiceClient.AuthorizationFailure) {
-        if (lenovoSigning.enabled) {
-            val message = "联想 AVB 签名安装失败：${error.message.orEmpty()}；未开始刷写，请重新连接 Root 服务。"
-            onStderr(message)
-            return FlashResult(1, message, false, FlashOutcome.FAILED)
-        }
-        if (bootUri != null && target == InstallTargetMode.ULTRA && partition == "boot" &&
-            !dev.maplesu.manager.installer.VivoCompatibility.deviceSupported()) {
-            return installBootFromChosenImage(bootUri, null, variantId, onStdout, onStderr, onStage)
-        }
-        if (bootUri != null) {
-            val source = File.createTempFile("normal-source-", ".img", ksuApp.cacheDir)
-            try {
-                copyInstallerImage(bootUri, source)
-                exportOnly = true
-                val candidate = build(source)
-                val saved = publish(candidate)
-                onStdout(ksuApp.getString(R.string.install_image_saved, saved))
-                val reason = ksuApp.getString(R.string.install_boot_saved_no_root)
-                onStdout(reason)
-                return FlashResult(0, reason, false, FlashOutcome.SAVED_ONLY)
-            } catch (stop: InstallBuildStopped) {
-                onStderr(stop.result.err)
-                return stop.result
-            } catch (failure: Exception) {
-                Log.w(TAG, "Normal image export failed", failure)
-                val message = ksuApp.getString(R.string.install_image_patch_failed) +
-                    "\n" + dev.maplesu.manager.installer.installerFailureDiagnostic(failure)
-                onStderr(message)
-                return FlashResult(1, message, false, FlashOutcome.FAILED)
-            } finally { source.delete() }
-        }
-        val message = ksuApp.getString(R.string.install_root_required)
-        onStderr(message)
-        return FlashResult(1, message, false, FlashOutcome.FAILED)
     } catch (error: Exception) {
+        dev.maplesu.manager.installer.rethrowInstallerCancellation(error)
         Log.w(TAG, "Stock installation failed", error)
-        // The root service may have finished a commit after the caller lost its connection.
-        // Query this task; never replay it or report that nothing was written.
-        val status = runCatching { InstallerServiceClient.installationStatus(ksuApp, id, target) }.getOrNull()
+        // Only a submitted or uncertain request can have progressed after losing its reply.
+        val status = if (nativePrepareSubmitted == false) null else runCatching {
+            InstallerServiceClient.installationStatus(ksuApp, id, target)
+        }.getOrElse {
+            dev.maplesu.manager.installer.rethrowInstallerCancellation(it)
+            null
+        }
         if (status?.getString("state") in setOf("REBOOT_REQUIRED", "REBOOT_REQUESTED", "BOOT_IMAGE_VERIFIED", "BOOT_VERIFIED", "VERIFIED")) {
             return written()
         }
         val recovery = status?.let {
             installerTaskResult(it.getString("state").orEmpty(), it.getBoolean("rebootRequired"), it.getString("error").orEmpty())
-        } ?: FlashResult(1, "", false, FlashOutcome.RECOVERY_REQUIRED)
-        val message = ksuApp.getString(when (recovery.outcome) {
-            FlashOutcome.RESTORED -> R.string.install_image_restored
-            FlashOutcome.RECOVERY_REQUIRED -> R.string.install_image_recovery_required
+        } ?: FlashResult(1, "", false,
+            if (nativePrepareSubmitted == false) FlashOutcome.FAILED else FlashOutcome.RECOVERY_REQUIRED)
+        val accessFailure = com.maplesu.core.ui.screen.install.installSourceAccessFailure(error)
+        val message = ksuApp.getString(when {
+            status == null && accessFailure == com.maplesu.core.ui.screen.install.InstallSourceAccessFailure.ROOT_REQUIRED ->
+                R.string.install_root_required
+            status == null && accessFailure == com.maplesu.core.ui.screen.install.InstallSourceAccessFailure.CHANNEL_UNAVAILABLE ->
+                R.string.install_source_service_unavailable
+            recovery.outcome == FlashOutcome.RESTORED -> R.string.install_image_restored
+            recovery.outcome == FlashOutcome.RECOVERY_REQUIRED -> R.string.install_image_recovery_required
             else -> R.string.install_image_patch_failed
         }) + "\n" + dev.maplesu.manager.installer.installerFailureDiagnostic(error, status?.getString("error").orEmpty())
         onStderr(message)
-        return recovery.copy(err = message)
+        return recovery.copy(code = dev.maplesu.manager.installer.installerFailureExitCode(error, recovery.code),
+            err = message, installationSubmitted = nativePrepareSubmitted)
     }
     }
 }
@@ -1478,15 +1518,21 @@ private fun installBootIntoCurrentPartition(
         onStage(InstallStage.PATCHING)
         return ultraDirectInstall(observed, transactionTaskId, onStdout, onStderr, variantId, onStage)
     } catch (exception: dev.maplesu.manager.installer.InstallerServiceClient.AuthorizationFailure) {
+        dev.maplesu.manager.installer.rethrowInstallerCancellation(exception)
         Log.w(TAG, "Installation authorization failed", exception)
-        val message = ksuApp.getString(R.string.install_root_required)
+        val failure = com.maplesu.core.ui.screen.install.installSourceAccessFailure(exception)
+        val message = ksuApp.getString(if (failure == com.maplesu.core.ui.screen.install.InstallSourceAccessFailure.CHANNEL_UNAVAILABLE)
+            R.string.install_source_service_unavailable else R.string.install_root_required)
         onStderr(message)
-        return FlashResult(1, message, false, FlashOutcome.FAILED)
+        return FlashResult(dev.maplesu.manager.installer.installerFailureExitCode(exception), message, false, FlashOutcome.FAILED)
     } catch (exception: Exception) {
+        dev.maplesu.manager.installer.rethrowInstallerCancellation(exception)
         Log.w(TAG, "Installation boot-chain observation failed", exception)
-        val message = ksuApp.getString(R.string.install_partition_read_failed)
+        val failure = com.maplesu.core.ui.screen.install.installSourceAccessFailure(exception)
+        val message = ksuApp.getString(if (failure == com.maplesu.core.ui.screen.install.InstallSourceAccessFailure.CHANNEL_UNAVAILABLE)
+            R.string.install_source_service_unavailable else R.string.install_partition_read_failed)
         onStderr(message)
-        return FlashResult(1, message, false, FlashOutcome.FAILED)
+        return FlashResult(dev.maplesu.manager.installer.installerFailureExitCode(exception), message, false, FlashOutcome.FAILED)
     }
 }
 
@@ -1780,14 +1826,14 @@ suspend fun getSupportedKmis(): List<String> = withContext(Dispatchers.IO) {
  * `null` = 读不到 / ksud 未部署（**不等于"全都有"**）：分派把 Normal 的 `kmiCatalogKnown`
  * 标 false，产物是否存在最终由 ksud 的内嵌资产查找硬失败兜底（绝不换用别的 KMI）。
  *
- * 只有 Normal 目标才会调用：Ultra 修补不需要 ksud，也不该为此多起一个 root shell。
+ * 普通 UID 只读取 ksud 自带资产索引；安装页的 Normal 文件 KMI 选择复用同一目录。
  */
-private fun packagedKmiCatalog(): Collection<String>? = runCatching {
-    val daemon = File(ksuApp.applicationInfo.nativeLibraryDir, "libksud_ksu.so")
+internal fun packagedKmiCatalog(context: Context = ksuApp): List<String>? = runCatching {
+    val daemon = File(context.applicationInfo.nativeLibraryDir, "libksud_ksu.so")
     val result = dev.maplesu.manager.runtime.ultra.ProcessSuExec.exec(
         listOf(daemon.path, "boot-info", "supported-kmis"), 10_000, null)
     if (!result.ok) return@runCatching null
-    result.output.lines().map(String::trim).filter(String::isNotEmpty)
+    result.output.lines().map(String::trim).filter(String::isNotEmpty).distinct().sorted()
 }.getOrNull()?.takeIf { it.isNotEmpty() }
 
 /**

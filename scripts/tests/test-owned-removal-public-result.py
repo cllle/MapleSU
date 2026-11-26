@@ -97,8 +97,8 @@ fun observeCompletedResult(status: android.os.Bundle, restoring: Boolean = false
     inspected = [cli, vm, resource, main / 'res/values-zh-rCN/maplesu_strings.xml']
     sources = [main / 'java/dev/maplesu/manager/installer' / (name + '.kt') for name in
                ['InstallerTaskResult', 'InstallerTaskPresentation']]
-    sources += [ROOT / 'manager/src/test/java/dev/maplesu/manager/installer' / (name + '.kt') for name in
-                ['OwnedRemovalPublicResultTest', 'InstallerTaskPresentationTest']]
+    sources += [ROOT / 'manager/src/test/resources/owned-removal-public-result-jvm/OwnedRemovalPublicResultTest.kt',
+                ROOT / 'manager/src/test/java/dev/maplesu/manager/installer/InstallerTaskPresentationTest.kt']
     source_records = [identity(path) for path in sources + inspected]
     compile_sources = []
     for source in sources + inspected:

@@ -17,8 +17,8 @@
 #include <linux/nsproxy.h>
 #include "msu_resolver_build_config.h"
 
-/* The carrier binds these slots to the input Image's BTF before publishing
- * ready. The table is writable during image generation and non-const here:
+/* The exact-Image carrier or boot runtime producer binds these slots before
+ * publishing ready. The table stays writable and non-const here:
  * folding compiled offsets back into native code defeats target relocation.
  * Slots are append-only. Local embedded kernel objects retain their separate
  * exact ABI qualification; this table does not resize those objects. */
@@ -145,9 +145,15 @@ struct msu_runtime_layout_table {
     struct msu_runtime_layout_field values[MSU_RUNTIME_LAYOUT_FIELD_COUNT];
 };
 extern struct msu_runtime_layout_table msu_runtime_layout;
+/* The provider must return actual target facts, including owner size. This
+ * port also permits a read-only accessor provider when target BTF is absent.
+ * A partial/error result never publishes ready or uses compiled offsets. */
+struct msu_runtime_btf_field;
+typedef int (*msu_runtime_field_query)(const char *, const char *, struct msu_runtime_btf_field *);
+int msu_runtime_layout_init(msu_runtime_field_query query);
 static inline bool msu_runtime_layout_ready(void)
 {
-    return READ_ONCE(msu_runtime_layout.ready) == 1 &&
+    return smp_load_acquire(&msu_runtime_layout.ready) == 1 &&
         msu_runtime_layout.magic == MSU_RUNTIME_LAYOUT_MAGIC &&
         msu_runtime_layout.schema == MSU_RUNTIME_LAYOUT_SCHEMA &&
         msu_runtime_layout.bytes == sizeof(msu_runtime_layout) &&

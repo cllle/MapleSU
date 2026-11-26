@@ -69,9 +69,9 @@ final class MapleSuModuleMetadata {
         Properties result = new Properties();
         for (String[] field : FIELDS) {
             byte[] begin = field[1].getBytes(StandardCharsets.US_ASCII), end = field[2].getBytes(StandardCharsets.US_ASCII);
-            int start = marker(data, begin, 0, true), stop = start < 0 ? -1 : marker(data, end, start + begin.length, false);
+            int start = index(data, begin, 0), stop = start < 0 ? -1 : index(data, end, start + begin.length);
             if (start < 0 || stop < 0 || stop - start - begin.length > 4096
-                    || marker(data, begin, start + 1, true) >= 0 || marker(data, end, stop + 1, false) >= 0
+                    || index(data, begin, start + 1) >= 0 || index(data, end, stop + 1) >= 0
                     || !loaded(b, phoff, phnum, start, stop + end.length)) throw invalid();
             String value;
             try {
@@ -111,14 +111,6 @@ final class MapleSuModuleMetadata {
     private static int range(long offset, long size, int length) throws ModuleArchiveInspector.Failure {
         if (offset < 0 || size < 0 || offset > length || size > length - offset) throw invalid();
         return (int) offset;
-    }
-
-    private static int marker(byte[] data, byte[] needle, int start, boolean begin) throws ModuleArchiveInspector.Failure {
-        for (int found = index(data, needle, start); found >= 0; found = index(data, needle, found + needle.length)) {
-            int adjacent = begin ? found + needle.length : found - 1;
-            if (adjacent >= 0 && adjacent < data.length && data[adjacent] != 0) return found;
-        }
-        return -1;
     }
 
     private static int index(byte[] data, byte[] needle, int start) throws ModuleArchiveInspector.Failure {

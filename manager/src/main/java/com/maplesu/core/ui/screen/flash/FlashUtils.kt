@@ -128,6 +128,10 @@ sealed class FlashIt : Parcelable {
         val forceRepatch: Boolean = false,
         /** Authenticated current slot/partition facts for an automatically paired init_boot. */
         val pairedBootSnapshot: android.os.Bundle? = null,
+        /** Explicit companion selection is export-only and bound to both previewed inputs. */
+        val pairedBootUri: Uri? = null,
+        val pairedSourceSha256: String? = null,
+        val pairedBootSha256: String? = null,
     ) : FlashIt()
 
     @Parcelize
@@ -228,6 +232,9 @@ suspend fun flashIt(
             vivoInputs = flashIt.vivoInputs,
             forceRepatch = flashIt.forceRepatch,
             pairedBootSnapshot = flashIt.pairedBootSnapshot,
+            pairedBootUri = flashIt.pairedBootUri,
+            pairedSourceSha256 = flashIt.pairedSourceSha256,
+            pairedBootSha256 = flashIt.pairedBootSha256,
         )
 
         is FlashIt.DownloadBoot -> downloadBoot(

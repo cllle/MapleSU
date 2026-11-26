@@ -6,7 +6,7 @@ import json
 import shutil
 import subprocess
 import time
-import os
+
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
@@ -33,7 +33,7 @@ def main():
     args = parser.parse_args()
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)
-    java = jdk_tool("java")
+    java = jdk_tool()
     harness = ROOT / 'scripts/tests/fixtures/InvalidAvbRealContainerMain.java'
     overlay = identity(WRITER)
     assert overlay['sha256'] == EXPECTED_WRITER and overlay['bytes'] == 169133
@@ -45,7 +45,7 @@ def main():
                'scope': 'same-component container reconstruction; not full kernel patch, SDK, Root, boot or device validation',
                'runtime': identity(java), 'writer': overlay, 'harness': identity(harness),
                'runner': identity(__file__), 'baseline': identity(OLD),
-               'diskBefore': {name: shutil.disk_usage(name)._asdict() for name in ['C:/', 'D:/']},
+               'diskBefore': {name: shutil.disk_usage(name)._asdict() for name in dict.fromkeys((ROOT.anchor, args.out.anchor))},
                'cases': [], 'SDKOrAPKBuild': False, 'deviceOperations': False, 'partitionWrites': False}
     baseline = json.loads(OLD.read_text(encoding='utf-8-sig'))['cases']
     result = 0
@@ -80,7 +80,7 @@ def main():
     receipt['exitCode'] = result
     receipt['sourcesUnchanged'] = identity(harness) == receipt['harness'] and identity(__file__) == receipt['runner']
     receipt['writerUnchanged'] = identity(WRITER) == overlay
-    receipt['diskAfter'] = {name: shutil.disk_usage(name)._asdict() for name in ['C:/', 'D:/']}
+    receipt['diskAfter'] = {name: shutil.disk_usage(name)._asdict() for name in dict.fromkeys((ROOT.anchor, args.out.anchor))}
     (args.out / 'receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     return result
 

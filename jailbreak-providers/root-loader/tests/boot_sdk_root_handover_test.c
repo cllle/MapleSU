@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "boot_sdk_protocol.h"
+#include "request_protocol.h"
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "line=%d: %s\n", __LINE__, #x); exit(1); } } while (0)
 #define MSU_PH_NOCFI
 #define MAPLESU_NOCFI
@@ -37,7 +38,7 @@ static u32 maplesu_ready = 1, state = MSU_BOOT_SDK_READY, stage_busy;
 static uptr maplesu_groups, native_execve = 123;
 static unsigned prepares, commits, allocations, group_changes, marked_commits;
 static unsigned fail_prepare, dispatches, originals;
-static char root_key[49];
+static char root_key[49], original_root_key[49];
 static unsigned char user_packet[85];
 static const uptr user_address = 0x12345000;
 static const u64 expected_reply = 0x2468135713572468ULL;
@@ -46,6 +47,8 @@ static const char *scenario;
 static struct cred *jit_cred;
 static uptr maplesu_current_task(void) { return (uptr)&child; }
 static uptr current_cred(void) { return child.cred; }
+#define sdk_current_cred current_cred
+static long request_v2(uptr user){(void)user;CHECK(0);return -14;}
 static void drop_task_cred(struct cred *cred) {
     CHECK(cred->usage >= 2);
     cred->usage -= 2;

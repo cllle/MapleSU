@@ -23,6 +23,7 @@ public:
     int get_cred_securebits_size();
 
     // 发射 AArch64 资格检查：euid、securebits 和连续 capability 字段；x10 为 0/1。
+    KModErr emit_check_current_allow_selinux_to_x10_checked(asmjit::a64::Assembler* a);
     void emit_check_current_allow_selinux_to_x10(asmjit::a64::Assembler* a);
 
     // 把 a 里已经发射好的机器码安装成 target 的 before/after hook。

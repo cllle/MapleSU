@@ -77,6 +77,7 @@ inline void kallsyms_lookup_size_offset(asmjit::a64::Assembler* a, KModErr& erro
     a->action = layout_test::symbol_size; a->argument = address; error = KModErr::OK;
 }
 inline void get_current(asmjit::a64::Assembler*, asmjit::a64::GpX) {}
+inline KModErr get_current_checked(asmjit::a64::Assembler* a, asmjit::a64::GpX r) { get_current(a, r); return KModErr::OK; }
 template<class... Args> void copy_from_kernel_nofault(asmjit::a64::Assembler*, KModErr& error, Args...) { error = KModErr::OK; }
 template<class... Args> void get_task_mm(asmjit::a64::Assembler*, KModErr& error, Args...) { error = KModErr::OK; }
 template<class... Args> void mmput(asmjit::a64::Assembler*, KModErr& error, Args...) { error = KModErr::OK; }

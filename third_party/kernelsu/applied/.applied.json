@@ -31,12 +31,12 @@
   ],
   "aggregateSha256": "8c4378727233580fa58b33ddc9de76df8e8fd2bdaa199144a97f498bf73735ed",
   "seriesSha256": "b33042f04e7e19b2f85c305bc82eaa63589bf74ceb5094d27dc84e0599fcd9e3",
-  "appliedAt": "2026-11-23T04:37:08Z",
+  "appliedAt": "2026-11-24T16:52:32Z",
   "uapiVersion": 7,
   "uapiSyncTargets": [
     "kernel/include/uapi",
     "manager/app/src/main/cpp/uapi"
   ],
-  "treeSha256": "63f27aad723ca5aad14fc53e84688305dd3d9ba8c0325a8383b2e34e259cbb76",
+  "treeSha256": "5546efbf44cd50d48e5c898b5095e22948159a94bee9895a0602b27d96babfac",
   "fileCount": 841
 }

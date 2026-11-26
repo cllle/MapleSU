@@ -1228,7 +1228,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_runRootCmd(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
-    JNIEnv* env, jclass, jstring rootKey, jstring helperPath, jlong keySlotOffset) {
+    JNIEnv* env, jclass, jstring rootKey, jstring helperPath, jlong keySlotOffset, jint timeoutMillis) {
     KModErr sdk_error = KModErr::OK;
     return guarded(env, "read_installed_helper", [&](cJSON* root) {
         cJSON* ok = cJSON_GetObjectItemCaseSensitive(root, "ok");
@@ -1239,7 +1239,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
             mark_call_bridge_error(root, &sdk_error, kBridgeAlloc, "MAPLESU_BRIDGE_ALLOC", {});
             return;
         }
-        if ((!helperPath && rootKey) || (helperPath && (env->GetStringLength(helperPath) != 27 ||
+        if (timeoutMillis <= 0 || timeoutMillis > 5000 || (!helperPath && rootKey) || (helperPath && (env->GetStringLength(helperPath) != 27 ||
             env->GetStringUTFLength(helperPath) != 27)) ||
             (rootKey && (env->GetStringLength(rootKey) != 48 || env->GetStringUTFLength(rootKey) != 48))) {
             mark_bridge_error(root, kBridgeNullArgument, "MAPLESU_HELPER_READBACK_ARGUMENT", {});
@@ -1259,7 +1259,8 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
             return;
         }
         const auto observed = maplesu::read_installed_helper(rootKey ? key.bytes : nullptr,
-            helperPath ? path.c_str() : nullptr, static_cast<int64_t>(keySlotOffset), HelperReadbackDigest::consume, &digest);
+            helperPath ? path.c_str() : nullptr, static_cast<int64_t>(keySlotOffset), HelperReadbackDigest::consume, &digest,
+            static_cast<uint32_t>(timeoutMillis));
         const int64_t error = observed.mode_error ? observed.mode_error : observed.channel_error ? observed.channel_error :
             observed.sdk_error ? observed.sdk_error : observed.root.error ? observed.root.error : observed.close.error;
         sdk_error = static_cast<KModErr>(error);
@@ -1299,9 +1300,18 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
             !cJSON_AddBoolToObject(data, "complete", completed) ||
             !cJSON_AddStringToObject(data, "failureStage", failure_stage) ||
             !cJSON_AddNumberToObject(data, "elapsedUs", static_cast<double>(observed.elapsed_us)) ||
+            !cJSON_AddNumberToObject(data, "completionUs", static_cast<double>(observed.completion_us)) ||
+            !cJSON_AddNumberToObject(data, "timeoutMillis", timeoutMillis) ||
+            !cJSON_AddNumberToObject(data, "admissionUs", static_cast<double>(observed.admission_us)) ||
+            !cJSON_AddNumberToObject(data, "forkUs", static_cast<double>(observed.fork_us)) ||
+            !cJSON_AddNumberToObject(data, "authenticationUs", static_cast<double>(observed.authentication_us)) ||
+            !cJSON_AddNumberToObject(data, "sourceUs", static_cast<double>(observed.source_us)) ||
+            !cJSON_AddNumberToObject(data, "receiveUs", static_cast<double>(observed.receive_us)) ||
+            !cJSON_AddNumberToObject(data, "waitUs", static_cast<double>(observed.wait_us)) ||
             !cJSON_AddBoolToObject(data, "digestAttempted", observed.complete) ||
             !cJSON_AddBoolToObject(data, "digestComplete", completed) ||
             !cJSON_AddBoolToObject(data, "rootVerified", observed.root_verified) ||
+            !cJSON_AddBoolToObject(data, "credentialsManaged", observed.credentials_managed) ||
             !cJSON_AddBoolToObject(data, "ownerMode", observed.owner_mode) ||
             !cJSON_AddBoolToObject(data, "namespaceRequested", observed.namespace_requested) ||
             !cJSON_AddBoolToObject(data, "namespaceResolved", observed.namespace_resolved) ||

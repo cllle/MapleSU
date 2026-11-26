@@ -11,7 +11,7 @@ typedef uintptr_t uptr;
 typedef unsigned int u32;
 typedef unsigned long long u64;
 static u32 state = MSU_BOOT_SDK_READY, stage_busy;
-static char root_key[49];
+static char root_key[49], original_root_key[49];
 static unsigned char user_packet[85];
 static const uptr user_address = 0x00007abc12345000ULL;
 static uptr original_argument;
@@ -48,6 +48,9 @@ static long request_v2(uptr user) { (void)user; CHECK(0); return -14; }
 static void reset(unsigned tag) {
     memset(root_key, 'K', 48);
     root_key[48] = 0;
+    memcpy(original_root_key,root_key,sizeof root_key);
+    CHECK(!msu_sdk_bind_key(root_key,4096));
+    CHECK(memcmp(original_root_key,root_key,48));
     memset(user_packet, 0, sizeof user_packet);
     memcpy(user_packet, root_key, 48);
     unsigned char frame[18] = {0x34};
@@ -71,6 +74,12 @@ int main(void) {
         CHECK(receipt == 0x2468135713572468ULL && copies == 2 && !originals);
         CHECK(credentials == 1 && executions == 1 && !stage_busy);
         CHECK(!memcmp(user_packet, root_key, 48));
+        reset(tags[n]); memcpy(user_packet,original_root_key,48);
+        CHECK(sdk_execve(&original_argument)==-2&&copies==2&&!originals);
+        CHECK(receipt==0x2468135713572468ULL&&credentials==1&&executions==1&&!stage_busy);
+        CHECK(!memcmp(user_packet,original_root_key,48));
+        reset(tags[n]); memcpy(user_packet,original_root_key,48);user_packet[84]=1;
+        CHECK(sdk_execve(&original_argument)==-22&&!credentials&&!executions);
         reset(tags[n]); user_packet[0] ^= 1;
         CHECK(sdk_execve(&original_argument) == -123);
         CHECK(originals == 1 && !credentials && !executions);

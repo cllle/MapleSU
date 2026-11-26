@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -227,7 +228,7 @@ class UltraVersionRefreshTest {
     classes = out / 'classes'
     classes.mkdir(exist_ok=True)
     cp = os.pathsep.join(map(str, [classes, *deps]))
-    java = jdk_tool("java")
+    java = jdk_tool()
     commands = [[java, '-Xmx256m', '-cp', os.pathsep.join(map(str, [compiler, *deps])),
                  'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-no-stdlib', '-no-reflect', '-nowarn',
                  '-jvm-target', '21', '-classpath', cp, '-d', classes, source, policy_source, *generated],

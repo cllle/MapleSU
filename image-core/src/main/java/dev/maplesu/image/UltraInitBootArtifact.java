@@ -19,9 +19,14 @@ final class UltraInitBootArtifact {
             "config", "configSha256", "btf", "btfSha256", "moduleSymvers", "moduleSymversSha256",
             "credentialMode", "metadataDisplacement", "targetVermagic",
             "sessionAbi", "sessionAbiSha256", "bundleSources", "bundleSourcesSha256",
-            "taskProfileAbi", "taskProfileAbiSha256");
+            "taskProfileAbi", "taskProfileAbiSha256", "abiEvidence", "abiEvidenceSha256",
+            "kind", "kmi", "architecture", "pageSize", "cfiMode", "runtimeFactsAbi", "sourceGenerationSha256");
     private static final Set<String> REQUIRED = Set.of("schemaVersion", "targetBoot", "targetBootSha256",
             "kernelRelease", "kernelSha256", "handoff", "handoffSha256", "bridge", "bridgeSha256");
+    private static final Set<String> COMPONENT_REQUIRED = Set.of("schemaVersion", "kind", "kmi", "architecture",
+            "pageSize", "cfiMode", "kernelRelease", "credentialMode", "metadataDisplacement", "runtimeFactsAbi",
+            "sourceGenerationSha256", "handoff", "handoffSha256", "bridge", "bridgeSha256");
+    private static final Set<String> COMPONENT_OPTIONAL = Set.of("ksuInit", "ksuInitSha256", "bundleSources", "bundleSourcesSha256");
 
     private UltraInitBootArtifact() {}
 
@@ -30,7 +35,10 @@ final class UltraInitBootArtifact {
         String text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
         Map<String, String> fields = new Json(text).read();
+        if ("2".equals(fields.get("schemaVersion"))) return readComponent(manifest, bytes, fields);
         if (!fields.keySet().containsAll(REQUIRED) || !"1".equals(fields.get("schemaVersion")) ||
+                fields.keySet().stream().anyMatch(name -> COMPONENT_REQUIRED.contains(name) && !REQUIRED.contains(name) &&
+                        !name.equals("credentialMode") && !name.equals("metadataDisplacement")) ||
                 fields.containsKey("targetContract") != fields.containsKey("targetContractSha256")) throw error("FIELDS");
         if (fields.containsKey("ksuInit") != fields.containsKey("ksuInitSha256")) throw error("FIELDS");
         String credentialMode = fields.getOrDefault("credentialMode", "embedded");
@@ -64,7 +72,7 @@ final class UltraInitBootArtifact {
             bound(directory, fields, "targetContract", 1024 * 1024);
             targetInputs.put("targetContract", fields.get("targetContractSha256"));
         }
-        for (String name : new String[]{"sessionAbi", "bundleSources", "taskProfileAbi"}) {
+        for (String name : new String[]{"sessionAbi", "bundleSources", "taskProfileAbi", "abiEvidence"}) {
             if (fields.containsKey(name) != fields.containsKey(name + "Sha256")) throw error("FIELDS");
             if (!fields.containsKey(name)) continue;
             if (!fields.get(name + "Sha256").matches("[0-9a-f]{64}")) throw error("HASH:" + name);
@@ -107,6 +115,51 @@ final class UltraInitBootArtifact {
                 credentialMode, metadataDisplacement, true);
         if (!java.util.Arrays.equals(bytes, file(manifest.toPath(), 16 * 1024))) throw error("MANIFEST_CHANGED");
         return artifact;
+    }
+
+    private static UltraInitBootProducer.Artifact readComponent(File manifest, byte[] bytes,
+                                                               Map<String, String> fields) throws IOException {
+        if (!fields.keySet().containsAll(COMPONENT_REQUIRED) || fields.keySet().stream().anyMatch(name ->
+                !COMPONENT_REQUIRED.contains(name) && !COMPONENT_OPTIONAL.contains(name))) throw error("COMPONENT_FIELDS");
+        if (!"kmi-component".equals(fields.get("kind"))) throw error("COMPONENT_KIND");
+        if (!"arm64".equals(fields.get("architecture"))) throw error("ARCHITECTURE");
+        if (!"module-parameter".equals(fields.get("credentialMode"))) throw error("CREDENTIAL_MODE");
+        if (!"maplesu-runtime-facts/1".equals(fields.get("runtimeFactsAbi"))) throw error("RUNTIME_FACTS_ABI");
+        String kmi = fields.get("kmi"), release = fields.get("kernelRelease");
+        if (!kmi.matches("android[0-9]+-[0-9]+\\.[0-9]+") ||
+                release.length() > 256 || !release.matches("[!-~]+")) throw error("KMI");
+        if (!Set.of("none", "kcfi", "legacy-lto-cfi").contains(fields.get("cfiMode"))) throw error("CFI_MODE");
+        String pageText = fields.get("pageSize");
+        if (!Set.of("4096", "16384", "65536").contains(pageText)) throw error("PAGE_SIZE");
+        int page = Integer.parseInt(pageText), displacement = Integer.parseInt(fields.get("metadataDisplacement"));
+        if (!fields.get("sourceGenerationSha256").matches("[0-9a-f]{64}")) throw error("HASH:sourceGeneration");
+        Path directory = manifest.toPath().toAbsolutePath().getParent();
+        byte[] handoff = bound(directory, fields, "handoff", 16 * 1024 * 1024);
+        byte[] bridge = bound(directory, fields, "bridge", 64 * 1024 * 1024);
+        String ksuInitSha256 = null;
+        for (String name : new String[]{"ksuInit", "bundleSources"}) {
+            if (fields.containsKey(name) != fields.containsKey(name + "Sha256")) throw error("COMPONENT_FIELDS");
+            if (!fields.containsKey(name)) continue;
+            byte[] input = bound(directory, fields, name, name.equals("ksuInit") ? 16 * 1024 * 1024 : 1024 * 1024);
+            if (name.equals("ksuInit")) { elfHeader(input, 0, "KSU_INIT"); ksuInitSha256 = fields.get("ksuInitSha256"); }
+        }
+        var component = new UltraInitBootProducer.KmiComponent(kmi, fields.get("architecture"), page,
+                fields.get("cfiMode"), fields.get("runtimeFactsAbi"), fields.get("sourceGenerationSha256"));
+        var artifact = UltraInitBootProducer.Artifact.component(component, release, handoff, bridge, ksuInitSha256, displacement);
+        verifyArtifact(artifact);
+        if (!java.util.Arrays.equals(bytes, file(manifest.toPath(), 16 * 1024))) throw error("MANIFEST_CHANGED");
+        return artifact;
+    }
+
+    static void verifyArtifact(UltraInitBootProducer.Artifact artifact) throws IOException {
+        if (!artifact.isKmiComponent) { verifyTarget(artifact); return; }
+        if (artifact.targetBoot != null || !artifact.targetBootSha256.isEmpty() || !artifact.kernelSha256.isEmpty() ||
+                !artifact.targetInputSha256.isEmpty() || artifact.taskProfileMetadataBytes() != null) throw error("COMPONENT_TARGET_FACTS");
+        elfHeader(artifact.handoff, 2, "HANDOFF");
+        elfHeader(artifact.bridge, 1, "BRIDGE");
+        staticHandoff(artifact.handoff, artifact.component.pageSize);
+        if (!module(artifact.bridge, artifact.kernelRelease, false, artifact.component.pageSize,
+                artifact.metadataDisplacement, null, true)) throw error("BRIDGE_DEPLOYMENT_NAMESPACE_PARAMETER_TYPE");
     }
 
     static void verifyRebound(UltraInitBootProducer.Artifact artifact, String vermagic,
@@ -189,6 +242,11 @@ final class UltraInitBootArtifact {
 
     private static boolean module(byte[] bytes, String release, boolean modversions, int page, int displacement,
                                   String targetVermagic) throws IOException {
+        return module(bytes, release, modversions, page, displacement, targetVermagic, false);
+    }
+
+    private static boolean module(byte[] bytes, String release, boolean modversions, int page, int displacement,
+                                  String targetVermagic, boolean runtimeFacts) throws IOException {
         ByteBuffer elf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         long table = elf.getLong(40);
         int size = elf.getShort(58) & 65535, count = elf.getShort(60) & 65535, namesIndex = elf.getShort(62) & 65535;
@@ -201,6 +259,7 @@ final class UltraInitBootArtifact {
         boolean info = false, infoSection = false, symbols = false, module = false, code = false, versions = false;
         boolean credentialParameter = false;
         boolean deploymentParameter = false;
+        boolean runtimeFactsMarker = false;
         String vermagic = null;
         long extendedCrcs = -1, extendedNames = -1;
         Set<String> versionLabels = new java.util.HashSet<>();
@@ -263,6 +322,10 @@ final class UltraInitBootArtifact {
                                 !field.equals("parmtype=deployment_namespace:string")) throw error("BRIDGE_DEPLOYMENT_NAMESPACE_PARAMETER_TYPE");
                         deploymentParameter = true;
                     }
+                    if (field.startsWith("maplesu_runtime_facts=")) {
+                        if (runtimeFactsMarker || !field.equals("maplesu_runtime_facts=1")) throw error("BRIDGE_RUNTIME_FACTS");
+                        runtimeFactsMarker = true;
+                    }
                 }
             }
         }
@@ -284,6 +347,7 @@ final class UltraInitBootArtifact {
             if (!actual.equals(required)) throw error("BRIDGE_VERMAGIC");
         }
         if (modversions && !versions) throw error("BRIDGE_MODVERSIONS");
+        if (runtimeFacts && !runtimeFactsMarker) throw error("BRIDGE_RUNTIME_FACTS");
         if (page != 0) {
             if (!credentialParameter) throw error("BRIDGE_CREDENTIAL_PARAMETER_TYPE");
             moduleMetadata(bytes, elf, (int) table, count, symbolTable, page, displacement);
@@ -383,8 +447,18 @@ final class UltraInitBootArtifact {
             do {
                 String name = string(); take(':');
                 String value;
-                if (name.equals("schemaVersion")) { take('1'); value = "1"; }
+                if (name.equals("schemaVersion")) {
+                    whitespace();
+                    if (at >= text.length() || text.charAt(at) != '1' && text.charAt(at) != '2') throw error("JSON");
+                    value = String.valueOf(text.charAt(at++));
+                }
                 else if (name.equals("metadataDisplacement")) value = displacement();
+                else if (name.equals("pageSize")) {
+                    whitespace(); int start = at;
+                    while (at < text.length() && text.charAt(at) >= '0' && text.charAt(at) <= '9') at++;
+                    if (at == start || at - start > 5 || at - start > 1 && text.charAt(start) == '0') throw error("PAGE_SIZE");
+                    value = text.substring(start, at);
+                }
                 else value = string();
                 if (!FIELDS.contains(name) || fields.putIfAbsent(name, value) != null) throw error("FIELDS");
                 whitespace();

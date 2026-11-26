@@ -4,31 +4,37 @@ MapleSU · third_party/kernelsu/applied
 本目录是**生成物**，不是手工维护的源码：由
   third_party/kernelsu/scripts/apply_patches.py --clean
 从 `third_party/kernelsu/upstream/`（上游 KernelSU，commit
-528bafc5696196f3a9500cee2e7e18497421cd32）逐字节复制后，按 `patches/7k/series` 顺序应用下列补丁得到：
+f4603d14bd7f3bf21206d6f7c622ddf1c049ade3）逐字节复制后，按 `patches/7k/series` 顺序应用下列补丁得到：
 
-  - 0001-manager-identity.patch  (sha256 f5832d067535ba12a512fc8cb5b40bc06f7c055ee5b0cf37a7b1ae915d4d2758)
+  - 0001-manager-identity.patch  (sha256 de24c82dd2bd1bfe6f0f9eb00b9d134df5a95847dac74f3ffaa5134e8261b9f7)
   - 0002-uapi-v7.patch  (sha256 4e0f7bd05a2b93d574358ee822593fe32c5c72bd111214d7fc04dc4929ca77b8)
-  - 0003-stealth.patch  (sha256 de45f61264a724c9d871ddbdc81e2f22a49bf1e8b4341c8f69f24addc8a6a76a)
-  - 0004-app-lock.patch  (sha256 4ba6c6b4f17472edd8c36e28d252d85e247c33342b93427963c6e446477db145)
+  - 0003-stealth.patch  (sha256 4aa632c331c19bb3eb3ff3738c9099c26b09d5fbe61081a66f9797ae3deafd04)
+  - 0004-app-lock.patch  (sha256 1791de71b4aeefe82ae51ec43bfc07a674ba9235ee810858aafc709005d00bf6)
   - 0005-manager-generation-gate.patch  (sha256 473f8f68c9e2243e78ee90ae25dea4afed1d21b21792258e5776eb8e13ffc0a4)
-  - 0006-webadmin.patch  (sha256 810339b8641d254a67ae7a06d5dd235c02d91c9f796417d19aac48d98961623b)
+  - 0006-webadmin.patch  (sha256 50e1fc66a32287e93984b5dce05f19f255b4b1982fc5e19927cd0c428586c959)
   - 0007-boot-patch-safety.patch  (sha256 17d7ca4c76060949ad12656ae69bd6d29ae3855d1e3f95e190ecefcbae83dcd5)
   - 0008-restore-user-data.patch  (sha256 0cde509eae9afc9a1b55a565cd14bed08440dca6a5c2930c3b9dae7cd4b2d5f8)
-  - 0009-install-staging-label.patch  (sha256 1f4e73406f687841f4082bbafa85af4541670222b3b33ba8ca57e5bf47fba1c3)
+  - 0009-install-staging-label.patch  (sha256 b811b1bd07fe700339dd11c10606cddd30c14df93ba68217930d0ff937c5adb4)
   - 0010-manager-jni-facade.patch  (sha256 f9bf4413c216bb982f40e30fc5dc8a7bc04c5c84630e708c2c0a82a3a7fcfbc5)
-  - 0011-webadmin-api-surface.patch  (sha256 d204ca4364cf3f50ba30261c618bffbf23c233cc2d166ce1ac47e3e593cf9c16)
-  - 0012-boot-patch-safety-wiring.patch  (sha256 fa14a6ca54aaff02736c985aa59ab73933774bbe6db2661e8cbc525175ac9198)
-  - 0013-restore-user-data-wiring.patch  (sha256 47e78c8225a031ff51fa8bedb9fe1480bc7899f9fb60b0e08277fb12a2aa49f3)
-  - 0014-manager-package-triple-check.patch  (sha256 ba011043bf0dcd9b4f4c9dd2bc2fbd554e701c3a0e22de1d1afe412a8255adcc)
-  - 0015-normal-recovery.patch  (sha256 4f9e61896929cc005f87f31d90530b83af7516f761ac7c6fc4d03320095862cd)
-  - 0016-ksud-build-identity.patch  (sha256 8055725fe66123e96c3b90c84f7b6bbe1c435ffae3b75e1f2fd6a42d6de90551)
-  - 0017-selinux-upstream-sync.patch  (sha256 d34e1bd423a25150e3bcab77e0881a8dbafa9a215c41df44df56790fd09870f2)
-  - 0018-vivo-vr-compatibility.patch  (sha256 88ecd06f4640b5b7de9050382013daa023fb8fb51ca60d4ccc2865326f507b80)
-  - 0019-maplesu-93260-symbol-input.patch  (sha256 88adfdb43cdf3b051051e382f4003f84696cebca15c106e213c84321f98858b6)
-  - 0020-jailbreak-selinux-session.patch  (sha256 e76ad0ce1114fefb6a7a644e5d371b61783712084e3c3efaa6a75108254359c9)
+  - 0011-webadmin-api-surface.patch  (sha256 2f6c83d870c672b13683ded3834716d2c67fa7f18e8a09e9f5a8dc71df04b5aa)
+  - 0012-boot-patch-safety-wiring.patch  (sha256 cf5a41b7727e0bb0d6745f04e10c2b5ff01bcf04d353a8a2a3b69b6288aeaff3)
+  - 0013-restore-user-data-wiring.patch  (sha256 0081da4ff6dfba3334075a04969ae69ad221cbe0c82a09f9667e25c93f745665)
+  - 0014-manager-package-triple-check.patch  (sha256 c02ebf58a505256205cabb996a4cf5d971e01dc68fd8a2ec6f0df720a2f72fcd)
+  - 0015-normal-recovery.patch  (sha256 62c5bccf4424567306d95871327b997204f23854c5c63cf9453dfbf93a63e74f)
+  - 0016-ksud-build-identity.patch  (sha256 d139c4e1304d9c90bae12e2cb58abb5229a77848f90366d9c129b9b9299d0ebe)
+  - 0018-vivo-vr-compatibility.patch  (sha256 3b88b4f5f59d955efb84dcaddadb1f4c04472b20d3c414961c4cbbd9c4443172)
+  - 0019-maplesu-93260-symbol-input.patch  (sha256 eb74bafd32744767a4203d0e3c5e889efcd1301575356772d7286b573f15b34d)
+  - 0020-jailbreak-selinux-session.patch  (sha256 12786fcb03a85f37a647168560050e311bede1845dc1edc759c8c2e87916f4c7)
+  - 0021-maplesu-manager-namespace.patch  (sha256 1bbea92027e051d2a8610d195fdbae3eac840d934473a219fe924ba8919dab50)
+  - 0022-boot-copy-rebuild.patch  (sha256 a98ac1d2ed0f92759ce6641f25fa96f3a08bb6201ce88dabc382b2561b289ae7)
+  - 0023-boot-backup-optional.patch  (sha256 f0c1c75caf98de1769d4e6b325b13ee569288b27f835006c7dc06e338be07b42)
+  - 0024-boot-empty-origin-restore.patch  (sha256 3a5594285d8b718e46842b95e00da21fe8094cff67430e82b5ed6fc39cc3709c)
+  - 0025-target-kernel-kmi.patch  (sha256 8bfd88fd26dd9b2a883edff01b792f90733e744fd3313e9cba3e060b84128c41)
+  - 0026-module-install-transaction.patch  (sha256 23545696208d6ed5bf77324406f5bde7e96e0f11e83b8519938fed6db5fce334)
+  - 0027-module-removal-transaction.patch  (sha256 1e691c3e162b8d422484380fa4f525cd92d8ce59bdc620d174d3d594c600678d)
 
-补丁序列聚合哈希：12b65eb93536f5ee9ad9034d53d29b6bcdd1d4c5a9472227e937719ea09d6947
-补丁序列文件哈希：701b038d6c4740c407c3569719c28c4d3a583ea9b254ea20900958ee2a567a1f
+补丁序列聚合哈希：8c4378727233580fa58b33ddc9de76df8e8fd2bdaa199144a97f498bf73735ed
+补丁序列文件哈希：b33042f04e7e19b2f85c305bc82eaa63589bf74ceb5094d27dc84e0599fcd9e3
 upstream 快照树哈希：见 third_party/kernelsu/manifest.json（upstream.treeSha256）
 
 许可证

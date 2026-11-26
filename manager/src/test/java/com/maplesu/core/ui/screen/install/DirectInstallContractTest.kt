@@ -8,20 +8,14 @@ class DirectInstallContractTest {
     private fun source(path: String) = File("src/main/java/$path").readText()
     private fun ui(path: String) = source("com/maplesu/core/ui/$path")
 
-    @Test fun directInstallIsOfferedOnlyAfterTheActualRootCheck() {
+    @Test fun directInstallDefersRootAccessUntilExecution() {
         val screen = ui("screen/install/InstallScreen.kt")
-        assertTrue(screen.contains("var rootGranted by remember { mutableStateOf(false) }"))
-        val rootCheck = screen.substringAfter("rootGranted = withContext(Dispatchers.IO)")
-            .substringBefore("if ((!rootGranted")
-        assertTrue(rootCheck.contains("!directInstallSuppressed && managerRootAvailable("))
-        assertTrue(rootCheck.contains("mode = ModeRuntime.active"))
-        assertTrue(rootCheck.contains("ultraIdentity = UltraEnvironmentProbe.usesUltraBackend(context)"))
-        assertTrue(rootCheck.contains("RootExec.current()?.capability(forceRefresh = true) ?: RootExec.capability(context)"))
-        assertTrue(rootCheck.contains("legacyShellRoot = { EnvironmentProbesAdapter(context).suPresent() }"))
-        assertTrue(screen.contains("val hasRoot = rootGranted && !directInstallSuppressed"))
-        assertTrue(screen.contains("remember(selectFileTip, hasRoot)"))
-        assertTrue(screen.contains("if (hasRoot) add(InstallMethod.DirectInstall)"))
-        assertTrue(screen.contains("!hasRoot || !pageResumed"))
+        for (probe in listOf("rootGranted", "managerRootAvailable(", "RootExec.", "suPresent()",
+            "rootAvailability.collectAsStateWithLifecycle", "!ModeRuntime.detectionComplete")) {
+            assertFalse(probe, screen.contains(probe))
+        }
+        assertTrue(screen.contains("if (!directInstallSuppressed) add(InstallMethod.DirectInstall)"))
+        assertTrue(screen.contains("directAccessReady = !directInstallSuppressed && pageResumed && existingRootConflictAccepted"))
     }
 
     @Test fun backPreviewKeepsTheConfirmedDisplayButNeverGrantsInstallationAccess() {
@@ -33,17 +27,17 @@ class DirectInstallContractTest {
         assertFalse("A lifecycle transition is not evidence of lost SU", pause.contains("rootGranted = false"))
         assertFalse(pause.contains("hasRoot = false"))
         assertTrue(screen.contains("if (!pageResumed || installInFlight || WorkModeSwitchSession.executing) return@onInstall"))
-        assertTrue(screen.contains("directAccessReady = hasRoot && pageResumed &&"))
+        assertTrue(screen.contains("directAccessReady = !directInstallSuppressed && pageResumed &&"))
     }
 
-    @Test fun hiddenFactsSuppressTheOptionBeforeTheBackgroundProbeCompletes() {
+    @Test fun confirmedHiddenFactsStillSuppressTheOption() {
         val screen = ui("screen/install/InstallScreen.kt")
         assertTrue(screen.contains("HiddenFactsSignal.revision.collectAsStateWithLifecycle()"))
         assertTrue(screen.contains("remember(context, detectionRevision, hiddenRevision)"))
         assertTrue(screen.contains("HiddenStartupConfirm.masking(context)"))
         assertTrue(screen.contains("HiddenStartupConfirm.isPending(context)"))
         assertTrue(screen.contains("mapleModeKnown && HiddenStartupConfirm.current(context)"))
-        assertTrue(screen.contains("!ModeRuntime.detectionComplete ||"))
+        assertFalse(screen.contains("!ModeRuntime.detectionComplete"))
         assertTrue(screen.contains("LifecycleResumeEffect(context, detectionRevision, hiddenRevision)"))
     }
 
@@ -59,25 +53,20 @@ class DirectInstallContractTest {
         assertTrue(export.contains("candidate.size"))
     }
 
-    @Test fun pairingAndReturningToThePageReprobeTheKernel() {
+    @Test fun returningToThePageRefreshesOnlyTheDisplayedKernelFacts() {
         val screen = ui("screen/install/InstallScreen.kt")
         assertTrue(screen.contains("ModeRuntime.detectionRevision.collectAsStateWithLifecycle()"))
-        assertTrue(screen.contains("val sdkRootAvailable by UltraEnvironmentProbe.rootAvailability.collectAsStateWithLifecycle("))
-        assertTrue(screen.contains("initialValue = UltraEnvironmentProbe.currentSnapshot().rootAvailable"))
-        assertTrue(screen.contains("LaunchedEffect(pageResumed, detectionRevision, hiddenRevision, sdkRootAvailable)"))
         assertTrue(screen.contains("targetMode, detectionRevision, pageResumed)"))
         assertTrue(screen.contains("if (!pageResumed) return@LaunchedEffect"))
     }
 
-    @Test fun sdkChangesRecheckAccessWithoutDisposingTheSelectedBootSource() {
+    @Test fun runtimeChangesDoNotDiscardTheSelectedSource() {
         val screen = ui("screen/install/InstallScreen.kt")
-        val check = screen.substringAfter("LaunchedEffect(pageResumed, detectionRevision, hiddenRevision, sdkRootAvailable) {")
-            .substringBefore("LaunchedEffect(sourceRequest")
-        assertTrue(check.contains("if (!pageResumed) return@LaunchedEffect"))
-        assertTrue(check.contains("rootGranted = withContext(Dispatchers.IO)"))
-        assertTrue(check.contains("if ((!rootGranted || directInstallSuppressed) && installMethod == InstallMethod.DirectInstall)"))
-        assertFalse(check.contains("pageResumed = false"))
-        assertFalse(screen.contains("LifecycleResumeEffect(context, detectionRevision, hiddenRevision, sdkRootAvailable)"))
+        val read = screen.substringAfter("LaunchedEffect(bootSourceKey, sourceRequest, bootProbeKey")
+            .substringBefore("val installMethodOptions")
+        assertTrue(read.contains("if (!pageResumed) return@LaunchedEffect"))
+        assertFalse(read.contains("installMethod = null"))
+        assertFalse(read.contains("existingRootConflictAccepted = false"))
     }
 
     @Test fun aCrossModeDirectInstallAlsoStreamsItsProgressIntoTheLog() {

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import zipfile
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from native_toolchain import jdk_tool
 
@@ -32,7 +33,7 @@ def main():
         ("junit", "junit", "4.13.2"), ("org.hamcrest", "hamcrest-core", "1.3"),
         ("org.jetbrains.kotlinx", "kotlinx-coroutines-test-jvm", "1.11.0")]]
     # Gradle's API jars compile the UI; ViewModel execution needs its actual implementation.
-    cache = Path.home() / ".gradle/caches/modules-2/files-2.1"
+    cache = Path(os.environ.get("GRADLE_USER_HOME", Path.home() / ".gradle")) / "caches/modules-2/files-2.1"
     lifecycle = next((cache / "androidx.lifecycle/lifecycle-viewmodel-android/2.11.0").glob("*/*.aar"))
     actual = out / "lifecycle-viewmodel.jar"
     with zipfile.ZipFile(lifecycle) as archive:
@@ -75,7 +76,7 @@ def main():
         ("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20"),
         ("org.jetbrains", "annotations", "13.0"),
         ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm", "1.11.0")]]
-    java = jdk_tool("java")
+    java = jdk_tool()
     classes = out / "classes"
     classes.mkdir(exist_ok=True)
     cp = os.pathsep.join(map(str, [classes] + deps))

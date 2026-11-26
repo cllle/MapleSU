@@ -183,6 +183,11 @@ int msu_su_registry_revoke_package(struct msu_su_registry *registry, u32 full_ui
  * the global policy to MODULE; this function never performs an unmount. */
 int msu_su_registry_non_root_policy(struct msu_su_registry *registry,
     u32 full_uid, enum msu_su_non_root_umount_policy *policy);
+/* Independent read-only daemon query. Requires actual init-user-ns root and
+ * reads the TARGET fullUID's same installation/Profile and published generation.
+ * It does not acquire an SU execution lease or evaluate the daemon's own UID. */
+int msu_su_registry_query_root(struct msu_su_registry *registry, u32 full_uid,
+    bool *granted, enum msu_su_non_root_umount_policy *policy);
 /* Scheduling hint for the root zygote's upcoming setresuid, never an action or
  * authorization receipt. Bounded memory only; the successful syscall's current
  * task must still call non_root_policy before doing any namespace operation. */

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -107,6 +107,15 @@ KModErr get_task_struct_files_offset(uint32_t & offset);
  * 返回: true  表示内核已启用 CONFIG_THREAD_INFO_IN_TASK
  *       false 表示内核未启用该配置（仍需通过 thread_info->task 获取）
  ***************************************************************************/
+// Errors are separate from a successful negative classification. A stack model
+// requires a concrete target-derived THREAD_SIZE; PAGE_SIZE is not that evidence.
+enum class CurrentTaskSource : uint32_t { sp_el0_task, sp_el0_thread_info, stack_thread_info };
+struct CurrentTaskModel {
+    CurrentTaskSource source = CurrentTaskSource::sp_el0_task;
+    uint32_t thread_size = 0;
+};
+KModErr resolve_current_task_model(CurrentTaskModel& model);
+
 bool is_CONFIG_THREAD_INFO_IN_TASK();
 
 /***************************************************************************

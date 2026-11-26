@@ -123,7 +123,7 @@ KModErr get_file_f_path_offset(uint32_t &offset) {
     err = get_kernel_shellcode_u64_result(
         [](asmjit::a64::Assembler *a, asmjit::a64::GpX &result) -> KModErr {
             result = asmjit::a64::regs::x10;
-            export_symbol::get_current(a, asmjit::a64::regs::x10);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
             return KModErr::OK;
         },
         current_task);
@@ -183,7 +183,7 @@ KModErr get_file_f_inode_offset(uint32_t &offset) {
     err = get_kernel_shellcode_u64_result(
         [](asmjit::a64::Assembler *a, asmjit::a64::GpX &result) -> KModErr {
             result = asmjit::a64::regs::x10;
-            export_symbol::get_current(a, asmjit::a64::regs::x10);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
             return KModErr::OK;
         },
         current_task);
@@ -515,7 +515,7 @@ KModErr get_file_f_cred_offset(uint32_t &offset) {
     RETURN_IF_ERROR(get_kernel_shellcode_u64_result(
         [](asmjit::a64::Assembler *a, asmjit::a64::GpX &result) -> KModErr {
             result = asmjit::a64::regs::x10;
-            export_symbol::get_current(a, asmjit::a64::regs::x10);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, asmjit::a64::regs::x10));
             return KModErr::OK;
         },
         current_task));

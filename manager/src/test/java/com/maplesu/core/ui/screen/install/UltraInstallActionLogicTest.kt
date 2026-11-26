@@ -98,4 +98,9 @@ class UltraInstallActionLogicTest {
         assertEquals(UltraInstallRoute("init_boot"), ultraInstallRoute(UltraInstallAction.REPATCH_SDK,
             "init_boot", null, setOf("boot"), false, null))
     }
+
+    @Test fun filePatchingResolvesTheKmiComponentDuringExecution() {
+        assertEquals(UltraInstallRoute("init_boot"), ultraInstallRoute(UltraInstallAction.FIRST_PATCH,
+            "init_boot", null, null, false, "ULTRA_INIT_PAIRED_BOOT_REQUIRED"))
+    }
 }

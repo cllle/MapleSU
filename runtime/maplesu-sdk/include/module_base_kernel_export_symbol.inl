@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <atomic>
 #include "kernel_module_kit_umbrella.h"
 #include "module_math.h"
@@ -80,47 +80,60 @@ inline void emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(Assembler* a, G
 	kallsyms_lookup_huawei_failed = false;
 }
 
+inline KModErr get_current_checked(Assembler* a, GpX out_regs) {
+    CurrentTaskModel model;
+    RETURN_IF_ERROR(resolve_current_task_model(model));
+    if (model.source == CurrentTaskSource::sp_el0_task ||
+        model.source == CurrentTaskSource::sp_el0_thread_info) {
+        a->mrs(out_regs, SysReg::encode(3, 0, 4, 1, 0));
+        emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(a, out_regs);
+        if (model.source == CurrentTaskSource::sp_el0_thread_info)
+            a->ldr(out_regs, ptr(out_regs, 16));
+        return KModErr::OK;
+    }
+    if (model.source != CurrentTaskSource::stack_thread_info ||
+        !model.thread_size || (model.thread_size & (model.thread_size - 1)))
+        return KModErr::ERR_MODULE_OFFSET_NOT_FOUND;
+    a->mov(out_regs, sp);
+    a->and_(out_regs, out_regs, Imm(~(uint64_t(model.thread_size) - 1)));
+    a->ldr(out_regs, ptr(out_regs, 16));
+    return KModErr::OK;
+}
+
+inline void invalidate_current_assembler(Assembler* a) {
+    // reportError only notifies a handler; it does not invalidate stored code.
+    // Reset before notification so even a throwing/inherited handler observes
+    // every attached emitter detached and all holder sections/fixups discarded.
+    auto* handler = a->errorHandler();
+    if (auto* code = a->code()) code->reset(asmjit::ResetPolicy::kHard);
+    if (handler) handler->handleError(asmjit::kErrorInvalidState,
+        asmjit::DebugUtils::errorAsString(asmjit::kErrorInvalidState), a);
+}
+
 inline void get_current(Assembler* a, GpX out_regs) {
-	constexpr uint64_t kThreadSize = 0x4000;
-	struct thread_info {
-		uint64_t flags;
-		uint64_t addr_limit;
-		uint64_t task;
-	};
-	Label label_error = a->newLabel();
-	uint32_t sp_el0_id = SysReg::encode(3, 0, 4, 1, 0);
-	if (kernel_module::is_CONFIG_THREAD_INFO_IN_TASK()) {
-		a->mrs(out_regs, sp_el0_id);
-		emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(a, out_regs);
-		return;
-	}
-	if (kernel_module::is_CURRENT_FROM_SP_EL0_THREAD_INFO()) {
-		a->mrs(out_regs, sp_el0_id);
-		emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(a, out_regs);
-		a->ldr(out_regs, ptr(out_regs, offsetof(thread_info, task)));
-		return;
-	}
-	a->mov(out_regs, sp);
-	a->and_(out_regs, out_regs, Imm((uint64_t)~(kThreadSize - 1)));
-	a->ldr(out_regs, ptr(out_regs, offsetof(thread_info, task)));
+    // Preserve the public void ABI; checked callers retain their exact KModErr.
+    if (is_failed(get_current_checked(a, out_regs))) invalidate_current_assembler(a);
+}
+
+inline KModErr get_current_thread_info_checked(Assembler* a, GpX out_regs) {
+    CurrentTaskModel model;
+    RETURN_IF_ERROR(resolve_current_task_model(model));
+    if (model.source == CurrentTaskSource::sp_el0_task ||
+        model.source == CurrentTaskSource::sp_el0_thread_info) {
+        a->mrs(out_regs, SysReg::encode(3, 0, 4, 1, 0));
+        emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(a, out_regs);
+        return KModErr::OK;
+    }
+    if (model.source != CurrentTaskSource::stack_thread_info ||
+        !model.thread_size || (model.thread_size & (model.thread_size - 1)))
+        return KModErr::ERR_MODULE_OFFSET_NOT_FOUND;
+    a->mov(out_regs, sp);
+    a->and_(out_regs, out_regs, Imm(~(uint64_t(model.thread_size) - 1)));
+    return KModErr::OK;
 }
 
 inline void get_current_thread_info(Assembler* a, GpX out_regs) {
-	constexpr uint64_t kThreadSize = 0x4000;
-	Label label_error = a->newLabel();
-	uint32_t sp_el0_id = SysReg::encode(3, 0, 4, 1, 0);
-	if (kernel_module::is_CONFIG_THREAD_INFO_IN_TASK()) {
-		a->mrs(out_regs, sp_el0_id);
-		emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(a, out_regs);
-		return;
-	}
-	if (kernel_module::is_CURRENT_FROM_SP_EL0_THREAD_INFO()) {
-		a->mrs(out_regs, sp_el0_id);
-		emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(a, out_regs);
-		return;
-	}
-	a->mov(out_regs, sp);
-	a->and_(out_regs, out_regs, Imm((uint64_t)~(kThreadSize - 1)));
+    if (is_failed(get_current_thread_info_checked(a, out_regs))) invalidate_current_assembler(a);
 }
 
 static const std::vector<std::string> copy_from_user_symbol_names = {

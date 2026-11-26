@@ -27,7 +27,7 @@ static unsigned char *msu_sdk_lookup_target = msu_sdk_lookup_template;
 static unsigned char *msu_sdk_avc_end = msu_sdk_avc_template + 16;
 static unsigned char *msu_sdk_avc_branch = msu_sdk_avc_template + 4;
 static unsigned char *msu_sdk_avc_result = msu_sdk_avc_template + 8;
-static char root_key[49];
+static char root_key[49], original_root_key[49];
 static unsigned char probe[64];
 static uptr arena, kernel_base, native_execve, avc_result;
 static u32 state, stage_busy, sdk_kallsyms = 0x400, sdk_execve_offset = 0x600;
@@ -47,6 +47,8 @@ extern u64 dispatch(unsigned char *);
 extern int sdk_image_qualified(void);
 extern void *allocate_range(unsigned long,unsigned long,uptr,uptr,unsigned int,
     struct sdk_pgprot,unsigned long,int,const void *);
+static void *(*allocate_segmented_range)(unsigned long,unsigned long,unsigned int,unsigned int,
+    unsigned int,unsigned int,uptr,uptr,unsigned int,struct sdk_pgprot,unsigned long,int,const void *);
 extern int memory_nx(uptr,int),memory_rw(uptr,int),memory_ro(uptr,int),memory_x(uptr,int);
 extern void random_bytes(void *,unsigned long),flush_code(uptr,uptr),release(void *);
 extern int register_kprobe(void *);

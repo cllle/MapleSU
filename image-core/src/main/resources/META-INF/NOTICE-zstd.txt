@@ -1,0 +1,18 @@
+qyntrax-unzstd
+Copyright 2026 Mbuodile Obiosio
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+
+This product includes software derived from Aircompressor
+(https://github.com/airlift/aircompressor), licensed under the Apache License,
+Version 2.0. The zstd decoder in this project is a port of Aircompressor's zstd
+decoder, with its `sun.misc.Unsafe`-based memory access replaced by `VarHandle`
+and plain array operations. Modified files carry notices of the changes.
+
+The Zstandard (zstd) compression format was created by Yann Collet / Meta
+Platforms, Inc. (https://facebook.github.io/zstd/).
+
+MapleSU modifications (2026-11-16): decoder-only sources relocated to dev.maplesu.image.zstd; whole-frame parsing, streaming and hashing omitted; SafeAccess uses portable byte-array operations instead of VarHandle; per-frame output and window bounds enforced by MapleSU; match distances constrained to the declared window.
+Upstream commit: 8d93c306e8a988b1c7f57fe13e3e2ec3dfa24e9c (mbobiosio/unzstd).

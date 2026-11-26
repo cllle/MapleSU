@@ -31,6 +31,7 @@ internal object UltraKernelManagerClaimCarrier {
     private data class Relocation(val target: Int, val kind: Int, val value: Int)
     private data class Payload(val sections: List<Section>, val imports: List<Int>,
                                val relocations: List<Relocation>, val entry: Int, val memory: Int,
+                               val kernelMemoryBytes: Int,
                                val exports: Map<String, Int>, val layouts: Map<String, IntArray>,
                                 val importNames: Set<String>, val residentHost: ResidentHost? = null,
                                 val runtimeLayout: RuntimeLayout? = null,
@@ -77,7 +78,11 @@ internal object UltraKernelManagerClaimCarrier {
         val release = if (execmem) symbol("execmem_free") else symbol("module_memfree")
         val permissionNames = listOf("set_memory_nx", "set_memory_rw", "set_memory_ro", "set_memory_x")
         val permissions = permissionNames.map { symbol(it) }
-        val elf = verifyTaskProfile(bindRuntimeProfiles(bindRuntimeLayout(parseElf(payload.elf, symbols, kernel.size),
+        val dataSignatures = payload.referenceAbi?.let {
+            require(it.dataSignatures.keys == it.dataImports) { "ULTRA_KERNEL_RESIDENT_REFERENCE_DATA_IMPORTS" }
+            it.dataSignatures
+        }.orEmpty()
+        val elf = verifyTaskProfile(bindRuntimeProfiles(bindRuntimeLayout(parseElf(payload.elf, symbols, kernel, dataSignatures),
             payload.runtimeLayout, kernel, symbols), payload.runtimeProfiles, kernel, profileSymbols, records),
             payload.referenceAbi?.taskProfile, kernel, symbols, profileSymbols)
         val dynamicFields = elf.boundFields
@@ -232,7 +237,9 @@ internal object UltraKernelManagerClaimCarrier {
             (if (resident) residentBindingBytes else 0) + cacheAdapterBytes + legacyBridgeBytes)
         val placed = plan(kernel, symbols, records, payload.elf, payload.bootstrap, payload.materializer,
             permissions = payload.permissions, continuation = continuation, deploymentRecord = deploymentRecord,
-            runtimeLayout = payload.runtimeLayout, runtimeProfiles = payload.runtimeProfiles, profileSymbols = profileSymbols, sessionAbi = payload.sessionAbi)
+            runtimeLayout = payload.runtimeLayout, runtimeProfiles = payload.runtimeProfiles, profileSymbols = profileSymbols,
+            sessionAbi = payload.sessionAbi, dataSignatures = dataSignatures, bootEventsAbi = payload.bootEventsAbi,
+            ksuCompatAbi = payload.ksuCompatAbi)
         val relayAt = requireNotNull(placed.continuationOffset)
         val relay = relay(relayAt, placed.bootstrapOffset, placed.anchorOffset, gate.offset.toInt())
         check(relay.size == RELAY_BYTES) { "ULTRA_KERNEL_MANAGER_CLAIM_RELAY_SIZE" }
@@ -269,7 +276,12 @@ internal object UltraKernelManagerClaimCarrier {
                     check(it.size == BOOT_START_BYTES) { "ULTRA_KERNEL_RESIDENT_BOOT_START_SIZE" }
                 }.copyInto(continuation, RELAY_BYTES + bootBytes)
             val append = records.single { it.role == "free_initmem+0x0" }
-            require(append.replacement.size in setOf(58, 62)) { "ULTRA_KERNEL_RESIDENT_APPEND_BYTES" }
+            require(append.replacement.size in setOf(58, 62, 92)) { "ULTRA_KERNEL_RESIDENT_APPEND_BYTES" }
+            if (append.replacement.size == 92) {
+                val extended = ByteBuffer.wrap(append.replacement).order(ByteOrder.LITTLE_ENDIAN)
+                require(extended.getInt(4) == 0 && extended.getInt(62) == 0x3436534d &&
+                    (extended.getShort(66).toInt() and 0xffff) == 88) { "ULTRA_KERNEL_RESIDENT_APPEND64_HEADER" }
+            }
             val binding = buffer(residentBindingBytes).apply {
                 if (deploymentRecord != null) { putInt(1); putInt(residentBindingBytes) }
                 for (value in intArrayOf(storage.slotOffset, storage.imageMemoryBytes,
@@ -487,6 +499,9 @@ internal object UltraKernelManagerClaimCarrier {
         runtimeProfiles: UltraKernelManagerClaimPayload.RuntimeProfilesFacts? = null,
         profileSymbols: UltraKernelSymbols = symbols,
         sessionAbi: UltraKernelManagerClaimPayload.SessionAbiFacts? = null,
+        dataSignatures: Map<String, String> = emptyMap(),
+        bootEventsAbi: UltraKernelManagerClaimPayload.BootEventsAbiFacts? = null,
+        ksuCompatAbi: UltraKernelManagerClaimPayload.KsuCompatAbiFacts? = null,
     ): Plan {
         require(symbols.imageSize == kernel.size) { "ULTRA_KERNEL_MANAGER_CLAIM_IMAGE_SIZE" }
         require(bootstrap.isNotEmpty() && bootstrap.size % 4 == 0 &&
@@ -495,9 +510,11 @@ internal object UltraKernelManagerClaimCarrier {
             (continuation == null || continuation.isNotEmpty() && continuation.size % 4 == 0) &&
             bootPolicy.size == 96) { "ULTRA_KERNEL_MANAGER_CLAIM_CODE_SIZE" }
         deploymentRecord?.let(UltraKernelDeploymentNamespace::decode)
-        val payload = bindRuntimeProfiles(bindRuntimeLayout(parseElf(payloadElf, symbols, kernel.size),
+        val payload = bindRuntimeProfiles(bindRuntimeLayout(parseElf(payloadElf, symbols, kernel, dataSignatures),
             runtimeLayout, kernel, symbols), runtimeProfiles, kernel, profileSymbols, occupiedRecords)
         verifySessionAbi(payload, sessionAbi, kernel, symbols)
+        verifyBootEventsAbi(payload, bootEventsAbi, kernel, symbols)
+        verifyKsuCompatAbi(payload, ksuCompatAbi, kernel, symbols)
         val profileSpans = runtimeProfiles?.let { facts ->
             facts.names.mapIndexedNotNull { index, compiledName ->
                 val name = if (index == 0 && profileSymbols.offsetOf(compiledName) == null) "__do_execve_file" else compiledName
@@ -569,9 +586,9 @@ internal object UltraKernelManagerClaimCarrier {
             }
             val payloadCrc = CRC32().apply { payload.sections.forEach { update(it.file) } }.value
             val descriptor = buffer(descriptorBytes).apply {
-                for (value in intArrayOf(0x4355534d, 2, descriptorBytes, kernel.size, payload.memory,
+                for (value in intArrayOf(0x4355534d, 3, descriptorBytes, kernel.size, payload.memory,
                     payload.entry, payload.sections.size, chunks.size, payload.imports.size,
-                    payload.relocations.size, payloadCrc.toInt(), 0, tableAt)) putInt(value)
+                    payload.relocations.size, payloadCrc.toInt(), payload.kernelMemoryBytes, tableAt)) putInt(value)
                 for (section in payload.sections) {
                     putInt(section.offset); putInt(section.file.size); putInt(section.memory); putInt(section.flags)
                 }
@@ -693,7 +710,29 @@ internal object UltraKernelManagerClaimCarrier {
         return caves
     }
 
-    private fun parseElf(bytes: ByteArray, symbols: UltraKernelSymbols, imageSize: Int): Payload {
+    private fun parseElf(bytes: ByteArray, symbols: UltraKernelSymbols, kernel: ByteArray,
+        dataSignatures: Map<String, String>): Payload {
+        val imageSize = kernel.size
+        var kernelMemoryBytes = imageSize
+        val dataSizes by lazy {
+            UltraKernelBtf.dataObjectSizes(kernel, symbols, dataSignatures)
+                ?: error("ULTRA_KERNEL_MANAGEMENT_DATA_BTF_REQUIRED")
+        }
+        val bss by lazy {
+            fun boundary(name: String) = symbols.memoryOffsetsOf(name).singleOrNull()
+                ?: error("ULTRA_KERNEL_MANAGER_CLAIM_MEMORY_BOUNDARY:$name")
+            require(kernel.size >= 64 && UltraKernelA64.le32Bits(kernel, 56) == 0x644d5241 &&
+                UltraKernelA64.le32Bits(kernel, 24) and 1 == 0) { "ULTRA_KERNEL_MANAGER_CLAIM_MEMORY_HEADER" }
+            val memory = ByteBuffer.wrap(kernel).order(ByteOrder.LITTLE_ENDIAN).getLong(16)
+            val start = boundary("__bss_start")
+            val stop = boundary("__bss_stop")
+            require(memory in imageSize.toLong()..Int.MAX_VALUE.toLong() && boundary("_text") == 0 &&
+                boundary("_end").toLong() == memory && start >= 0 && start < stop && stop <= memory) {
+                "ULTRA_KERNEL_MANAGER_CLAIM_MEMORY_RANGE"
+            }
+            kernelMemoryBytes = memory.toInt()
+            start to stop
+        }
         val elf = Elf(bytes)
         require(bytes.size >= 64 && bytes[0] == 0x7f.toByte() && bytes[1] == 'E'.code.toByte() &&
             bytes[2] == 'L'.code.toByte() && bytes[3] == 'F'.code.toByte() &&
@@ -761,7 +800,7 @@ internal object UltraKernelManagerClaimCarrier {
                     "msu_manager_owner_watch_compiled_layout", "msu_manager_owner_compiled_layout",
                     "msu_management_compiled_layout", "msu_procattr_compiled_layout", "msu_task_state_compiled_layout",
                     "msu_credential_domain_compiled_layout", "msu_task_profile_compiled_layout", "msu_runtime_layout",
-                    "msu_su_runtime_profiles", "msu_su_session_abi_words")) continue
+                    "msu_su_runtime_profiles", "msu_su_session_abi_words", "msu_boot_events_abi_words", "msu_ksu_compat_layout")) continue
                 val address = sym.number(at + 8, 1048576)
                 require(exports.put(name, address) == null) { "ULTRA_KERNEL_RESIDENT_EXPORT_AMBIGUOUS:$name" }
                 if (name == "msu_su_runtime_profiles") {
@@ -799,12 +838,15 @@ internal object UltraKernelManagerClaimCarrier {
                         ?: error("ULTRA_KERNEL_RESIDENT_LAYOUT_RANGE:$name")
                     require(size > 0 && size % 4 == 0) { "ULTRA_KERNEL_RESIDENT_LAYOUT_SIZE:$name" }
                     if (name in setOf("msu_procattr_compiled_layout", "msu_task_state_compiled_layout",
-                            "msu_credential_domain_compiled_layout", "msu_task_profile_compiled_layout", "msu_su_session_abi_words")) {
+                            "msu_credential_domain_compiled_layout", "msu_task_profile_compiled_layout", "msu_su_session_abi_words",
+                            "msu_boot_events_abi_words", "msu_ksu_compat_layout")) {
                         val expected = when (name) {
                             "msu_procattr_compiled_layout" -> 160 to ".msu.procattr.layout"
                             "msu_task_state_compiled_layout" -> 212 to ".msu.task_state.layout"
                             "msu_task_profile_compiled_layout" -> 104 to ".msu.task_profile.layout"
                             "msu_su_session_abi_words" -> 96 to ".msu.session.abi"
+                            "msu_boot_events_abi_words" -> 152 to ".msu.boot_events.abi"
+                            "msu_ksu_compat_layout" -> 56 to ".msu.ksu-compat.layout"
                             else -> 104 to ".msu.credential_domain.layout"
                         }
                         require((tableBytes[at + 4].toInt() and 15) == 1 && address % 4 == 0 &&
@@ -930,9 +972,22 @@ internal object UltraKernelManagerClaimCarrier {
                     require(sym.half(symbolAt + 6) == 0) { "ULTRA_KERNEL_MANAGER_CLAIM_ELF_LOCAL_IMPORT" }
                     val name = elf.string(stringBytes, sym.word(symbolAt))
                     require(name.isNotEmpty()) { "ULTRA_KERNEL_MANAGER_CLAIM_ELF_IMPORT_NAME" }
+                    val type = symbolBytes[symbolAt + 4].toInt() and 15
+                    val data = name in dataSignatures
+                    // Undefined ELF imports may be NOTYPE; the reference and target BTF
+                    // supply the object identity and complete size, never the symbol name alone.
+                    require(type == 0 || type == if (data) 1 else 2) {
+                        "ULTRA_KERNEL_MANAGER_CLAIM_IMPORT_TYPE:$name"
+                    }
                     val slot = importNames.getOrPut(name) {
-                        val offset = symbols.offsetOf(name) ?: error("ULTRA_KERNEL_MANAGER_CLAIM_IMPORT_MISSING:$name")
-                        require(offset >= 0 && offset % 4 == 0 && offset <= imageSize - 4) {
+                        val offset = if (data) symbols.memoryOffsetsOf(name).singleOrNull()
+                            else symbols.offsetOf(name)
+                        if (offset == null) error("ULTRA_KERNEL_MANAGER_CLAIM_IMPORT_MISSING:$name")
+                        val size = if (data) dataSizes.getValue(name) else 4L
+                        require(offset >= 0 && offset % 4 == 0 && size in 1..Int.MAX_VALUE.toLong() &&
+                            (offset.toLong() + size <= imageSize || data && bss.let { (start, stop) ->
+                                offset >= start && offset.toLong() + size <= stop
+                            })) {
                             "ULTRA_KERNEL_MANAGER_CLAIM_IMPORT_RANGE:$name"
                         }
                         imports += offset
@@ -980,6 +1035,28 @@ internal object UltraKernelManagerClaimCarrier {
                 "ULTRA_KERNEL_SESSION_ABI_READONLY"
             }
         }
+        val bootSections = raw.filter { elf.string(nameBytes, it.name) == ".msu.boot_events.abi" }
+        require(if ("msu_boot_events_abi_words" in layouts) bootSections.size == 1 else bootSections.isEmpty()) {
+            "ULTRA_KERNEL_BOOT_EVENTS_ABI_SECTION"
+        }
+        bootSections.singleOrNull()?.let { section ->
+            require(section.kind == 1 && section.flags == 2L && section.size == 152L &&
+                exports["msu_boot_events_abi_words"]?.toLong() == section.address &&
+                relocations.none { it.target.toLong() < section.address + section.size && it.target.toLong() + 8 > section.address }) {
+                "ULTRA_KERNEL_BOOT_EVENTS_ABI_READONLY"
+            }
+        }
+        val ksuSections = raw.filter { elf.string(nameBytes, it.name) == ".msu.ksu-compat.layout" }
+        require(if ("msu_ksu_compat_layout" in layouts) ksuSections.size == 1 else ksuSections.isEmpty()) {
+            "ULTRA_KERNEL_KSU_COMPAT_ABI_SECTION"
+        }
+        ksuSections.singleOrNull()?.let { section ->
+            require(section.kind == 1 && section.flags == 2L && section.size == 56L &&
+                exports["msu_ksu_compat_layout"]?.toLong() == section.address &&
+                relocations.none { it.target.toLong() < section.address + section.size && it.target.toLong() + 8 > section.address }) {
+                "ULTRA_KERNEL_KSU_COMPAT_ABI_READONLY"
+            }
+        }
         val suTargetSections = raw.filter { elf.string(nameBytes, it.name) == ".msu.su-runtime.target" }
         require(if ("msu_su_runtime_target_facts" in layouts) suTargetSections.size == 1 else suTargetSections.isEmpty()) {
             "ULTRA_KERNEL_SU_RUNTIME_TARGET_SECTION"
@@ -992,7 +1069,8 @@ internal object UltraKernelManagerClaimCarrier {
             require(relocations.none { it.target.toLong() < target.address + target.size &&
                 it.target.toLong() + 8 > target.address }) { "ULTRA_KERNEL_SU_RUNTIME_TARGET_RELOCATION" }
         }
-        return Payload(sections, imports, relocations, entry, memoryBytes,
+        require(importNames.keys.containsAll(dataSignatures.keys)) { "ULTRA_KERNEL_RESIDENT_REFERENCE_DATA_IMPORTS" }
+        return Payload(sections, imports, relocations, entry, memoryBytes, kernelMemoryBytes,
             exports, layouts, importNames.keys.toSet(), residentHost, runtimeLayout, runtimeProfiles)
     }
 
@@ -1017,6 +1095,85 @@ internal object UltraKernelManagerClaimCarrier {
                 callback.kcfiPrefix == callback.objectKcfiType) { "ULTRA_KERNEL_SESSION_ABI_CALLBACK_PREFIX:$name" }
         }
         UltraKernelResidentAbi.verifySession(kernel, symbols, facts)
+    }
+
+    private fun verifyBootEventsAbi(payload: Payload, facts: UltraKernelManagerClaimPayload.BootEventsAbiFacts?,
+        kernel: ByteArray, symbols: UltraKernelSymbols) {
+        val words = payload.layouts["msu_boot_events_abi_words"]
+        require((words != null) == (facts != null)) { "ULTRA_KERNEL_BOOT_EVENTS_ABI_REFERENCE" }
+        if (words == null || facts == null) return
+        val section = payload.sections.single { it.name == ".msu.boot_events.abi" }
+        require(section.flags == 1 && section.offset == facts.offset && section.file.size == facts.bytes &&
+            facts.bytes == 152 && words.toList() == facts.words &&
+            UltraKernelSpec.sha256(section.file) == facts.compiledSha256 &&
+            section.file.indices.step(4).map { UltraKernelA64.le32Bits(section.file, it) } == facts.words) {
+            "ULTRA_KERNEL_BOOT_EVENTS_ABI_COMPILED_IDENTITY"
+        }
+        require(UltraKernelResidentAbi.targetConfig(kernel)["CONFIG_KPROBES"] == "y") {
+            "ULTRA_KERNEL_BOOT_EVENTS_KPROBES_REQUIRED"
+        }
+        for ((type, layout) in facts.layouts) {
+            val actual = UltraKernelBtf.selectedStructure(kernel, symbols, type, layout.members.keys)
+                ?: error("ULTRA_KERNEL_BOOT_EVENTS_ABI_BTF_REQUIRED:$type")
+            require(actual.bytes == layout.bytes && actual.members == layout.members) {
+                "ULTRA_KERNEL_BOOT_EVENTS_ABI_TARGET_EXACT:$type"
+            }
+        }
+        UltraKernelResidentAbi.verifyCfi(kernel, facts.cfiMode, facts.normalizeIntegers)
+        val signatures = facts.callbacks.values.map { it.signature }.toSet()
+        val targetTypes = if (facts.cfiMode == "kcfi") UltraKernelBtf.functionTypeids(kernel, symbols, signatures) else emptyMap()
+        for ((name, callback) in facts.callbacks) {
+            val code = payload.sections.singleOrNull { it.flags and 4 != 0 && callback.offset >= it.offset &&
+                callback.offset.toLong() + 4 <= it.offset.toLong() + it.file.size }
+                ?: error("ULTRA_KERNEL_BOOT_EVENTS_ABI_CALLBACK_ENTRY:$name")
+            require(UltraKernelBtf.memberSignature(kernel, symbols, callback.member.substringBefore('.'),
+                callback.member.substringAfter('.')) == "*" + callback.signature) {
+                "ULTRA_KERNEL_BOOT_EVENTS_ABI_CALLBACK_TARGET:$name"
+            }
+            if (facts.cfiMode == "kcfi") require(callback.offset - code.offset >= 4 &&
+                UltraKernelA64.le32Bits(code.file, callback.offset - code.offset - 4) == callback.kcfiPrefix &&
+                callback.kcfiPrefix == callback.objectKcfiType && targetTypes[callback.signature] == setOf(callback.kcfiPrefix)) {
+                "ULTRA_KERNEL_BOOT_EVENTS_ABI_CALLBACK_KCFI:$name"
+            }
+        }
+    }
+
+    private fun verifyKsuCompatAbi(payload: Payload, facts: UltraKernelManagerClaimPayload.KsuCompatAbiFacts?,
+        kernel: ByteArray, symbols: UltraKernelSymbols) {
+        val words = payload.layouts["msu_ksu_compat_layout"]
+        require((words != null) == (facts != null)) { "ULTRA_KERNEL_KSU_COMPAT_ABI_REFERENCE" }
+        if (words == null || facts == null) return
+        val section = payload.sections.single { it.name == ".msu.ksu-compat.layout" }
+        require(section.flags == 1 && section.offset == facts.offset && section.file.size == facts.bytes &&
+            facts.bytes == 56 && words.toList() == facts.words &&
+            UltraKernelSpec.sha256(section.file) == facts.compiledSha256 &&
+            section.file.indices.step(4).map { UltraKernelA64.le32Bits(section.file, it) } == facts.words) {
+            "ULTRA_KERNEL_KSU_COMPAT_ABI_COMPILED_IDENTITY"
+        }
+        for ((type, layout) in facts.layouts) {
+            val actual = UltraKernelBtf.selectedStructure(kernel, symbols, type, layout.members.keys)
+                ?: error("ULTRA_KERNEL_KSU_COMPAT_ABI_BTF_REQUIRED:$type")
+            require(actual.bytes == layout.bytes && actual.members == layout.members) {
+                "ULTRA_KERNEL_KSU_COMPAT_ABI_TARGET_EXACT:$type"
+            }
+        }
+        UltraKernelResidentAbi.verifyCfi(kernel, facts.cfiMode, facts.normalizeIntegers)
+        val signatures = facts.callbacks.values.map { it.signature }.toSet()
+        val targetTypes = if (facts.cfiMode == "kcfi") UltraKernelBtf.functionTypeids(kernel, symbols, signatures) else emptyMap()
+        for ((name, callback) in facts.callbacks) {
+            val code = payload.sections.singleOrNull { it.flags and 4 != 0 && callback.offset >= it.offset &&
+                callback.offset.toLong() + 4 <= it.offset.toLong() + it.file.size }
+                ?: error("ULTRA_KERNEL_KSU_COMPAT_ABI_CALLBACK_ENTRY:$name")
+            require(UltraKernelBtf.memberSignature(kernel, symbols, callback.member.substringBefore('.'),
+                callback.member.substringAfter('.')) == "*" + callback.signature) {
+                "ULTRA_KERNEL_KSU_COMPAT_ABI_CALLBACK_TARGET:$name"
+            }
+            if (facts.cfiMode == "kcfi") require(callback.offset - code.offset >= 4 &&
+                UltraKernelA64.le32Bits(code.file, callback.offset - code.offset - 4) == callback.kcfiPrefix &&
+                callback.kcfiPrefix == callback.objectKcfiType && targetTypes[callback.signature] == setOf(callback.kcfiPrefix)) {
+                "ULTRA_KERNEL_KSU_COMPAT_ABI_CALLBACK_KCFI:$name"
+            }
+        }
     }
 
     private fun bindRuntimeLayout(payload: Payload, facts: UltraKernelManagerClaimPayload.RuntimeLayoutFacts?,

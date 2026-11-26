@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 
@@ -13,7 +14,7 @@ parser.add_argument("--stdlib", required=True)
 parser.add_argument("--output", required=True, type=Path)
 args = parser.parse_args()
 fixture = Path(__file__).resolve().parent
-repo = fixture.parents[4]
+repo = Path(os.environ.get("MAPLESU_REMOVAL_SOURCE", fixture.parents[4])).resolve()
 out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 sources = [repo / "manager/src/main/java/dev/maplesu/manager/modules/RootModuleTree.kt",
@@ -46,5 +47,5 @@ finally:
     stable = all(digest(Path(i["path"])) == i["sha256"] for i in inputs)
     result = {"passed": len(commands) == 2 and all(c["exitCode"] == 0 for c in commands) and stable,
               "sourceInputsStable": stable, "commands": commands,
-              "scope": "Two complete production Kotlin TUs, actual generated shell and Linux inode rename/removal; explicit compile-only ModuleScriptRunner/ModuleTree boundaries; module-sync uses host sync -f plus one injected failure. No Android process, real Root transport, APK, device, power-loss or cross-process revocation."}
+              "scope": "Two complete production Kotlin TUs, actual generated shell and Linux inode rename/removal; explicit compile-only ModuleScriptRunner/ModuleTree boundaries; module-sync uses host sync -f plus one injected failure; BusyBox flock entry delegates to real host flock; module-initrc is an explicit successful platform substitute recording calls, not initrc execution. No Android process, real Root transport, APK, device, power-loss or cross-process revocation."}
     (out / "RESULT.json").write_text(json.dumps(result, indent=2), encoding="utf-8")

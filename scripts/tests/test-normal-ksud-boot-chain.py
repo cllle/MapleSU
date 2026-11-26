@@ -17,6 +17,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     sources = {}
     records = {}
+    lifecycles = {}
     for tree in ("upstream", "applied"):
         base = ROOT / "third_party/kernelsu" / tree
         paths = ["kernel/runtime/ksud_integration.c", "kernel/core/init.c",
@@ -65,12 +66,27 @@ def main():
         assert "ksu_syscall_table_hook(__NR_fstat" in integration
         assert 'strcmp(dpath, "/system/etc/init/hw/init.rc")' in integration
         lifecycle = text["userspace/ksud/src/init_event.rs"]
+        lifecycles[tree] = lifecycle
         late = text["userspace/ksud/src/late_load.rs"]
         records[tree] = {"initEvents": events,
             "lifecycleSha256": hashlib.sha256(lifecycle.encode()).hexdigest(),
             "lateLoadStages": re.findall(r'init_event::run_stage\("([^"]+)"', late),
             "lifecycleStages": re.findall(r'run_stage\("([^"]+)"', lifecycle)}
-    assert records["upstream"] == records["applied"]
+    patch_path = ROOT / "third_party/kernelsu/scripts/patch_defs_module_install_transaction.py"
+    patch_bytes = patch_path.read_bytes()
+    sources[patch_path.relative_to(ROOT).as_posix()] = hashlib.sha256(patch_bytes).hexdigest()
+    replacements = []
+    for node in ast.walk(ast.parse(patch_bytes.decode("utf-8-sig"))):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "replace_once":
+            if len(node.args) == 3 and isinstance(node.args[0], ast.Constant) and node.args[0].value == "userspace/ksud/src/init_event.rs":
+                replacements.append((ast.literal_eval(node.args[1]), ast.literal_eval(node.args[2])))
+    assert len(replacements) == 1, "expected exactly one selected lifecycle patch"
+    before, after = replacements[0]
+    assert lifecycles["upstream"].count(before) == 1, "lifecycle patch preimage changed"
+    expected_lifecycle = lifecycles["upstream"].replace(before, after, 1)
+    assert lifecycles["applied"] == expected_lifecycle, "lifecycle differs from the selected transaction patch"
+    for key in ("initEvents", "lateLoadStages", "lifecycleStages"):
+        assert records["upstream"][key] == records["applied"][key], key
     result = {"passed": True, "scope": "Source-level native boot chain and event identity; no kernel/init execution",
         "deviceAccess": False, "managerProcessRequiredByEventCommands": False,
         "sourceSha256": sources, "chains": records,

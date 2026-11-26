@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #define _GNU_SOURCE
 #include "handoff.h"
+#include "legacy_direct_loader.h"
 #include "../../identity/kernel/manager_deployment_namespace.h"
 
 #include <errno.h>
@@ -124,14 +125,14 @@ static void load_bridge_once(void) {
     }
     const int valid_parameters = read_parameters(parameters);
     const int valid_deployment = read_deployment(parameters);
-    // The bridge must satisfy the target kernel's normal module loading contract.
-    // Never force a version/signature, rewrite symbols, or retry an accepted load.
-    const long loaded = valid_parameters && valid_deployment ? syscall(SYS_finit_module, fd, parameters, 0) : 0;
+    // Ordinary imports retain normal loading. Explicit legacy direct calls use
+    // pinned-KSU SHN_ABS binding; signature/version failures are never retried.
+    const long loaded = valid_parameters && valid_deployment ? msu_load_bridge_fd(fd, parameters) : 0;
     const int load_error = loaded < 0 ? errno : 0;
     clear_parameters(parameters, sizeof(parameters));
     const int closed = close(fd);
     const int close_error = closed < 0 ? errno : 0;
-    if (load_error) report_failure("finit_module", path, load_error);
+    if (load_error) report_failure("load_module", path, load_error);
     if (close_error) report_failure("close", path, close_error);
 }
 

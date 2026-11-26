@@ -1,6 +1,6 @@
 {
   "schema": "maplesu-libzstd-compressed-fixtures/1",
-  "pythonModule": "compression.zstd",
+  "pythonModule": "C:\\Python314\\Lib\\compression\\zstd\\__init__.py",
   "libzstdVersion": "1.5.7",
   "productionJavaUsed": false,
   "generatorSha256": "1fb581034db35207922b0836b45629551abfabed4f4d45ac2703c33ee6718bd6",

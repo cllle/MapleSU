@@ -434,11 +434,8 @@ class InstallerPartitionService : RootService() {
         if (modeRootBridgeState.isInitialized()) modeRootBridgeState.value.withInstallLock(taskId, action) else action()
 
     /**
-     * Partition writes are refused when this service was started by a jailbreak transient, and
-     * only then: every other origin may write. The refusal happens here, before any file is opened
-     * for writing, so it also covers a direct binder call that never went through the UI. The
-     * in-service kernel proof is no longer consulted on this path (it selects the root channel
-     * only), so an absent proof cannot block a user-initiated flash.
+     * Authenticate the current Manager and actual root service before entering the transaction.
+     * Ancestor command names do not establish or revoke the caller's installation authority.
      */
     private fun writeOperation(action: () -> Bundle): Bundle = callerVerifier.withCallingManager {
         InstallerModeGate.refusal()?.let { throw IllegalStateException(it) }
@@ -459,8 +456,8 @@ class InstallerPartitionService : RootService() {
 
     /**
      * Mode-switch write entry. Order stays fixed by 02-switch-contract §5.4: gate first (never
-     * write an FD before the gate), then in-process exclusion; install.lock is taken by the
-     * transaction. The gate itself now refuses only a jailbreak origin.
+     * write an FD before the root check), then in-process exclusion; install.lock is taken by the
+     * transaction. The same Manager/root identity applies to every available transport.
      */
     private fun modeSwitchWrite(switchId: String, action: () -> Bundle): Bundle =
         callerVerifier.withCallingManager {

@@ -105,7 +105,8 @@ KModErr PatchCurrent::set_current_root(uint32_t task_field_offset) {
     aarch64_asm_ctx ctx = init_aarch64_asm();
     Assembler* a = ctx.assembler();
     kernel_module::arm64_module_asm_func_start(a);
-    kernel_module::export_symbol::get_current(a, x12);
+    RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, x12));
+    RETURN_IF_ERROR(kernel_module::export_symbol::get_current_thread_info_checked(a, x13));
     a->ldr(x14, ptr(x12, m_cred_offset));
     a->add(x14, x14, Imm(usage_size));
     a->str(xzr, ptr(x14).post(8));
@@ -114,23 +115,9 @@ KModErr PatchCurrent::set_current_root(uint32_t task_field_offset) {
     a->str(xzr, ptr(x14).post(8));
     a->str(wzr, ptr(x14));
     a->mov(x15, Imm(2048));
-    if (kernel_module::is_CONFIG_THREAD_INFO_IN_TASK()) {
-        a->ldaxr(x14, ptr(x12));
-        a->bic(x14, x14, x15);
-        a->stlxr(x15, x14, ptr(x12));
-    } else if (kernel_module::is_CURRENT_FROM_SP_EL0_THREAD_INFO()) {
-        a->mrs(x13, Imm(49672));
-        kernel_module::export_symbol::emit_huawei_kti_add_ce72c7e634f27712ee84f3dd5e8e0ec9(a, x13);
-        a->ldaxr(x14, ptr(x13));
-        a->bic(x14, x14, x15);
-        a->stlxr(x15, x14, ptr(x13));
-    } else {
-        a->mov(x13, sp);
-        a->and_(x13, x13, Imm(uint64_t(-16384)));
-        a->ldaxr(x14, ptr(x13));
-        a->bic(x14, x14, x15);
-        a->stlxr(x15, x14, ptr(x13));
-    }
+    a->ldaxr(x14, ptr(x13));
+    a->bic(x14, x14, x15);
+    a->stlxr(x15, x14, ptr(x13));
     a->str(wzr, ptr(x12, task_field_offset));
     kernel_module::arm64_module_asm_func_end(a);
     const auto bytes = aarch64_asm_to_bytes(a);
@@ -172,7 +159,7 @@ KModErr PatchCurrent::set_current_caps(const kernel_module::caps_info& caps) {
     aarch64_asm_ctx ctx = init_aarch64_asm();
     Assembler* a = ctx.assembler();
     kernel_module::arm64_module_asm_func_start(a);
-    kernel_module::export_symbol::get_current(a, x12);
+    RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, x12));
     a->ldr(x13, ptr(x12, m_cred_offset));
     aarch64_asm_mov_x(a, x14, offset);
     a->add(x13, x13, x14);

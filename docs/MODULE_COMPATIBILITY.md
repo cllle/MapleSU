@@ -1,14 +1,14 @@
 # 模块兼容判定
 
-MapleSU_Ultra 沿用原 SKRoot(Pro) 原生模块 ABI，现有模块保留 ZIP、入口和 ID。[`UltraModuleCompatibilityRegistry`](../manager/src/main/java/dev/maplesu/manager/modules/compat/UltraModuleCompatibilityRegistry.kt) 保存固定兼容记录，Manager 按包身份、SDK、内核和请求动作在本地完成判定。
+模块包通过静态检查后，仍需按实际 SDK 与内核组合判断兼容性。`ProModuleCompatibilityRegistry` 保存固定记录；判定输入包括包身份、SDK、内核和请求动作，不依赖远程服务。
 
 ## 三种结果
 
 | 结果 | 行为 |
 | --- | --- |
 | `KNOWN_INCOMPATIBLE` | 在宿主检查、安装或 WebUI SDK 调用前拦截本次请求，保留原因码 |
-| `VERIFIED` | 命中记录中的设备组合、SDK 身份与动作，显示该动作的通过结果 |
-| `UNVERIFIED` | 当前组合或动作没有匹配记录，返回诊断信息并沿用该入口的处理流程 |
+| `VERIFIED` | 仅对记录中实际验收通过的动作和设备组合标记通过 |
+| `UNVERIFIED` | 保持未验证状态，不把静态识别或入口返回成功当作功能兼容 |
 
 包身份同时比较归档 SHA-256、原生成员 SHA-256 和固定模块 ID。显示版本用于诊断，同一版本号也可能对应不同字节。
 
@@ -28,25 +28,14 @@ MapleSU_Ultra 沿用原 SKRoot(Pro) 原生模块 ABI，现有模块保留 ZIP、
 | 记录变体 | `k22` |
 | boot SHA-256 | `47aa147acbe3edf8e58ce60d334ad4c4b26cad26b5cb93aa6acb59a67fdd5f59` |
 
-该记录对应目录回调返回约定、进程回调类型与内核 BTF 的差异，以及 Hook 句柄和卸载回执的处理问题；`verifiedScopes` 为空，匹配结果按固定不兼容范围处理。
+记录中的不兼容原因涉及目录回调返回约定、进程回调参数和返回类型与内核 BTF 不一致，以及 Hook 句柄回收和卸载回执缺失。`verifiedScopes` 保持为空，没有任何动作由此取得实测通过状态。
 
-`k21` 以同一基础内核变体列入范围，并返回 `KERNEL_VARIANT_OUT_OF_VERIFIED_SCOPE`。其他 release、SDK 或变体继续按各自匹配结果处理。
+`k21` 仅作为已核对同一基础内核的变体列入推断范围，并保留 `KERNEL_VARIANT_OUT_OF_VERIFIED_SCOPE` 注意码。未知 release、SDK 或变体按现有匹配规则处理，维护者不从这一记录推定其他组合的结论。
 
-匹配实现见 [`UltraModuleCompatibility`](../manager/src/main/java/dev/maplesu/manager/modules/compat/UltraModuleCompatibility.kt)，包身份由 [`ModuleArchiveInspector`](../manager/src/main/java/dev/maplesu/manager/ModuleArchiveInspector.java) 和 [`MapleSuModuleMetadata`](../manager/src/main/java/dev/maplesu/manager/MapleSuModuleMetadata.java) 读取。
+以上是现有固定规则的公开说明。原始设备资料由维护者归档，本次文档整理未重新执行设备验收，也未扩大保护范围。完整匹配细节以注册表和 `ProModuleCompatibility` 的实际代码为准。
 
 ## 添加记录
 
-1. 固定 ZIP、原生成员、ID 和两份 SHA-256。
-2. 填写 SDK 版本、完整内核 release、变体及对应 boot 摘要。
-3. 按宿主检查、安装、启动、WebUI、禁用和卸载等动作填写 `verifiedScopes`，问题组合登记到 `incompatibleScope`。
-4. 添加匹配及相邻组合的回归测试，更新模块、SDK 或内核时同步核对记录。
-
-Manager 原生包识别回归命令：
-
-```shell
-python scripts/tests/test-normal-module-archive.py --out ../module-archive-tests
-```
-
-该脚本使用生产 Java 检查器运行 Kotlin/JUnit 测试，覆盖原生描述、SDK 独立标签常量、旧包混合布局与重复入口识别。
+新记录须固定原始 ZIP、库内身份与摘要，提供 SDK、内核、变体及动作的验证结果。已确认不兼容和实测通过分别记录；更新模块、SDK 或内核后重新核对。故障诊断保留首次异常、阶段和稳定错误码，公开材料去除凭据与无关设备信息。
 
 开发与投稿入口见 [Ultra 原生模块指南](ULTRA_MODULES.md)和[模块仓库指南](MODULE_REPOSITORY.md)。

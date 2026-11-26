@@ -8,8 +8,8 @@ The complete Manager build uses the native inputs retained in this repository. T
 | --- | --- | --- |
 | Application client SDK | `client/`, `consumer/` | Binder sessions, streams, cancellation and exit status |
 | Manager | `manager/` | Caller authorization, mode selection, installation and module orchestration |
-| Ultra bridge | `manager/src/main/java/dev/maplesu/manager/runtime/ultra/bridge/`, `runtime/ultra/bridge/` | Native SDK calls, request context and structured results |
-| Ultra runtime | `runtime/src/`, `runtime/ultra/` | SU sessions, authorization transactions, environment and module lifecycle |
+| Ultra bridge | `runtime/pro/bridge/` | Native SDK calls, request context and structured results |
+| Ultra runtime | `runtime/src/`, `runtime/pro/` | SU sessions, authorization transactions, environment and module lifecycle |
 | Image and installation | `image-core/`, `installer-core/`, `patch-engine/` | Image containers, patch plans, write transactions and recovery |
 | Normal backend | `third_party/kernelsu/` | KernelSU adaptation, userspace tools and kernel contract |
 
@@ -21,12 +21,13 @@ The application AAR and Ultra native module ABI have separate versioning. Native
 | --- | --- | --- |
 | Offline patch core | `patch-engine/upstream/` | Fixed source manifests in `third_party/` |
 | Runtime headers and archive | `runtime/upstream/` | Byte hashes in `release/native-inputs.json` |
-| Ultra native SDK | `runtime/maplesu-sdk/` | `SDK-RELEASE.json`, `SDK-IDENTITY.cmake` |
-| Embedded helper | `runtime/maplesu-sdk/helper/autorun_bootstrap` | Helper hash and build ID in the SDK release manifest |
-| Paired policy backend | `runtime/maplesu-sdk/backend/` | SDK release manifest and ELF build ID |
+| Ultra native SDK | `runtime/upstream-pro/` | `SDK-RELEASE.json`, `SDK-IDENTITY.cmake` |
+| Embedded helper | `runtime/upstream-pro/helper/autorun_bootstrap` | Helper hash and build ID in the SDK release manifest |
+| Paired policy backend | `runtime/upstream-pro/backend/` | SDK release manifest and ELF build ID |
 | Kernel images and symbols | `native-inputs/kernels/` | Provider contracts and retained-input hashes |
 | Policy payloads, BTF and configuration | `native-inputs/policy/` | Bundle manifest and compatibility contracts |
-| SDK maintenance baseline and entry | `runtime/maplesu-sdk/maintenance/` | Archive member comparison and paired entry identity |
+| Manager identity claim payloads | `manager/src/main/assets/ultra-manager-claim/` | Source and payload manifest, retained-input sizes and hashes |
+| SDK maintenance baseline and entry | `runtime/upstream-pro/maintenance/` | Archive member comparison and paired entry identity |
 | Normal tools and providers | `third_party/`, `jailbreak-providers/` | Component source and build manifests |
 | SELinux / libsepol | `.deps/selinux/` | `module-policy/upstream/selinux-source.json` |
 
@@ -35,45 +36,26 @@ The application AAR and Ultra native module ABI have separate versioning. Native
 Verify the paired SDK before building:
 
 ```shell
-python scripts/sync-ultra-sdk-identity.py --check
+python scripts/sync-pro-sdk-identity.py --check
 python tools/prepare_native_inputs.py --check
 python tools/build_module_policy.py --prepare-only --offline
 ```
 
 The SDK identity check validates the archive, embedded helper, paired backend, current source hashes and all six policy profiles together. Manager BuildConfig and native CMake read the same identity. AAR builds are independent of this native ABI.
 
-## Develop modules against the retained SDK
+## Manager identity claim payloads
 
-Native modules include `runtime/maplesu-sdk/include/` and link `runtime/maplesu-sdk/lib/arm64-v8a/libkernel_module_kit_static.a`. Module builds use C++17, ARM64, PIC and `-fno-rtti`; the [MapleSU_Ultra guide](ULTRA_MODULES.md) provides the complete CMake project, callbacks, WebUI and ZIP layout. Existing SKRoot(Pro) module packages retain their ABI and IDs.
+`scripts/build-pro-manager-claim.py` builds the six family-specific `claim.so` files from `runtime/pro/identity/kernel/` and the freestanding `bootstrap.bin` and `materializer.bin`. The adjacent `manifest.json` records the thirteen source hashes, all eight binary sizes and SHA-256 values, imports, entry offsets and relocation counts. `release/native-inputs.json` pins these eight binaries and the manifest together for the source-export checks. Source hashes cover the exact input bytes; preserve their recorded line endings when reproducing a build.
 
-## Maintain the SDK and paired backend
+Publish a complete set with `python scripts/build-pro-manager-claim.py --out work/manager-claim-candidate --assets manager/src/main/assets/ultra-manager-claim`. The build requires the retained DDK images and the prepared 6.18 kernel inputs named in the script; inspect its build report before refreshing the nine retained-input records. The certificate policy in `manager_claim_entry.c` pins a 772-byte Manager certificate with SHA-256 `30bafb57e3604afe93da13a1285516e043feb82b56a861a157b53ccaa27c3506` and generation 2 or later. Compare that pin with `apksigner verify --print-certs` on the signed release APK whenever updating these assets.
 
-The maintained SDK build entry is `runtime/maplesu-sdk/sdk/build.py`. Its inputs are the member records in `sdk/manifest/`, the SDK sources in `sdk/src/`, third-party source recipes in `sdk/third_party/` and the selected kernel policy sources. The frozen comparison archive and member order are retained under `maintenance/freeze/`.
+## Update the policy backend
 
-The complete SDK producer currently uses a Windows NDK host. Set `MAPLESU_NDK` to NDK `26.1.10909125`. For the six-family source build, `KERNEL_SOURCE_618`, `KERNEL_OBJTREE_618` and `KERNEL_TOOLCHAIN_618` identify the prepared 6.18 source, object tree and LLVM `usr` directory used by the Kbuild entry. Run from the repository root in PowerShell:
+1. Keep the committed SDK as the baseline. Generate a candidate bundle in a new local output directory using `scripts/build-ultra-policy-bundles.py` and the six directories in `native-inputs/policy/policy-bundles.json`.
+2. Configure `runtime/CMakeLists.txt` with NDK 26.1.10909125, ARM64, API 26 and `RelWithDebInfo`. Set `MAPLESU_PRO_SDK_DIRECTORY` to the retained SDK and `MAPLESU_POLICY_BUNDLE_SOURCE` to the candidate C++ bundle. Build `maplesu_policy_boot`.
+3. Run `scripts/rebind-pro-policy-backend.py` with the compiled `--backend`, `--entry runtime/upstream-pro/maintenance/entry`, `--source runtime/upstream-pro`, `--ndk`, a new `--build-id` and a fresh `--out` directory under `work/`. The tool checks the existing entry before pairing the candidate backend.
+4. Update delivery source hashes, bundle identity and compatibility contracts together. Generate and check the candidate identity with `scripts/sync-pro-sdk-identity.py --manifest ... --output ...`.
+5. Verify SU, authorization and revocation, boot restoration, module installation/update/disable/uninstall, WebUI, mode transitions and recovery. Preserve module ABI and compare the candidate archive members against the retained baseline.
+6. Import the matching SDK, helper, backend and maintenance entry as one change. Refresh the listed input hashes with `python tools/prepare_native_inputs.py --refresh-manifest`, then run the complete build and source-export checks in [Releasing](RELEASING.md). Add new build input paths to `release/native-inputs.json` in the same change.
 
-```powershell
-python runtime/maplesu-sdk/sdk/build.py --all --source-payloads --ndk "$env:MAPLESU_NDK" --kernel-source-618 "$env:KERNEL_SOURCE_618" --kernel-objtree-618 "$env:KERNEL_OBJTREE_618" --kernel-toolchain-618 "$env:KERNEL_TOOLCHAIN_618" --build-dir work/sdk-next --jobs 2
-```
-
-`--policy-bundle-source` selects an existing generated C++ bundle together with its Kbuild input records. The normal source path builds the bundle, source backend, helper and embedded programs before composing the 260-member archive. Outputs and the build report stay in the selected build directory.
-
-Update a generation as one change:
-
-1. Modify the maintained SDK, helper or policy sources and their member recipes.
-2. Build into a fresh output directory; keep the archive, helper, backend, kernel bundle and source identity from the same run.
-3. Import the matching headers, archive, helper and content-addressed backend. Record their paths, sizes, hashes, ELF identities and helper key-slot identity in `SDK-RELEASE.json`; record source files and ordered archive members in `SDK-SOURCES.json`.
-4. Generate the application/native identity and refresh retained input hashes:
-
-```shell
-python scripts/sync-ultra-sdk-identity.py
-python tools/prepare_native_inputs.py --refresh-manifest
-python scripts/sync-ultra-sdk-identity.py --check
-python -m unittest discover -s tools/tests -p "test_sdk_distribution.py" -v
-```
-
-5. Run the complete Manager build and module lifecycle regression: installation, update, enable/disable, boot loading, WebUI and uninstall. Match the resulting APK and runtime identity to the imported generation.
-
-The SDK distribution check compares the actual 260 archive members, source hashes, embedded helper, helper slot, backend filename/build ID and generated policy bundle. `manager/build.gradle.kts` and native CMake consume the same release identity. The application AAR retains its independent Binder API versioning.
-
-Module catalog updates follow [module repository maintenance](MODULE_REPOSITORY.md). Normal backend source and production artifacts remain managed under `third_party/kernelsu/`.
+Keep original component inputs, MapleSU source changes and generated outputs traceable through their manifests. Independently distributed Zygisk modules follow the [module repository](MODULE_REPOSITORY.md) process.

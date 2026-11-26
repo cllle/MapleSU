@@ -7,7 +7,7 @@ import kotlinx.serialization.json.*
 internal object UltraKernelSuComponentMetadata {
     private val objects = setOf("su_install_registry", "su_profile_apply", "su_profile_namespace", "su_profile_execution", "su_profile_resolve")
     private val probes = setOf("manager_su_component_facts", "manager_su_profile_facts", "manager_su_namespace_facts", "manager_su_component_callback_types")
-    private val types = mapOf(
+    private val baseTypes = mapOf(
         "profile" to ("msu_su_profile" to listOf("uid", "gid", "groups_count", "groups", "inheritable", "permitted", "effective", "bounding", "ambient", "selinux_domain", "namespace_mode", "flags", "use_default", "non_root", "umount_modules", "template_name")),
         "installMember" to ("msu_su_install_member" to listOf("package")),
         "verifiedInstall" to ("msu_su_verified_install" to listOf("full_uid", "installation_id", "pin", "members", "member_count")),
@@ -22,7 +22,7 @@ internal object UltraKernelSuComponentMetadata {
         "executionReceipt" to ("msu_su_execution_receipt" to listOf("phase", "credential_effects", "task_effects", "previous_seccomp_mode", "mount_namespace", "error", "completed")),
         "profileExecution" to ("msu_su_profile_execution" to listOf("lease", "before", "effects", "adopted")),
     )
-    private val functionOwners = mapOf(
+    private val baseFunctionOwners = mapOf(
         "msu_su_registry_create" to "su_install_registry",
         "msu_su_registry_refresh" to "su_install_registry",
         "msu_su_registry_rows" to "su_install_registry",
@@ -70,7 +70,7 @@ internal object UltraKernelSuComponentMetadata {
         "su.profile.adopt" to Origin("manager_management", "msu_credential_replace_profile_current", 2, "su_profile_apply", "msu_su_profile_adopt"),
         "su.task.validate" to Origin("manager_task_state", "msu_task_state_release_current", 0, "su_install_registry", "msu_su_lease_validate"),
     )
-    private val relocations = mapOf(
+    private val baseRelocations = mapOf(
         "su_install_registry" to mapOf(
             "msu_su_registry_bind_gateway" to setOf("msu_uid_gateway_bind_reader", "msu_su_fence_check_closed", "msu_su_fence_begin", "msu_su_fence_revoke", "msu_su_fence_finish", "msu_su_fence_retire"),
             "msu_su_registry_prepare_kernel" to setOf("msu_uid_gateway_prepare_kernel", "msu_su_kernel_producer_validate"),
@@ -108,6 +108,27 @@ internal object UltraKernelSuComponentMetadata {
 
     private class Verifier(val report: JsonObject, val manifest: JsonObject, val payload: JsonObject,
                            val reference: JsonObject, val elf: ByteArray, val mode: String, val normalize: Boolean) {
+        private val revision = report["schemaVersion"]?.jsonPrimitive?.intOrNull
+        private val savedProfile = revision == 4
+        private val metadataFields = listOf("name", "explicit_profile", "allow_su", "non_root_use_default", "template_present")
+        private var runtimeLayoutBound = false
+        private val types: Map<String, Pair<String, List<String>>>
+            get() {
+                val saved = if (!savedProfile) baseTypes else baseTypes + mapOf(
+                    "profile" to (baseTypes.getValue("profile").first to (baseTypes.getValue("profile").second + metadataFields)),
+                    "installEntry" to (baseTypes.getValue("installEntry").first to (baseTypes.getValue("installEntry").second + "saved_profile")))
+                return if (!runtimeLayoutBound) saved else saved + mapOf(
+                    "installEntry" to (saved.getValue("installEntry").first to (saved.getValue("installEntry").second + "source_invalidated")),
+                    "executionReceipt" to (saved.getValue("executionReceipt").first to (saved.getValue("executionReceipt").second + "task_profile")))
+            }
+        private val relocations: Map<String, Map<String, Set<String>>>
+            get() = if (!runtimeLayoutBound) baseRelocations else baseRelocations + mapOf(
+                "su_profile_execution" to mapOf(
+                    "msu_su_apply_current_detailed" to setOf("msu_su_lease_begin", "msu_su_apply_held_stages", "msu_su_lease_end"),
+                    "msu_su_apply_held_detailed" to setOf("msu_su_lease_validate", "msu_su_apply_held_stages"),
+                    "msu_su_apply_held_stages" to setOf("msu_su_profile_apply_held", "msu_task_state_release_current", "msu_task_profile_apply_current", "msu_su_lease_validate", "msu_su_profile_namespace_apply_held")))
+        private val functionOwners = if (!savedProfile) baseFunctionOwners else
+            baseFunctionOwners + ("msu_su_lease_saved_profile" to "su_install_registry")
         private fun obj(owner: JsonObject, key: String) = owner.getValue(key).jsonObject
         private fun text(owner: JsonObject, key: String) = owner.getValue(key).jsonPrimitive.content
         private fun number(owner: JsonObject, key: String) = owner.getValue(key).jsonPrimitive.long
@@ -120,11 +141,24 @@ internal object UltraKernelSuComponentMetadata {
                 text(item, "sha256").matches(Regex("[0-9a-f]{64}"))) { "ULTRA_KERNEL_SU_COMPONENT_IDENTITY" }
             return item
         }
+        private fun dependencyIdentity(value: JsonElement): JsonObject {
+            val item = value.jsonObject
+            if (!savedProfile || item["bytes"]?.jsonPrimitive?.longOrNull != 0L) return identity(value)
+            val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            require(path(item).isNotBlank() && text(item, "sha256") == empty &&
+                item["archivePath"]?.jsonPrimitive?.content == "build-dependencies/files/$empty.bin") {
+                "ULTRA_KERNEL_SU_COMPONENT_DEPENDENCY_IDENTITY"
+            }
+            return item
+        }
         private fun selected(value: JsonElement?) = identity(value).also { item ->
-            require(obj(manifest, "inputs").entries.singleOrNull {
+            val matches = obj(manifest, "inputs").entries.filter {
                 val key = it.key.replace('\\', '/')
                 path(item) == key || path(item).endsWith("/$key")
-            }?.value == item["sha256"]) { "ULTRA_KERNEL_SU_COMPONENT_SELECTED_SOURCE" }
+            }
+            val longest = if (savedProfile) matches.maxOfOrNull { it.key.replace('\\', '/').length } else null
+            val candidates = if (savedProfile) matches.filter { it.key.replace('\\', '/').length == longest } else matches
+            require(candidates.singleOrNull()?.value == item["sha256"]) { "ULTRA_KERNEL_SU_COMPONENT_SELECTED_SOURCE" }
         }
         private fun keys(actual: Set<String>, expected: Set<String>, complete: Boolean, kind: String) {
             require(expected.containsAll(actual) && (!complete || actual == expected)) { "ULTRA_KERNEL_SU_COMPONENT_$kind" }
@@ -147,7 +181,7 @@ internal object UltraKernelSuComponentMetadata {
             prefix + member.split('_').joinToString("") { it.replaceFirstChar(Char::uppercaseChar) }
 
         fun verify() {
-            require(text(report, "schema") == "maplesu-su-provider-abi/3" && number(report, "schemaVersion") == 3L &&
+            require(revision in setOf(3, 4) && text(report, "schema") == "maplesu-su-provider-abi/$revision" &&
                 mode in setOf("none", "kcfi")) { "ULTRA_KERNEL_SU_COMPONENT_SCHEMA" }
             require(listOf("metadataComplete", "providerComplete", "factoryBound", "lifecycleQualified", "targetQualified", "suReady")
                 .all { !flag(report, it) }) { "ULTRA_KERNEL_SU_COMPONENT_QUALIFICATION_UNBOUND" }
@@ -161,7 +195,35 @@ internal object UltraKernelSuComponentMetadata {
             selected(selection["identity"])
             val core = obj(selection, "currentCoreSourceSelection")
             val actualCore = obj(obj(reference, "coreLifecycleAbi"), "sourceSelection")
-            require(number(core, "lifecycleRevision") == 2L && core == actualCore) { "ULTRA_KERNEL_SU_COMPONENT_CORE_SOURCE" }
+            val coreSuccessors = setOf("runtimeSuccessor", "taskProfileSuccessor", "runtimeLayoutSourceSelection")
+            val baselineCore = if (savedProfile) JsonObject(actualCore.filterKeys { it !in coreSuccessors }) else actualCore
+            require(number(core, "lifecycleRevision") == 2L && core == baselineCore) { "ULTRA_KERNEL_SU_COMPONENT_CORE_SOURCE" }
+            if (savedProfile) {
+                val freeze = obj(obj(reference, "managementAbi"), "upstreamSourceFreeze")
+                val task = reference["taskProfileAbi"]?.jsonObject?.get("implementation")?.jsonObject
+                    ?.get("sourceSuccessor")?.jsonObject
+                require((actualCore["runtimeSuccessor"] != null) == (freeze["coreRuntimeEvolution"] != null) &&
+                    (actualCore["taskProfileSuccessor"] != null) == (task != null) &&
+                    (actualCore["runtimeLayoutSourceSelection"] != null) == (freeze["runtimeLayoutEvolution"] != null)) {
+                    "ULTRA_KERNEL_SU_COMPONENT_CORE_SUCCESSOR_SET"
+                }
+                actualCore["runtimeSuccessor"]?.let { successor ->
+                    require(successor == freeze["coreRuntimeEvolution"] &&
+                        same(selected(successor.jsonObject["identity"]), selected(obj(freeze, "coreRuntimeEvolution")["identity"]))) {
+                        "ULTRA_KERNEL_SU_COMPONENT_CORE_RUNTIME_SUCCESSOR"
+                    }
+                }
+                actualCore["taskProfileSuccessor"]?.let { successor ->
+                    require(same(selected(successor), selected(task?.get("identity")))) {
+                        "ULTRA_KERNEL_SU_COMPONENT_CORE_TASK_SUCCESSOR"
+                    }
+                }
+                actualCore["runtimeLayoutSourceSelection"]?.let { successor ->
+                    require(same(selected(successor), selected(obj(freeze, "runtimeLayoutEvolution")["identity"]))) {
+                        "ULTRA_KERNEL_SU_COMPONENT_CORE_LAYOUT_SUCCESSOR"
+                    }
+                }
+            }
             val provenance = obj(selection, "ownerProvenance")
             selected(provenance["sourceSelectionIdentity"])
             val historicalCore = selected(provenance["componentCoreFreezeIdentity"])
@@ -191,15 +253,16 @@ internal object UltraKernelSuComponentMetadata {
             require(rows.size == expectedPaths.size && rows.map { text(it, "logicalPath") }.toSet() == expectedPaths &&
                 selection.getValue("nativeTUs").jsonArray.map { it.jsonPrimitive.content }.toSet() == objects.map { "$root$it.c" }.toSet() &&
                 selection.getValue("nativeTUs").jsonArray.size == objects.size) { "ULTRA_KERNEL_SU_COMPONENT_SOURCE_PATHS" }
-            val snapshots = rows.associate { row ->
+            val parentSnapshots = rows.associate { row ->
                 val logical = text(row, "logicalPath")
-                val after = selected(row["snapshotIdentity"])
+                val after = if (savedProfile) identity(row["snapshotIdentity"]) else selected(row["snapshotIdentity"])
                 val source = identity(row["ownerSourceIdentity"])
                 require(same(source, after) && path(source).endsWith("/$logical") && path(after).endsWith("/$logical")) {
                     "ULTRA_KERNEL_SU_COMPONENT_AFTER_IMAGE"
                 }
                 logical.substringAfterLast('/') to after
             }
+            val snapshots = if (savedProfile) successorSources(selection, rows, parentSnapshots) else parentSnapshots
             require(snapshots.values.map(::path).toSet().size == rows.size) { "ULTRA_KERNEL_SU_COMPONENT_SOURCE_ALIAS" }
             val history = obj(selection, "readerBindingHistory")
             require(!flag(history, "qualified") && same(selected(history["sourceIdentity"]), identity(history["ownerIdentity"]))) {
@@ -221,7 +284,7 @@ internal object UltraKernelSuComponentMetadata {
             val objectIds = arrays("objectIdentities", names.map { "$it.o" }.toSet(), complete)
             val commands = arrays("commandIdentities", names.map { ".$it.o.cmd" }.toSet(), complete)
             val receipts = arrays("dependencyReceiptIdentities", names.map { "$it.json" }.toSet(), complete)
-            val dependencies = report.getValue("inlineDependencies").jsonArray.map(::identity)
+            val dependencies = report.getValue("inlineDependencies").jsonArray.map(::dependencyIdentity)
             for ((name, item) in sources) if (name in snapshots) require(same(item, snapshots.getValue(name)) &&
                 dependencies.any { same(it, item) }) { "ULTRA_KERNEL_SU_COMPONENT_ACTUAL_SOURCE:$name" }
             if (complete) require(dependencies.isNotEmpty() && snapshots.values.all { source -> dependencies.any { same(source, it) } }) {
@@ -293,7 +356,7 @@ internal object UltraKernelSuComponentMetadata {
                 "CONFIG_NAMESPACES", "CONFIG_CFI", "CONFIG_CFI_CLANG", "CONFIG_CFI_ICALL_NORMALIZE_INTEGERS")
             keys(config.keys, configKeys, complete, "CONFIG")
             val actualConfig = obj(obj(reference, "managementAbi"), "config")
-            require(config.all { (key, value) -> value.jsonPrimitive.content in setOf("y", "n") && value == actualConfig[key] }) {
+            require(config.all { (key, value) -> value.jsonPrimitive.content in setOf("y", "n") && value == (actualConfig[key] ?: JsonPrimitive("n")) }) {
                 "ULTRA_KERNEL_SU_COMPONENT_CONFIG_SOURCE"
             }
             if (config.isNotEmpty()) require(facts["configMultiuser"] == if (text(config, "CONFIG_MULTIUSER") == "y") 1L else 0L) {
@@ -306,11 +369,99 @@ internal object UltraKernelSuComponentMetadata {
             missing(report, true)
         }
 
+        private fun successorSources(selection: JsonObject, rows: List<JsonObject>, parents: Map<String, JsonObject>): Map<String, JsonObject> {
+            val metadata = obj(report, "profileMetadata")
+            require(text(report, "previousReportSchema") == "maplesu-su-provider-abi/3" &&
+                text(metadata, "schema") == "maplesu-su-profile-metadata-abi/1" &&
+                metadata.getValue("storedFields").jsonArray.map { it.jsonPrimitive.content } == metadataFields &&
+                flag(metadata, "savedAndEffectiveDistinct") && !flag(metadata, "consumerApplied") && !flag(metadata, "targetQualified") &&
+                text(metadata, "savedAccessor") == "msu_su_lease_saved_profile" && text(metadata, "savedAccessorLifetime") == "held lease only") {
+                "ULTRA_KERNEL_SU_COMPONENT_PROFILE_METADATA"
+            }
+            val freeze = obj(obj(reference, "managementAbi"), "upstreamSourceFreeze")
+            val successor = obj(freeze, "suProfileMetadataEvolution")
+            require(text(successor, "schema") == "maplesu-p2-su-profile-metadata-source-successor/1" &&
+                listOf("sourceOwnerFrozen", "productionWritten", "adoptedToProduction", "fullSuComplete", "targetQualified", "suReady")
+                    .all { !flag(successor, it) } && same(selected(successor["identity"]), selected(metadata["sourceSelection"])) &&
+                number(successor, "sourcePathCount") == 2L && number(successor, "totalSelectedInputs") == 10L &&
+                flag(successor, "savedAndEffectiveProfilesDistinct") &&
+                successor.getValue("profileMetadataFields").jsonArray.map { it.jsonPrimitive.content } ==
+                    listOf("name[256]", "explicit_profile", "allow_su", "non_root_use_default", "template_present")) {
+                "ULTRA_KERNEL_SU_COMPONENT_PROFILE_SUCCESSOR"
+            }
+            fun archive(value: JsonElement?): JsonObject {
+                val item = identity(value)
+                val name = path(item)
+                if (name.startsWith(".tmp/") || name.startsWith('/') || Regex("^[A-Za-z]:/").containsMatchIn(name)) return selected(item)
+                val base = path(identity(successor["identity"])).substringBeforeLast('/')
+                return selected(JsonObject(item.toMutableMap().apply { put("path", JsonPrimitive("$base/$name")) }))
+            }
+            val parent = obj(successor, "parentSelection")
+            val parentArchive = identity(parent["identity"])
+            val selectedParent = selected(selection["identity"])
+            val parentSource = obj(parent, "sourceIdentity")
+            require(same(parentArchive, selectedParent) &&
+                text(parentArchive, "origin").replace('\\', '/') == path(selectedParent) &&
+                text(parentSource, "path").replace('\\', '/') == path(selectedParent) &&
+                parentSource["sha256"] == selectedParent["sha256"]) {
+                "ULTRA_KERNEL_SU_COMPONENT_PROFILE_PARENT"
+            }
+            val units = obj(successor, "translationUnits")
+            require(flag(units, "su_install_registry.c") && number(units, "unchangedTuCount") == 4L && number(units, "newTuCount") == 0L) {
+                "ULTRA_KERNEL_SU_COMPONENT_PROFILE_TUS"
+            }
+            val root = "runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/kernel/"
+            val changed = successor.getValue("files").jsonArray.map { it.jsonObject }
+            val changedByPath = changed.associateBy { text(it, "logicalPath") }
+            require(changed.size == 2 && changedByPath.keys == setOf(root + "su_install_registry.c", root + "su_install_registry.h")) {
+                "ULTRA_KERNEL_SU_COMPONENT_PROFILE_PATHS"
+            }
+            val current = parents.toMutableMap()
+            for ((logical, row) in changedByPath) {
+                val name = logical.substringAfterLast('/')
+                val before = selected(row["before"])
+                val expectedBeforePath = path(selected(successor["identity"])).substringBeforeLast('/') + "/sources/su10-before/$name"
+                require(identity(row["ownerBefore"]) == parents.getValue(name) &&
+                    (path(before) == expectedBeforePath || expectedBeforePath.endsWith("/" + path(before))) &&
+                    same(before, parents.getValue(name)) &&
+                    same(archive(row["ownerFrozen"]), selected(row["after"]))) { "ULTRA_KERNEL_SU_COMPONENT_PROFILE_GENERATION:$name" }
+                current[name] = selected(row["after"])
+            }
+            val retained = successor.getValue("retainedInputs").jsonArray.map { it.jsonObject }
+            require(retained.size == 8 && retained.map { text(it, "logicalPath") }.toSet() ==
+                rows.map { text(it, "logicalPath") }.toSet() - changedByPath.keys) { "ULTRA_KERNEL_SU_COMPONENT_PROFILE_RETAINED" }
+            for (row in retained) require(same(selected(row["identity"]), parents.getValue(text(row, "logicalPath").substringAfterLast('/')))) {
+                "ULTRA_KERNEL_SU_COMPONENT_PROFILE_RETAINED_GENERATION"
+            }
+            val runtime = freeze["runtimeLayoutEvolution"]?.jsonObject ?: return current
+            require(text(runtime, "schema") == "maplesu-claim-runtime-layout-source-selection/1" && flag(runtime, "sourceOwnerFrozen") &&
+                !flag(runtime, "targetQualified") && !flag(runtime, "deviceValidated") &&
+                same(selected(runtime["identity"]), selected(obj(obj(reference, "coreLifecycleAbi"), "sourceSelection")["runtimeLayoutSourceSelection"]))) {
+                "ULTRA_KERNEL_SU_COMPONENT_RUNTIME_SUCCESSOR"
+            }
+            val runtimeRows = runtime.getValue("files").jsonArray.map { it.jsonObject }
+            require(runtimeRows.map { text(it, "logicalPath") }.toSet().size == runtimeRows.size) { "ULTRA_KERNEL_SU_COMPONENT_RUNTIME_ALIAS" }
+            val expectedPaths = rows.map { text(it, "logicalPath") }.toSet()
+            val runtimeSu = runtimeRows.filter { text(it, "logicalPath") in expectedPaths }
+            require(runtimeSu.map { text(it, "logicalPath") }.toSet().containsAll(setOf(
+                root + "su_install_registry.c", root + "su_profile_execution.c", root + "su_profile_execution.h"))) {
+                "ULTRA_KERNEL_SU_COMPONENT_RUNTIME_LAYOUT_FIELDS"
+            }
+            for (row in runtimeSu) {
+                val name = text(row, "logicalPath").substringAfterLast('/')
+                require(same(selected(row["before"]), current.getValue(name)) &&
+                    path(selected(row["after"])).substringAfterLast('/') == name) { "ULTRA_KERNEL_SU_COMPONENT_RUNTIME_GENERATION:$name" }
+                current[name] = selected(row["after"])
+            }
+            runtimeLayoutBound = true
+            return current
+        }
+
         private fun verifyLayouts(facts: Map<String, Long>, profileFacts: Map<String, Long>, layouts: JsonObject, complete: Boolean) {
             val expected = factNames.toMutableSet()
             val expectedProfile = mutableSetOf("schema")
             for ((prefix, type) in types) {
-                val into = if (prefix == "profileExecution") expectedProfile else expected
+                val into = if (prefix == "profileExecution" || savedProfile && prefix == "profile") expectedProfile else expected
                 into += prefix + "Bytes"; into += prefix + "Align"
                 for (member in type.second) { into += memberKey(prefix, member) + "Offset"; into += memberKey(prefix, member) + "Bytes" }
             }
@@ -327,7 +478,7 @@ internal object UltraKernelSuComponentMetadata {
             keys(layouts.keys, types.keys, complete, "LAYOUTS")
             for ((prefix, value) in layouts) {
                 val type = types.getValue(prefix)
-                val compiled = if (prefix == "profileExecution") profileFacts else facts
+                val compiled = if (prefix == "profileExecution" || savedProfile && prefix == "profile") profileFacts else facts
                 val layout = value.jsonObject
                 val bytes = number(layout, "bytes")
                 val align = compiled.getValue(prefix + "Align")

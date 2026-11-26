@@ -7,6 +7,10 @@ import os
 import struct
 import subprocess
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/specgen"))
+from specgen.product import cached_jar
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -96,9 +100,8 @@ def main():
     assert all(identity(item['path']) == item for item in dependencies)
     compiler = next(item['path'] for item in runtime['buildDependencies'] if 'kotlin-compiler-embeddable' in item['path'])
     coroutines = next(item['path'] for item in runtime['buildDependencies'] if 'kotlinx-coroutines-core-jvm' in item['path'])
-    cache = (Path(os.environ.get("GRADLE_USER_HOME", str(Path.home() / ".gradle"))) / "caches/modules-2/files-2.1")
-    junit = next(cache.glob('junit/junit/4.13.2/*/*.jar'))
-    hamcrest = next(cache.glob('org.hamcrest/hamcrest-core/1.3/*/*.jar'))
+    junit = cached_jar('junit', 'junit', '4.13.2')
+    hamcrest = cached_jar('org.hamcrest', 'hamcrest-core', '1.3')
     dependencies.extend([identity(junit), identity(hamcrest)])
     real_scs_fixture = ROOT / 'Log_Reference/11.6/Original.img'
     test_names = ['UltraKernelStaticScsEntryTest']

@@ -58,7 +58,7 @@ namespace {
 KModErr shellcode_current_task(uint64_t& task) {
     return get_kernel_shellcode_u64_result(
             [](asmjit::a64::Assembler* a, asmjit::a64::GpX& out) -> KModErr {
-                kernel_module::export_symbol::get_current(a, asmjit::a64::x10);
+                RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, asmjit::a64::x10));
                 out = asmjit::a64::x10;
                 return KModErr::OK;
             },
@@ -69,12 +69,12 @@ KModErr shellcode_current_task(uint64_t& task) {
 // == 49672 == 0xC208.
 constexpr uint32_t kSpEl0SysReg = 49672;
 
-// Candidate THREAD_SIZE values, ascending; the stack probe walks them in this
-// order and keeps the first one that reaches past the kernel stack.
+// Candidate mask sizes for the inherited raw SP_EL0/SP classification heuristic.
+// Matching a masked base is not independent proof of the target structure.
 constexpr uint64_t kThreadSizes[] = {0x4000, 0x8000, 0x10000, 0x20000};
 
-// The mask that turns any kernel pointer into a canonical kernel address on
-// arm64 (top 12 bits set): 0xFFF0000000000000.
+// Inherited upper-range floor; callers also exclude the error-pointer tail.
+// This envelope does not validate canonical addresses for the target VA width.
 constexpr uint64_t kKernelAddressFloor = 0xFFF0000000000000ULL;
 
 }  // namespace
@@ -309,70 +309,42 @@ KModErr get_task_struct_stack_offset(uint32_t& offset) {
     return err;
 }
 
-// get_task_struct_stack_size()
-//
-// Recover the kernel THREAD_SIZE from the live kernel stack of the calling
-// task: the task's `stack` field is the base of the stack area, and the first
-// candidate size whose end address cannot be read is the real stack size.
-// Candidate values are probed in ascending order; the outermost read is done
-// with a fault tolerant helper, so probing past the stack cannot crash.
+// Use live boot-stack marker spans, not the next-symbol gap or readable pages.
+// Pinned generic v5.10/v6.18 linkers set end=start+THREAD_SIZE and both aliases
+// to start. Same-base aliases alone do not prove an arbitrary vendor end marker
+// excludes extra objects/padding; that target span qualification remains separate.
+// Address checks cover the upper-range/error-pointer envelope, not target VA width.
+// No current-task or stack-offset bootstrap.
+__attribute__((visibility("hidden"))) KModErr maplesu_lookup_optional_symbol(const char*, uint64_t&);
+static KModErr resolve_current_stack_size(uint32_t& size) {
+    constexpr const char* markers[][2] = {
+        {"__start_init_stack", "__end_init_stack"},
+        {"__start_init_task", "__end_init_task"},
+    };
+    for (const auto& names : markers) {
+        uint64_t start = 0, end = 0, stack = 0, thread_union = 0;
+        KModErr error = maplesu_lookup_optional_symbol(names[0], start);
+        if (error == KModErr::ERR_MODULE_SYMBOL_NOT_EXIST) continue;
+        RETURN_IF_ERROR(error);
+        RETURN_IF_ERROR(maplesu_lookup_optional_symbol(names[1], end));
+        RETURN_IF_ERROR(kallsyms_lookup_name("init_stack", stack));
+        RETURN_IF_ERROR(kallsyms_lookup_name("init_thread_union", thread_union));
+        if (start < kKernelAddressFloor || end >= static_cast<uint64_t>(-4095LL) || end <= start)
+            return KModErr::ERR_MODULE_NOT_KADDR;
+        const uint64_t span = end - start;
+        if (stack != start || thread_union != start || span < 0x4000 || span > UINT32_MAX ||
+            (span & (span - 1)) || (start & (span - 1)))
+            return KModErr::ERR_MODULE_OFFSET_NOT_FOUND;
+        size = static_cast<uint32_t>(span);
+        return KModErr::OK;
+    }
+    return KModErr::ERR_MODULE_SYMBOL_NOT_EXIST;
+}
+
 KModErr get_task_struct_stack_size(uint32_t& size) {
-    KModErr err = get_offset_cache("task_struct_stack_size", size);
-    if (is_ok(err)) {
-        return err;
-    }
-
-    uint32_t stack_offset = 0;
-    err = get_task_struct_stack_offset(stack_offset);
-    if (is_failed(err)) {
-        return err;
-    }
-
-    uint64_t result = 0;
-    err = get_kernel_shellcode_u64_result(
-            [stack_offset](asmjit::a64::Assembler* a,
-                           asmjit::a64::GpX& out) -> KModErr {
-                // The probe buffer sits on the kernel stack of the emitter.
-                StackBufGuard buffer(a, 8, asmjit::a64::x15);
-
-                kernel_module::export_symbol::get_current(a, asmjit::a64::x10);
-                a->ldr(asmjit::a64::x11,
-                       ptr(asmjit::a64::x10, static_cast<int64_t>(stack_offset)));
-
-                const auto done = a->newLabel();
-                for (uint64_t candidate : kThreadSizes) {
-                    aarch64_asm_mov_x(a, asmjit::a64::x12, candidate);
-                    a->add(asmjit::a64::x1, asmjit::a64::x11, asmjit::a64::x12);
-                    {
-                        RegProtectGuard protect(a, asmjit::a64::x15,
-                                                asmjit::a64::x10,
-                                                asmjit::a64::x11,
-                                                asmjit::a64::x12);
-                        KModErr call_err = KModErr::ERR_MODULE_PARAM;
-                        kernel_module::export_symbol::copy_from_kernel_nofault(
-                                a, call_err, asmjit::a64::x15, asmjit::a64::x1, 8);
-                        if (is_failed(call_err)) {
-                            return call_err;
-                        }
-                    }
-                    // A failed probe means the candidate end address is not
-                    // mapped: that candidate is the real stack size.
-                    a->cbnz(asmjit::a64::x0, done);
-                }
-                a->bind(done);
-                out = asmjit::a64::x12;
-                return KModErr::OK;
-            },
-            result);
-    if (is_failed(err)) {
-        return err;
-    }
-    if (result == 0) {
-        return KModErr::ERR_MODULE_OFFSET_NOT_FOUND;
-    }
-
-    size = static_cast<uint32_t>(result);
-    return put_offset_cache("task_struct_stack_size", size);
+    // Old probe-cache values were mapping boundaries, not THREAD_SIZE evidence.
+    // Reuse marker validation; arbitrary vendor span qualification stays separate.
+    return resolve_current_stack_size(size);
 }
 
 // get_task_struct_ptrace_offset()
@@ -587,7 +559,7 @@ KModErr get_task_struct_mm_offset(uint32_t& offset) {
     err = get_kernel_shellcode_u64_result(
             [](asmjit::a64::Assembler* a, asmjit::a64::GpX& out) -> KModErr {
                 KModErr call_err = KModErr::ERR_MODULE_PARAM;
-                kernel_module::export_symbol::get_current(a, asmjit::a64::x10);
+                RETURN_IF_ERROR(kernel_module::export_symbol::get_current_checked(a, asmjit::a64::x10));
                 kernel_module::export_symbol::get_task_mm(
                         a, call_err, asmjit::a64::x10);
                 if (is_failed(call_err)) {
@@ -937,78 +909,61 @@ KModErr get_task_struct_seccomp_offset(uint32_t& offset) {
     return error;
 }
 
-// is_CONFIG_THREAD_INFO_IN_TASK()
-//
-// CONFIG_THREAD_INFO_IN_TASK is on when SP_EL0 holds a canonical kernel
-// pointer that is not a thread_info pointer.
-bool is_CONFIG_THREAD_INFO_IN_TASK() {
-    static bool cached = []() -> bool {
-        uint64_t sp_el0 = 0;
-        KModErr err = get_kernel_shellcode_u64_result(
-                [](asmjit::a64::Assembler* a, asmjit::a64::GpX& out) -> KModErr {
-                    a->mrs(asmjit::a64::x10, asmjit::Imm(kSpEl0SysReg));
-                    out = asmjit::a64::x10;
-                    return KModErr::OK;
-                },
-                sp_el0);
-        if (is_failed(err)) {
-            return false;
+// Probe errors must not become a cached false and select a write-capable stack
+// fallback. Probe payloads only read registers; the legacy executor may still
+// write and restore receipt credentials. Classification preserves the inherited
+// raw SP_EL0 heuristic, not a proven vendor structure or Huawei-adjusted result.
+// No model is cached: a transient executor failure is retried by the next caller.
+KModErr resolve_current_task_model(CurrentTaskModel& model) {
+    uint64_t sp_el0 = 0;
+    RETURN_IF_ERROR(get_kernel_shellcode_u64_result(
+        [](asmjit::a64::Assembler* a, asmjit::a64::GpX& out) -> KModErr {
+            a->mrs(asmjit::a64::x10, asmjit::Imm(kSpEl0SysReg));
+            out = asmjit::a64::x10;
+            return KModErr::OK;
+        }, sp_el0));
+    if (sp_el0 < kKernelAddressFloor || sp_el0 >= static_cast<uint64_t>(-4095LL)) {
+        CurrentTaskModel resolved;
+        resolved.source = CurrentTaskSource::stack_thread_info;
+        RETURN_IF_ERROR(resolve_current_stack_size(resolved.thread_size));
+        model = resolved;
+        return KModErr::OK;
+    }
+    uint64_t sp = 0;
+    RETURN_IF_ERROR(get_kernel_shellcode_u64_result(
+        [](asmjit::a64::Assembler* a, asmjit::a64::GpX& out) -> KModErr {
+            a->mov(out, asmjit::a64::sp);
+            return KModErr::OK;
+        }, sp));
+    if (sp < kKernelAddressFloor || sp >= static_cast<uint64_t>(-4095LL))
+        return KModErr::ERR_MODULE_NOT_KADDR;
+    CurrentTaskModel resolved;
+    for (uint64_t thread_size : kThreadSizes) {
+        if (sp_el0 == (sp & ~(thread_size - 1))) {
+            resolved.source = CurrentTaskSource::sp_el0_thread_info;
+            model = resolved;
+            return KModErr::OK;
         }
-        if (sp_el0 < kKernelAddressFloor) {
-            return false;
-        }
-        return !is_CURRENT_FROM_SP_EL0_THREAD_INFO();
-    }();
-    return cached;
+    }
+    model = resolved;
+    return KModErr::OK;
 }
 
-// is_CURRENT_FROM_SP_EL0_THREAD_INFO()
-//
-// SP_EL0 points at a thread_info when it equals the live SP rounded down to
-// the base of a kernel stack for one of the candidate THREAD_SIZE values.
+bool is_CONFIG_THREAD_INFO_IN_TASK() {
+    CurrentTaskModel model;
+    return is_ok(resolve_current_task_model(model)) && model.source == CurrentTaskSource::sp_el0_task;
+}
+
 bool is_CURRENT_FROM_SP_EL0_THREAD_INFO() {
-    static bool cached = []() -> bool {
-        uint64_t sp_el0 = 0;
-        KModErr err = get_kernel_shellcode_u64_result(
-                [](asmjit::a64::Assembler* a, asmjit::a64::GpX& out) -> KModErr {
-                    a->mrs(asmjit::a64::x10, asmjit::Imm(kSpEl0SysReg));
-                    out = asmjit::a64::x10;
-                    return KModErr::OK;
-                },
-                sp_el0);
-        if (is_failed(err)) {
-            return false;
-        }
-        if (sp_el0 < kKernelAddressFloor) {
-            return false;
-        }
-
-        uint64_t sp = 0;
-        err = get_kernel_shellcode_u64_result(
-                [](asmjit::a64::Assembler* a, asmjit::a64::GpX& out) -> KModErr {
-                    a->mov(out, asmjit::a64::sp);
-                    return KModErr::OK;
-                },
-                sp);
-        if (is_failed(err)) {
-            return false;
-        }
-
-        for (uint64_t thread_size : kThreadSizes) {
-            if (sp_el0 == (sp & ~(thread_size - 1))) {
-                return true;
-            }
-        }
-        return false;
-    }();
-    return cached;
+    CurrentTaskModel model;
+    return is_ok(resolve_current_task_model(model)) && model.source == CurrentTaskSource::sp_el0_thread_info;
 }
 
 // set_current_process_name()
 //
 // Overwrite the current task's `comm` with up to 15 bytes, NUL padded to the
-// full 16-byte field. The kernel write goes through the canonical kernel
-// address of the calling task.
+// full 16-byte field. The kernel write uses the calling-task pointer selected
+// by the current emitter; target VA-width validation is a separate boundary.
 KModErr set_current_process_name(const char* comm_name) {
     if (!comm_name) return KModErr::ERR_MODULE_PARAM;
     char name[16] = {};

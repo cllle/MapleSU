@@ -24,7 +24,7 @@
   "scope": "Embed verified PIC candidates and their compiler-derived layouts for SDK testing.\n\nInput directories are generated build artifacts, not an allowlist of supported\ndevice models. Cross-image candidates additionally carry a compiler-derived\nconfig contract, BTF function ABIs and native cache entry bytes.\n",
   "bundles": [
     {
-      "directory": "native-inputs/policy/android12-5.10",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p5-closure-20261120\\sdk-build-current\\kernel\\android12-5.10",
       "identity": "cacb80a04f0868249580229a64636aa3c3e75630",
       "payload": {
         "passed": true,
@@ -333,7 +333,7 @@
       }
     },
     {
-      "directory": "native-inputs/policy/android13-5.15",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p5-closure-20261120\\sdk-build-current\\kernel\\android13-5.15",
       "identity": "2e7820bef1e83d455a5cc8bb9d41d5dbfe5b538e",
       "payload": {
         "passed": true,
@@ -670,7 +670,7 @@
       }
     },
     {
-      "directory": "native-inputs/policy/android14-6.1",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p5-closure-20261120\\sdk-build-current\\kernel\\android14-6.1",
       "identity": "3b7b3d3feb7960925780064141f53d599a51f4ec",
       "payload": {
         "passed": true,
@@ -839,7 +839,7 @@
       }
     },
     {
-      "directory": "native-inputs/policy/android15-6.6",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p5-closure-20261120\\sdk-build-current\\kernel\\android15-6.6",
       "identity": "68902e1192de0d51aadde71eb3a3c8389748d113",
       "payload": {
         "passed": true,
@@ -968,7 +968,7 @@
       }
     },
     {
-      "directory": "native-inputs/policy/android16-6.12",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p5-closure-20261120\\sdk-build-current\\kernel\\android16-6.12",
       "identity": "2b70dd0ba73ce34f58ccc7bac3f6a6443fb08c01",
       "payload": {
         "passed": true,
@@ -1133,7 +1133,7 @@
       }
     },
     {
-      "directory": "native-inputs/policy/android17-6.18",
+      "directory": "D:\\Maple_Workflow\\MapleSU\\.tmp\\p5-closure-20261120\\sdk-build-current\\kernel\\android17-6.18",
       "identity": "b9dbf6abd06cd8832bc48a4ce5ac7a5caab58356",
       "payload": {
         "passed": true,

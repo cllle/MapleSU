@@ -93,6 +93,8 @@ class UltraEnvironmentPanel internal constructor(
 
     var state by mutableStateOf(seed?.state ?: initialSnapshot.state)
         private set
+    var kernelRootVerified by mutableStateOf(seed?.kernelRootVerified ?: initialSnapshot.kernelRootVerified)
+        private set
     var version by mutableStateOf(seed?.version)
         private set
     var observedAtWallClockMs by mutableStateOf(seed?.observedAt ?: initialSnapshot.observedAtWallClockMs)
@@ -188,13 +190,15 @@ class UltraEnvironmentPanel internal constructor(
         val nextState = runCatching { UltraEnvironmentProbe.refresh(context, force = force) }
             .getOrDefault(UltraEnvironmentProbe.State.Unknown)
         val current = captureObservation()
+        val observation = UltraEnvironmentProbe.currentSnapshot(context)
         Facts(
             state = nextState,
             version = if (current()) readVersion(key, boot) else null,
-            observedAt = UltraEnvironmentProbe.currentSnapshot(context).observedAtWallClockMs,
+            observedAt = observation.observedAtWallClockMs,
             hasKey = UltraRootKeyStore.read(context) != null,
             keyState = if (UltraSdkCredentials.read(context) != null) UltraAutoPair.KeyState.Present
                 else UltraAutoPair.keyState(context),
+            kernelRootVerified = observation.state == nextState && observation.kernelRootVerified,
             current = current,
         )
     }
@@ -223,6 +227,7 @@ class UltraEnvironmentPanel internal constructor(
         }
         lastFacts = merged
         state = merged.state
+        kernelRootVerified = merged.kernelRootVerified
         version = merged.version
         observedAtWallClockMs = merged.observedAt
         hasLocalKey = merged.hasKey
@@ -258,6 +263,7 @@ class UltraEnvironmentPanel internal constructor(
         val hasKey: Boolean,
         val keyState: UltraAutoPair.KeyState,
         val hookEnvironment: Boolean = false,
+        val kernelRootVerified: Boolean = false,
         val current: () -> Boolean,
     )
 
@@ -513,7 +519,8 @@ private fun rememberFaultRepairAction(panel: UltraEnvironmentPanel): () -> Unit 
 
 private val UltraEnvironmentPanel.canShowRepair: Boolean
     get() = !hookEnvironment && (state == UltraEnvironmentProbe.State.Fault ||
-        state == UltraEnvironmentProbe.State.Unknown)
+        state == UltraEnvironmentProbe.State.Unknown ||
+        state == UltraEnvironmentProbe.State.NotInstalled && kernelRootVerified)
 
 @Composable
 private fun envTagColorsMaterial(panel: UltraEnvironmentPanel): Pair<Color, Color> {

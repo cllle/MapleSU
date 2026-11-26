@@ -15,7 +15,7 @@ Ultra 以内核补丁实现 SU 授权，Normal 承载 KernelSU 模块生态；�
 [![GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-8B5CF6?style=flat-square)](LICENSE)
 [![Telegram](https://img.shields.io/badge/Telegram-@KernelMapleSU-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/KernelMapleSU)
 
-**简体中文** · [English](README.en.md) · [Deutsch](README.de.md) · [Русский](README.ru.md)
+**简体中文** · [English](README.en.md)
 
 [文档](docs/README.md) · [架构](docs/ARCHITECTURE.md) · [构建](docs/BUILD.md) · [SDK](docs/SDK.md) · [模块](docs/MODULES.md) · [贡献](CONTRIBUTING.md)
 
@@ -227,7 +227,7 @@ python tools/check_architecture.py
 | [KernelSU](https://github.com/tiann/KernelSU) | Normal 模式的主要实现来源与模块生态基础 |
 | [7kimisu](https://github.com/hartgerinktarcila-design/7kimisu) | 管理器的直接派生基础，保留原作署名与许可 |
 | [KernelPatch](https://github.com/bmax121/KernelPatch) | 内核补丁方向的开源工作与技术参考 |
-| [SKRoot](https://github.com/abcz316/SKRoot-linuxKernelRoot) | Ultra 模块适配与 SU 底层方案参考；组件的集成范围见[致谢](CREDITS.md) |
+| [MapleSU](https://github.com/abcz316/MapleSU-linuxKernelRoot) | Ultra 模块适配与 SU 底层方案参考；组件的集成范围见[致谢](CREDITS.md) |
 
 ### 实现与来源
 
@@ -259,7 +259,7 @@ MapleSU 的每一步，都有人一同走过。头像墙中央是作者 MapleAut
 
 | 成员 | 身份 | 介绍 | 主页 |
 | --- | --- | --- | --- |
-| MapleAutumn | 作者 | ![UI](https://img.shields.io/badge/UI-F58B55?style=flat-square&logo=jetpackcompose&logoColor=white) ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square&logo=kotlin&logoColor=white) | — |
+| MapleAutumn | 作者 | ![UI](https://img.shields.io/badge/UI-F58B55?style=flat-square&logo=jetpackcompose&logoColor=white) ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square&logo=kotlin&logoColor=white)<br>“『时光流转，愿你能与珍爱之人再度重逢』🍁” | — |
 | 晚风 | 特别致谢 · 内测用户 | 幕后支持者 · 共同开发者 | [GitHub](https://github.com/bywanfeng) |
 | 小酒 | 特别致谢 · 内测用户 | 幕后支持者 · 共同开发者 | [Telegram](https://t.me/qingyu177) |
 | 佐佐鱼 | 特别致谢 · 内测用户 | 为越狱思路提供相关贡献 · 提供橘子7提权相关实现 ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat-square&logo=cplusplus&logoColor=white)<br>“如果有事通过🤖 @yutou\_004\_bot 联系我，私聊拉黑” | [GitHub](https://github.com/Yutou04-sa) · [Telegram](https://t.me/Yutou04) |
@@ -268,7 +268,7 @@ MapleSU 的每一步，都有人一同走过。头像墙中央是作者 MapleAut
 | 临冬诗意渐渐 | 内测用户 | — | — |
 | 邵 | 内测用户 | — | [Telegram](https://t.me/llopjky) |
 | LinLeyu | 内测用户 | — | [Telegram](https://t.me/linleyu_0v0) |
-| 沧海 | 内测用户 | — | — |
+| 沧海 | 内测用户 | “国一火泰斗火洛杉矶最强的火” | [Telegram](https://t.me/chgyh666) |
 | qingmingnbi | 内测用户 | — | [Telegram](https://t.me/qingmingnbi) |
 | 奶霸 | 内测用户 | — | — |
 | 怪我怜悯一生 | 内测用户 | — | [Telegram](https://t.me/hexciphc) |

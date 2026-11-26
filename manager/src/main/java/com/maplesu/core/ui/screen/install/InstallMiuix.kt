@@ -127,7 +127,7 @@ internal fun InstallScreenMiuix(
                     InstallUltraStatusSection(uiState, Modifier.padding(top = 12.dp))
                     if (uiState.hasInstallSource) {
                         Card(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                            InstallTargetStepSection(state = uiState)
+                            InstallTargetStepSection(state = uiState, onSelectInitBootKmi = actions.onSelectInitBootKmi)
                         }
                     }
 

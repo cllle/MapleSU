@@ -50,9 +50,8 @@ internal object StockInstallAttempt {
             source.delete()
             // A disconnected commit may still be writing. Its durable record owns recovery.
             if (!commitStarted && shouldCancel()) try { cancel() } catch (error: Exception) {
-                throw IllegalStateException("INSTALLER_CANCELLATION_FAILED", error).also { cancelled ->
-                    failure?.let(cancelled::addSuppressed)
-                }
+                val cleanup = IllegalStateException("INSTALLER_CANCELLATION_FAILED", error)
+                if (failure != null) failure.addSuppressed(cleanup) else throw cleanup
             }
         }
     }

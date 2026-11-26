@@ -69,7 +69,12 @@ fun FlashScreen(flashIt: FlashIt, onBackEnabledChange: (Boolean) -> Unit) {
     var canSaveBoot by remember { mutableStateOf(false) }
     var bootCandidate by remember { mutableStateOf<InstallCandidateImage?>(null) }
     var canRestore by remember { mutableStateOf(false) }
+    var canQuery by remember { mutableStateOf(false) }
+    var querying by remember { mutableStateOf(false) }
+    var canReturnToPreparation by remember { mutableStateOf(false) }
+    var recoveryMessage by remember { mutableStateOf<String?>(null) }
     var restoreAction: (() -> Unit)? = null
+    var queryAction: (() -> Unit)? = null
     val needJailbreakWarning = flashIt is FlashIt.FlashBoot && !patchOnly && Natives.isLateLoadMode
     // Soft reboot keeps the jailbreak and still applies modules
     val softReboot = flashIt is FlashIt.FlashModules && isSoftRebootPreferred()
@@ -81,7 +86,8 @@ fun FlashScreen(flashIt: FlashIt, onBackEnabledChange: (Boolean) -> Unit) {
     var moduleTypeChoice by remember { mutableStateOf<ModuleTypeChoiceRequest?>(null) }
     var modulePolicyNotice by remember { mutableStateOf<ModulePolicyNoticeRequest?>(null) }
     var moduleConfirmationPending by rememberSaveable { mutableStateOf(false) }
-    val backEnabled = flashingStatus != FlashingStatus.FLASHING
+    val backEnabled = flashingStatus != FlashingStatus.FLASHING &&
+        (!transactional || canReturnToPreparation) && !querying
 
     moduleTypeChoice?.let { ModuleTypeChoiceDialog(it) }
     modulePolicyNotice?.let { ModulePolicyNoticeDialog(it) }
@@ -125,6 +131,7 @@ fun FlashScreen(flashIt: FlashIt, onBackEnabledChange: (Boolean) -> Unit) {
                 onDismiss = { navigator.pop() })
         }
         restoreAction = { installation.restore(context.applicationContext) }
+        queryAction = { installation.queryOriginalTask(context.applicationContext) }
         LaunchedEffect(progress) {
             // 安装执行体逐行上报日志，界面持续跟随本次任务。
             text = progress.text + (progress.result?.err?.takeIf { it.isNotBlank() }?.let { "\n$it\n" } ?: "")
@@ -132,6 +139,10 @@ fun FlashScreen(flashIt: FlashIt, onBackEnabledChange: (Boolean) -> Unit) {
             logContent.append(text)
             progress.stage?.let { flashStage = it }
             canRestore = !patchOnly && progress.canRestore
+            canQuery = progress.canQuery
+            querying = progress.querying
+            canReturnToPreparation = progress.canReturnToPreparation
+            recoveryMessage = progress.recoveryMessage
             if (progress.result == null) flashingStatus = FlashingStatus.FLASHING
             progress.result?.let { result ->
                 bootCandidate = result.bootCandidate
@@ -165,8 +176,7 @@ fun FlashScreen(flashIt: FlashIt, onBackEnabledChange: (Boolean) -> Unit) {
                 }
             }
         }
-        // One-tap policy (2026-11-01): `PREPARED` is committed automatically by the ViewModel, so
-        // there is no "continue?" dialog here — this screen only renders progress and the result.
+        // Reconnection observes this task. An inactive preparation is discarded before retry.
     } else FlashEffect(
         flashIt = flashIt,
         text = text,
@@ -293,6 +303,10 @@ fun FlashScreen(flashIt: FlashIt, onBackEnabledChange: (Boolean) -> Unit) {
         canRestore = canRestore,
         directInstall = directInstall,
         generatedOnDevice = (flashIt as? FlashIt.FlashBoot)?.generatedOnDevice == true,
+        canQuery = canQuery,
+        querying = querying,
+        canReturnToPreparation = canReturnToPreparation,
+        recoveryMessage = recoveryMessage,
     )
     val actions = FlashScreenActions(
         onBack = dropUnlessResumed { if (backEnabled) navigator.pop() },
@@ -334,6 +348,10 @@ fun FlashScreen(flashIt: FlashIt, onBackEnabledChange: (Boolean) -> Unit) {
             }
         },
         onClose = dropUnlessResumed { navigator.pop() },
+        onQueryOriginalTask = { if (canQuery && !querying) queryAction?.invoke() },
+        onReturnToPreparation = dropUnlessResumed {
+            if (backEnabled && canReturnToPreparation) navigator.pop()
+        },
         onConfirmJailbreakWarning = { flashingEnabled = true },
         onDismissJailbreakWarning = dropUnlessResumed { navigator.pop() },
         onRestore = {

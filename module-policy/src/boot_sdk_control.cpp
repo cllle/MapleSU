@@ -45,7 +45,8 @@ int boot_sdk_control(int argc, char** argv) {
             const bool environment = request.padding[1] == 1;
             const bool inner_allocator = request.padding[4] == 1;
             const bool user_sampler = request.padding[5] == 1;
-            const bool segmented_allocator = request.padding[6] == 1;
+            const unsigned segmented_allocator = request.padding[6] &
+                (MSU_BOOT_SDK_SEGMENTED_OBSERVER | MSU_BOOT_SDK_SEGMENTED_CALLABLE);
             std::vector<uint8_t> btf;
             {
                 const int descriptor = open("/sys/kernel/btf/vmlinux", O_RDONLY | O_CLOEXEC);
@@ -79,7 +80,8 @@ int boot_sdk_control(int argc, char** argv) {
             // The outer ABI was also qualified; sample it once before bootstrap.
             if (request.status == -61 && request.padding[3] == MSU_BS_CONFIG_CAPTURE &&
                 request.state == MSU_BOOT_SDK_EMPTY && !request.padding[2] &&
-                (configuration.layout.allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_INNER)) {
+                (configuration.layout.allocator_noprof &
+                    (MSU_BOOT_SDK_ALLOCATOR_INNER | MSU_BOOT_SDK_ALLOCATOR_SEGMENTED)) == MSU_BOOT_SDK_ALLOCATOR_INNER) {
                 configuration.layout.allocator_noprof &= ~MSU_BOOT_SDK_ALLOCATOR_INNER;
                 transact(MSU_BOOT_SDK_CONFIGURE);
             }

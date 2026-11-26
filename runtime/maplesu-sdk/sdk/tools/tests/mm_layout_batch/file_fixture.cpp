@@ -96,7 +96,10 @@ template<class T> KModErr safe_read_kaddr_t(uint64_t address, bool& ok, T& out) 
     out = address == fixture::mapping0 + 8 || fixture::state.bad_host ? fixture::inode0 : fixture::inode1;
     return KModErr::OK;
 }
-namespace export_symbol { template<class... Args> void get_current(Args...) {} }
+namespace export_symbol {
+template<class... Args> void get_current(Args...) {}
+template<class... Args> KModErr get_current_checked(Args... args) { get_current(args...); return KModErr::OK; }
+}
 template<class Emitter> KModErr get_kernel_shellcode_u64_result(Emitter emitter, uint64_t& out) {
     asmjit::a64::Assembler assembler; asmjit::a64::GpX result;
     const auto error = emitter(&assembler, result); out = 1; return error;

@@ -53,10 +53,11 @@ class InstallerModeSwitchAndroidTest {
     }
 
     @Test
-    fun gateRefusalCodesAreStable() {
-        assertEquals("INSTALLER_JAILBREAK_PARTITION_WRITE_REFUSED", InstallerModeGate.REFUSED)
-        // The origin/kernel-proof codes were deleted together with the checks that produced them;
-        // only the jailbreak refusal survives (see InstallerModeGatePolicyTest).
+    fun partitionAuthorityRequiresTheActualRootServiceInBothScopes() {
+        for (scope in InstallerModeGate.WriteScope.entries) {
+            assertEquals(null, InstallerModeGate.refusal(0, scope))
+            assertEquals("INSTALLER_ROOT_REQUIRED", InstallerModeGate.refusal(10000, scope))
+        }
     }
 
     @Test

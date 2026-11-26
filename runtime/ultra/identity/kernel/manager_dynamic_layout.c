@@ -10,12 +10,16 @@
 #include <linux/sched/signal.h>
 #include <linux/seccomp.h>
 #include <linux/stddef.h>
+#include <linux/printk.h>
 #include "msu_resolver_build_config.h"
 #if __has_include(<fs/mount.h>)
 #include <fs/mount.h>
 #define MSU_DYNAMIC_HAS_MOUNT 1
 #endif
 #include "manager_dynamic_layout.h"
+#if defined(MSU_INIT_BRIDGE_RUNTIME_FACTS) && MSU_INIT_BRIDGE_RUNTIME_FACTS
+#include "manager_runtime_btf.h"
+#endif
 
 #define MSU_DYN_COMPILED_AS(type, key, member) \
     [MSU_DYN_##type##_##key] = { offsetof(struct type, member), \
@@ -441,3 +445,53 @@ const char msu_runtime_layout_aliases[]
     __attribute__((section(".msu.runtime.aliases"), used)) =
     MSU_RUNTIME_LAYOUT_ALIASES(MSU_DYN_ALIAS);
 #undef MSU_DYN_ALIAS
+
+#if defined(MSU_INIT_BRIDGE_RUNTIME_FACTS) && MSU_INIT_BRIDGE_RUNTIME_FACTS
+int msu_runtime_layout_init(msu_runtime_field_query query)
+{
+    struct msu_runtime_layout_table next = msu_runtime_layout;
+    const char *name = msu_runtime_layout_names;
+    unsigned int i;
+    int error;
+
+    WRITE_ONCE(msu_runtime_layout.ready, 0);
+    if (!query) return -EINVAL;
+    if (next.magic != MSU_RUNTIME_LAYOUT_MAGIC || next.schema != MSU_RUNTIME_LAYOUT_SCHEMA ||
+        next.bytes != sizeof(next) || next.fields != MSU_RUNTIME_LAYOUT_FIELD_COUNT || next.reserved)
+        return -EPROTO;
+    next.ready = 0;
+    for (i = 0; i < MSU_RUNTIME_LAYOUT_FIELD_COUNT; ++i) {
+        struct msu_runtime_btf_field field;
+        char owner[32];
+        const char *dot = strchr(name, '.');
+        u32 width = next.values[i].bytes, alignment = msu_runtime_layout_alignments[i];
+        size_t length;
+
+        if (!dot || dot == name || (length = dot - name) >= sizeof(owner)) return -EPROTO;
+        memcpy(owner, name, length); owner[length] = 0;
+        if (next.values[i].offset == ~0U) {
+            if (width || next.values[i].owner_bytes || alignment) return -EPROTO;
+            name += strlen(name) + 1;
+            continue;
+        }
+        error = query(owner, dot + 1, &field);
+        if (error == -ENOENT && i == MSU_DYN_vfsmount_mnt_user_ns)
+            error = query(owner, "mnt_userns", &field);
+        if (!error && (!width || field.bytes != width || !alignment ||
+            (alignment & (alignment - 1)) || field.offset % alignment ||
+            !field.owner_bytes || field.offset > field.owner_bytes ||
+            field.bytes > field.owner_bytes - field.offset)) error = -EOPNOTSUPP;
+        if (error) {
+            pr_err("MapleSU runtime layout: %s: %d\n", name, error);
+            return error;
+        }
+        next.values[i].offset = field.offset;
+        next.values[i].bytes = field.bytes;
+        next.values[i].owner_bytes = field.owner_bytes;
+        name += strlen(name) + 1;
+    }
+    memcpy(msu_runtime_layout.values, next.values, sizeof(next.values));
+    smp_store_release(&msu_runtime_layout.ready, 1);
+    return 0;
+}
+#endif

@@ -319,10 +319,11 @@ object ModeSwitchRuntime {
             runCatching {
                 val flow = UltraKernelFlow(context)
                 val artifact = if (input.partition == "init_boot")
-                    requireNotNull(input.initBootArtifact) { "ULTRA_INIT_PAIRED_BOOT_REQUIRED" } else null
-                if (artifact != null) check(input.targetBootSha256 == ModeSwitchHashes.sha256(artifact.targetBoot)) {
-                    "ULTRA_KERNEL_INIT_BOOT_TARGET_CHANGED"
-                }
+                    requireNotNull(input.initBootArtifact ?: UltraKernelFlow.initBootArtifact(context, input.kmi)) {
+                        "ULTRA_INIT_KMI_COMPONENT_MISSING:${input.kmi}"
+                    } else null
+                if (artifact != null) dev.maplesu.manager.installer.UltraInitBootInstallTarget.requireCompatible(
+                    artifact, input.kernelRelease, input.targetBootSha256)
                 val prepared = flow.prepareTarget(input.baselineImage,
                     UltraInstallCredentials.forCandidate(context), null, artifact, input.deploymentNamespace) { Log.i(TAG, it) }
                 val built = flow.candidateForInstall(input.baselineImage, prepared)

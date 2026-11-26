@@ -42,6 +42,7 @@ import java.util.concurrent.TimeUnit
 /** Launch libsu through the explicit installation su session; never through the Manager shell. */
 internal object InstallerServiceClient {
     class AuthorizationFailure(cause: Exception) : IllegalStateException("INSTALLER_ROOT_REQUIRED", cause)
+    class ServiceFailure(val phase: String, cause: Exception) : IllegalStateException("INSTALLER_SERVICE_${phase}_FAILED", cause)
 
     private const val KEY_LAST_TASK_ID = "lastTaskId"
     private const val KEY_LEGACY_TASK_ID_RETIRED = "legacyTaskIdRetired"
@@ -520,6 +521,7 @@ internal object InstallerServiceClient {
         val handler = Handler(Looper.getMainLooper())
         val connected = CompletableFuture<IBinder>()
         val task = CompletableFuture<Shell.Task?>()
+        var phase = "BIND"
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, binder: IBinder) { connected.complete(binder) }
             override fun onServiceDisconnected(name: ComponentName) {
@@ -533,8 +535,10 @@ internal object InstallerServiceClient {
             }
         }
         fun useConnectedService(): T {
+            phase = "CONNECT"
             val binder = connected.get(20, TimeUnit.SECONDS)
             check(binder.isBinderAlive) { "INSTALLER_SERVICE_DISCONNECTED" }
+            phase = "IPC"
             return action(IInstallerService.Stub.asInterface(binder))
         }
         try {
@@ -586,29 +590,41 @@ internal object InstallerServiceClient {
                             InstallerRootSession.open(context).use { session ->
                                 // Keep libsu's interactive shell alive for its own job receipt.
                                 val result = session.execute("(\n$probe\n)")
-                                RootServiceBootstrap.Result(result.code, result.out.joinToString("\n"))
+                                RootServiceBootstrap.Result(result.code, result.out.joinToString("\n"),
+                                    stderr = result.err.joinToString("\n"))
                             }
                         })
                     }
                 }
-                val result = RootServiceBootstrap.launch(command, candidates) { source, phase, attempt ->
-                    // Fixed source/phase/status only: no commands, keys or helper paths.
-                    Log.i("MapleSUInstaller", "service source=$source phase=$phase code=${attempt.code}")
-                }
-                if (!result.ok) {
-                    val reason = when (result.detail) {
-                        "INSTALLER_SERVICE_FRAMEWORK_UNAVAILABLE",
-                        "INSTALLER_ROOT_SOURCES_EXHAUSTED",
-                        "ROOT_EXECUTION_INTERRUPTED" -> result.detail
-                        else -> "INSTALLER_SERVICE_LAUNCH_FAILED"
+                try {
+                    RootServiceBootstrap.launch(command, candidates) { source, stage, attempt ->
+                        // Fixed source/phase/status only: no commands, keys or helper paths.
+                        Log.i("MapleSUInstaller", "service source=$source phase=$stage code=${attempt.code}")
                     }
-                    Log.w("MapleSUInstaller", "service phase=result code=${result.code} reason=$reason")
-                    throw AuthorizationFailure(IllegalStateException(result.detail.ifBlank {
-                        "INSTALLER_SERVICE_LAUNCH_FAILED"
-                    }))
+                } catch (error: RootServiceBootstrap.Failure) {
+                    Log.w("MapleSUInstaller", "service phase=${error.phase} code=${error.result.code} reason=${error.message}")
+                    try {
+                        File(context.filesDir, "installer-service-failure.json").writeText(org.json.JSONObject()
+                            .put("source", error.source).put("phase", error.phase)
+                            .put("reason", error.message).put("exitCode", error.result.code)
+                            .put("output", error.result.output).put("stderr", error.result.stderr)
+                            .put("detail", error.result.detail).toString())
+                    } catch (diagnostic: Exception) {
+                        rethrowInstallerCancellation(diagnostic)
+                        error.addSuppressed(diagnostic)
+                    }
+                    throw installerServiceFailure(error)
                 }
             }
             return useConnectedService()
+        } catch (error: Exception) {
+            rethrowInstallerCancellation(error)
+            if (error is AuthorizationFailure || error is RootServiceBootstrap.Failure || error is ServiceFailure) throw error
+            if (error is java.util.concurrent.ExecutionException || error is java.util.concurrent.TimeoutException ||
+                error is android.os.RemoteException || error.message.orEmpty().startsWith("INSTALLER_SERVICE_")) {
+                throw ServiceFailure(phase, error)
+            }
+            throw error
         } finally {
             handler.post { RootService.unbind(connection) }
         }

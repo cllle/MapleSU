@@ -192,7 +192,7 @@ KModErr __get_PAGE_OFFSET(uint64_t& result) {
     KModErr err = get_kernel_shellcode_u64_result(
         [](Assembler* a, GpX& x) -> KModErr {
             GpX current = x10;
-            export_symbol::get_current(a, current);
+            RETURN_IF_ERROR(export_symbol::get_current_checked(a, current));
             x = x10;
             return KModErr::OK;
         },

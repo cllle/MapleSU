@@ -36,6 +36,7 @@ class BootSdkRootHandoverTest(unittest.TestCase):
         cls.binary = temporary / "handover.exe"
         subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
             "-I" + str(temporary), "-I" + str(HERE.parent / "module"),
+            "-I" + str(ROOT / "runtime/ultra/authorization"),
             HERE / "boot_sdk_root_handover_test.c", "-o", cls.binary], check=True)
 
     def run_case(self, case):
