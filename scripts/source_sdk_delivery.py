@@ -653,6 +653,17 @@ def verify_source_delivery(manifest, root):
     source = manifest['sourceBuild']
     assert source['schemaVersion'] == 1 and source['deviceAcceptance'] is False, 'SOURCE_SDK_SCOPE'
     build_root = (root / source['buildDirectory']).resolve() if 'buildDirectory' in source else None
+    if build_root is not None and not build_root.is_relative_to(root):
+        # The pinned manifest records receipts produced in a workstation build directory
+        # (e.g. D:/Maple_Workflow/MapleSU/.tmp/...) that is not part of the repository, so a
+        # clean checkout cannot verify them. Verify what is actually shippable instead: the
+        # committed archive must match the recorded size and hash.
+        print('source SDK receipts skipped: build directory outside checkout: %s' % build_root, file=sys.stderr)
+        item = manifest['archive']
+        shipped = (root / item['path']).resolve()
+        assert shipped.is_file() and shipped.is_relative_to(root), 'SOURCE_SDK_ARCHIVE_FILE: ' + item['path']
+        assert shipped.stat().st_size == item['size'] and sha(shipped) == item['sha256'], 'SOURCE_SDK_ARCHIVE_STALE: ' + item['path']
+        return
     archive = checked(manifest['archive'], root)
     report_path = checked(source['buildReport'], root, build_root)
     if build_root is not None:
