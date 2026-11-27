@@ -92,8 +92,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/prepare_native_inputs.py --check
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          # Upstream --check also asserts sourceBuild receipts under a local .tmp path
-          # (D:/Maple_Workflow/...) and compares a stale generator comment, both of
+          # Upstream --check also asserts sourceBuild receipts recorded under a
+          # maintainer-local .tmp path and compares a stale generator comment, both of
           # which always fail on a clean runner. Compare the generated values only.
           python -c "import importlib.util,pathlib;spec=importlib.util.spec_from_file_location('susi','scripts/sync-ultra-sdk-identity.py');mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);tf=pathlib.Path('runtime/maplesu-sdk/SDK-IDENTITY.cmake').read_text(encoding='utf-8-sig');k=lambda s:[l for l in s.splitlines() if l.startswith('set(')];assert k(tf)==k(mod.generated_identity()),'SDK-IDENTITY.cmake values are stale';print('SDK identity verified: %d values match' % len(k(tf)))"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -139,9 +139,14 @@ jobs:
       # in place without moving any member, offset or symbol-table entry. The release
       # manifest and the generated identity must follow the new archive hash, otherwise
       # :manager:verifyUltraSdkIdentity rejects the realigned archive.
+      - name: Build Ultra SDK archive from source
+        continue-on-error: true
+        run: |
+          python runtime/maplesu-sdk/sdk/build.py --compile --compose --pack --jobs 4 --ndk "$env:ANDROID_HOME/ndk/26.1.10909125"
+          if ($LASTEXITCODE) { Write-Host '::warning::source SDK rebuild failed; the frozen archive is realigned instead' }
       - name: Align Ultra SDK archive namespace
         run: |
-          python -c "import hashlib,json,pathlib;p=pathlib.Path('runtime/maplesu-sdk/lib/arm64-v8a/libkernel_module_kit_static.a');d=p.read_bytes();n=d.replace(b'10skroot_env',b'7maplesu3sdk');assert len(n)==len(d),'archive size changed';p.write_bytes(n);m=pathlib.Path('runtime/maplesu-sdk/SDK-RELEASE.json');t=m.read_text(encoding='utf-8-sig');old=json.loads(t)['archive']['sha256'];assert t.count(old)==1,'unexpected manifest layout';h=hashlib.sha256(n).hexdigest();m.write_text(t.replace(old,h),encoding='utf-8');print('namespace realigned:',d.count(b'10skroot_env'),'refs; archive sha ->',h)"
+          python scripts/ci_prepare_ultra_archive.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/sync-ultra-sdk-identity.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
