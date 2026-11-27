@@ -1,0 +1,53 @@
+name: SDK Probe 2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install the pinned NDK
+        run: |
+          & "$env:ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager.bat" 'cmdline-tools;latest'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager.bat" 'ndk;26.1.10909125'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-ChildItem "$env:ANDROID_HOME/ndk"
+      - name: Build the Ultra SDK archive from source
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
+          PYTHONFAULTHANDLER: '1'
+        run: |
+          $ndk = "$env:ANDROID_HOME/ndk/26.1.10909125"
+          Write-Host "NDK root: $ndk"
+          python -c "import sys; print(sys.version)"
+          python runtime/maplesu-sdk/sdk/build.py --reference-payloads --payloads --compile --compose --pack --jobs 4 --ndk $ndk
+      - name: Upload SDK build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: sdk-probe2-logs
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            runtime/maplesu-sdk/sdk/build/logs/*.log
+            runtime/maplesu-sdk/sdk/build/report/*.json
