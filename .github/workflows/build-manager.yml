@@ -136,10 +136,16 @@ jobs:
       # The published Ultra SDK archive is a frozen binary produced before the namespace
       # migration to maplesu::sdk, while the shipped headers and the ultra bridge already
       # use the new namespace. Both manglings are 15 bytes, so the archive can be realigned
-      # in place without moving any member, offset or symbol-table entry.
+      # in place without moving any member, offset or symbol-table entry. The release
+      # manifest and the generated identity must follow the new archive hash, otherwise
+      # :manager:verifyUltraSdkIdentity rejects the realigned archive.
       - name: Align Ultra SDK archive namespace
         run: |
-          python -c "import pathlib;p=pathlib.Path('runtime/maplesu-sdk/lib/arm64-v8a/libkernel_module_kit_static.a');d=p.read_bytes();n=d.replace(b'10skroot_env',b'7maplesu3sdk');assert len(n)==len(d),'archive size changed';p.write_bytes(n);print('namespace realigned:',d.count(b'10skroot_env'),'refs')"
+          python -c "import hashlib,json,pathlib;p=pathlib.Path('runtime/maplesu-sdk/lib/arm64-v8a/libkernel_module_kit_static.a');d=p.read_bytes();n=d.replace(b'10skroot_env',b'7maplesu3sdk');assert len(n)==len(d),'archive size changed';p.write_bytes(n);m=pathlib.Path('runtime/maplesu-sdk/SDK-RELEASE.json');t=m.read_text(encoding='utf-8-sig');old=json.loads(t)['archive']['sha256'];assert t.count(old)==1,'unexpected manifest layout';h=hashlib.sha256(n).hexdigest();m.write_text(t.replace(old,h),encoding='utf-8');print('namespace realigned:',d.count(b'10skroot_env'),'refs; archive sha ->',h)"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/sync-ultra-sdk-identity.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/sync-ultra-sdk-identity.py --check
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build debug Manager
         if: inputs.variant != 'release'
